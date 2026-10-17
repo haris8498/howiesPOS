@@ -83,6 +83,10 @@ export class CreateOrderItemDto {
 export class CreateOrderDto {
   @IsString()
   @IsOptional()
+  id?: string;
+
+  @IsString()
+  @IsOptional()
   shift_id?: string;
 
   @IsString()
@@ -242,6 +246,10 @@ export class CreateOrderDto {
 }
 
 export class CreateOrderPaymentDto {
+  @IsString()
+  @IsOptional()
+  id?: string;
+
   @IsString()
   @IsNotEmpty({ message: 'Payment method is required' })
   @MaxLength(30)

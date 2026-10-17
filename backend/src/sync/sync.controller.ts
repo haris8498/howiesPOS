@@ -1,15 +1,86 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+import * as zlib from 'zlib';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { SyncService } from './sync.service';
-import { BatchSyncOrdersDto, CreateSyncLogDto, ToggleSyncStatusDto } from './dto/sync-order.dto';
+import { SyncPushService } from './sync-push.service';
+import { SyncPullService } from './sync-pull.service';
+import { SyncPushDto } from './dto/sync-push.dto';
+import { SyncPullDto } from './dto/sync-pull.dto';
+import {
+  BatchSyncOrdersDto,
+  CreateSyncLogDto,
+  ToggleSyncStatusDto,
+} from './dto/sync-order.dto';
 
 @Controller('sync')
+@UseGuards(JwtAuthGuard)
 export class SyncController {
-  constructor(private readonly syncService: SyncService) {}
+  constructor(
+    private readonly syncService: SyncService,
+    private readonly syncPushService: SyncPushService,
+    private readonly syncPullService: SyncPullService,
+  ) {}
 
   /**
-   * GET /api/sync/overview
-   * Returns list of orders with sync status and KPI metrics (Total Orders, Revenue, Synced, Pending)
+   * POST /api/sync/push
+   * Ingest offline mutations batch (§8.1.1)
    */
+  @Post('push')
+  async pushMutations(@Body() dto: SyncPushDto) {
+    return this.syncPushService.pushMutations(dto);
+  }
+
+  /**
+   * GET /api/sync/pull
+   * Incremental delta replication stream (§8.1.2)
+   */
+  @Get('pull')
+  async pullChanges(@Query() query: SyncPullDto) {
+    return this.syncPullService.pullChanges(query);
+  }
+
+  /**
+   * GET /api/sync/bootstrap
+   * Cold-start catalog & layout snapshot (§8.1.3), returned gzipped
+   */
+  @Get('bootstrap')
+  async getBootstrap(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('raw') raw?: string,
+  ) {
+    const data = await this.syncPullService.getBootstrapData();
+
+    // Check if client explicitly requested uncompressed JSON with raw=true
+    if (raw === 'true') {
+      return res.json(data);
+    }
+
+    // Default is gzipped payload as specified in §8.1.3
+    const jsonStr = JSON.stringify(data);
+    const gzipped = zlib.gzipSync(Buffer.from(jsonStr, 'utf-8'));
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    return res.send(gzipped);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // LEGACY ENDPOINTS (Preserved for backwards compatibility with existing UI)
+  // ───────────────────────────────────────────────────────────────────────────
+
   @Get('overview')
   async getSyncOverview(
     @Query('sync_status') syncStatus?: string,
@@ -21,78 +92,39 @@ export class SyncController {
       order_type: orderType,
       search,
     });
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 
-  /**
-   * POST /api/sync/order/:id
-   * Syncs a single pending order to Cloud
-   */
   @Post('order/:id')
   async syncSingleOrder(@Param('id') id: string) {
     const data = await this.syncService.syncSingleOrder(id);
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 
-  /**
-   * POST /api/sync/batch
-   * Upload batch of offline orders from SQLite to Cloud PostgreSQL
-   */
   @Post('batch')
   async syncBatchOrders(@Body() dto: BatchSyncOrdersDto) {
     const data = await this.syncService.syncBatchOrders(dto);
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 
-  /**
-   * POST /api/sync/toggle/:id
-   * Toggles sync status between pending and synced for offline demo and verification
-   */
   @Post('toggle/:id')
   async toggleSyncStatus(
     @Param('id') id: string,
     @Body() dto: ToggleSyncStatusDto,
   ) {
     const data = await this.syncService.toggleSyncStatus(id, dto);
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 
-  /**
-   * POST /api/sync/log
-   * Records a data sync log event into PostgreSQL database
-   */
   @Post('log')
   async createSyncLog(@Body() dto: CreateSyncLogDto) {
     const data = await this.syncService.createSyncLog(dto);
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 
-  /**
-   * GET /api/sync/logs
-   * Returns sync audit logs
-   */
   @Get('logs')
   async getSyncLogs() {
     const data = await this.syncService.getSyncLogs();
-    return {
-      success: true,
-      data,
-    };
+    return { success: true, data };
   }
 }
-

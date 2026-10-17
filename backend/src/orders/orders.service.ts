@@ -136,8 +136,27 @@ export class OrdersService {
   // -------------------------------------------------------------------------
   async createOrder(dto: CreateOrderDto): Promise<OrderWithDetails> {
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Resolve customer snapshot for online / takeaway
-      let customerName = dto.customer_name ?? '';
+      return this.createOrderInTx(tx, dto, dto.id);
+    });
+
+    if (result) {
+      this.kitchenGateway?.emitOrderCreated(result);
+    }
+
+    return result;
+  }
+
+  /**
+   * Internal transactional order creation, reusable by offline sync handlers
+   * and cloud endpoints within an existing transaction context.
+   */
+  async createOrderInTx(
+    tx: Prisma.TransactionClient,
+    dto: CreateOrderDto,
+    explicitOrderId?: string,
+  ): Promise<OrderWithDetails> {
+    // 1. Resolve customer snapshot for online / takeaway
+    let customerName = dto.customer_name ?? '';
       let customerPhone = dto.customer_phone ?? '';
       if (dto.customer_id) {
         try {
@@ -254,7 +273,7 @@ export class OrdersService {
         orderNumber = String(nextNum);
       } else {
         const existingOrderNum = await tx.order.findUnique({ where: { order_number: orderNumber } });
-        if (existingOrderNum) {
+        if (existingOrderNum && (!explicitOrderId || existingOrderNum.id !== explicitOrderId)) {
           throw new ConflictException(`Order number '${orderNumber}' already exists`);
         }
       }
@@ -279,6 +298,7 @@ export class OrdersService {
       // 6. Create base order
       const createdOrder = await tx.order.create({
         data: {
+          ...(explicitOrderId ? { id: explicitOrderId } : {}),
           order_number: orderNumber,
           order_type: dto.order_type,
           shift_id: activeShiftId,
@@ -372,6 +392,7 @@ export class OrdersService {
       // 8. Create order items
       await tx.orderItem.createMany({
         data: sanitizedItems.map((item) => ({
+          ...(item.id ? { id: item.id } : {}),
           order_id: createdOrder.id,
           menu_item_id: item.menu_item_id,
           item_name: item.item_name,
@@ -389,6 +410,7 @@ export class OrdersService {
       if (dto.payments && dto.payments.length > 0) {
         await tx.orderPayment.createMany({
           data: dto.payments.map((p) => ({
+            ...(p.id ? { id: p.id } : {}),
             order_id: createdOrder.id,
             payment_method: p.payment_method,
             amount: p.amount,
@@ -448,18 +470,10 @@ export class OrdersService {
         `Created order '${createdOrder.order_number}' (${createdOrder.order_type}) — PKR ${grandTotal}`,
       );
 
-      return tx.order.findUnique({
-        where: { id: createdOrder.id },
-        include: ORDER_INCLUDE,
-      }) as Promise<OrderWithDetails>;
-    });
-
-
-    if (result) {
-      this.kitchenGateway?.emitOrderCreated(result);
-    }
-
-    return result;
+    return tx.order.findUnique({
+      where: { id: createdOrder.id },
+      include: ORDER_INCLUDE,
+    }) as Promise<OrderWithDetails>;
   }
 
   // -------------------------------------------------------------------------

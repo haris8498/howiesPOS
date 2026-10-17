@@ -1,7 +1,6 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hungry_howies_pos/core/database/app_database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 void main() {
   group('Drift Schema Version & Migration Scaffold Tests', () {

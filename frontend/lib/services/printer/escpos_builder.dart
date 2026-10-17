@@ -287,6 +287,14 @@ class EscPosBuilder {
       builder.writeLine('Tel: ${receipt.storePhone}', align: EscPosAlign.center, size: EscPosFontSize.normal);
     }
 
+    if (receipt.isReprint) {
+      builder.writeLine(
+        '*** COPY / REPRINT ***',
+        align: EscPosAlign.center,
+        size: EscPosFontSize.bold,
+      );
+    }
+
     // 2. METADATA: Receipt # and Date
     final displayOrderNum = format3DigitOrderNumber(receipt.orderNumber);
     final dateStr = DateFormat('dd-MMM-yyyy hh:mm:ss a').format(receipt.dateTime);
@@ -504,7 +512,13 @@ class EscPosBuilder {
 
     if (receipt.isReprint) {
       builder.writeLine(
-        '*** REPRINT ***',
+        '*** COPY / REPRINT ***',
+        align: EscPosAlign.center,
+        size: EscPosFontSize.bold,
+      );
+    } else if (receipt.items.isNotEmpty && receipt.items.every((i) => i.isCancelled)) {
+      builder.writeLine(
+        '*** CANCELLED ITEM TICKET ***',
         align: EscPosAlign.center,
         size: EscPosFontSize.bold,
       );
@@ -542,7 +556,7 @@ class EscPosBuilder {
       final qtyStr = item.isCancelled
           ? '-${item.quantity}'
           : '${item.quantity}';
-      final displayName = item.isCancelled ? _strikeThrough(item.name) : item.name;
+      final displayName = item.isCancelled ? '[CANCELLED] ${item.name}' : item.name;
 
       final nameLines = _wrapText(displayName, nameColWidth);
       final firstLine = nameLines.isNotEmpty ? nameLines.first : displayName;
@@ -561,6 +575,9 @@ class EscPosBuilder {
 
       // Modifiers in parentheses e.g. (Medium), (Original Crust)
       final modifiers = <String>[];
+      if (item.isCancelled && item.cancelReason != null && item.cancelReason!.isNotEmpty) {
+        modifiers.add('(Reason: ${item.cancelReason})');
+      }
       if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
         modifiers.add('(${item.size})');
       }
@@ -745,11 +762,6 @@ class EscPosBuilder {
     return lines;
   }
 
-  static String _strikeThrough(String text) {
-    if (text.isEmpty) return text;
-    return text;
-  }
-
   static String format3DigitOrderNumber(String orderNumber) {
     if (orderNumber.isEmpty) return '101';
     final digits = orderNumber.replaceAll(RegExp(r'\D'), '');
@@ -762,5 +774,88 @@ class EscPosBuilder {
     }
     return orderNumber.length > 3 ? orderNumber.substring(orderNumber.length - 3) : orderNumber.padLeft(3, '0');
   }
+
+  /// Builds ESC/POS bytes for Shift Z-Report per Architecture Spec §5.4.3
+  static Uint8List buildShiftZReportBytes({
+    required String shiftId,
+    required DateTime date,
+    required String cashierName,
+    required double startingCash,
+    required double totalCashSales,
+    required double totalCardSales,
+    required double totalOnlineSales,
+    required double totalGrossSales,
+    required double totalExpenses,
+    required double expectedCash,
+    required double actualCash,
+    required double variance,
+    int dineInCount = 0,
+    int takeawayCount = 0,
+    int deliveryCount = 0,
+    int totalOrders = 0,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = "Near UOG Gate # 2 Gujrat",
+    PaperWidth paperWidth = PaperWidth.roll80mm,
+    bool autoCut = true,
+    bool isReprint = false,
+  }) {
+    final bool is58 = paperWidth == PaperWidth.roll58mm;
+    final int width = is58 ? 30 : 42;
+    final builder = EscPosBuilder(lineWidth: width);
+
+    builder.initialize();
+    builder.setLeftMargin(is58 ? 16 : 36);
+
+    builder.writeLine(storeName.toUpperCase(), align: EscPosAlign.center, size: EscPosFontSize.bold);
+    builder.writeLine('DAILY SHIFT Z-REPORT', align: EscPosAlign.center, size: EscPosFontSize.bold);
+    builder.writeLine(branchName, align: EscPosAlign.center, size: EscPosFontSize.normal);
+
+    if (isReprint) {
+      builder.writeLine('*** COPY / REPRINT ***', align: EscPosAlign.center, size: EscPosFontSize.bold);
+    }
+
+    builder.divider();
+    final dateStr = DateFormat('dd-MMM-yyyy hh:mm a').format(date);
+    builder.writeLine('Date: $dateStr', align: EscPosAlign.left);
+    builder.writeLine('Shift ID: $shiftId', align: EscPosAlign.left);
+    builder.writeLine('Cashier: $cashierName', align: EscPosAlign.left);
+    builder.divider();
+
+    builder.writeLine('SALES SUMMARY', align: EscPosAlign.left, size: EscPosFontSize.bold);
+    _writeTwoColumnLine(builder, width, 'Dine-In Orders:', '$dineInCount');
+    _writeTwoColumnLine(builder, width, 'Takeaway Orders:', '$takeawayCount');
+    _writeTwoColumnLine(builder, width, 'Delivery/Online:', '$deliveryCount');
+    _writeTwoColumnLine(builder, width, 'Total Orders:', '$totalOrders');
+    _writeTwoColumnLine(builder, width, 'Cash Sales:', 'PKR ${totalCashSales.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Card Sales:', 'PKR ${totalCardSales.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Online Sales:', 'PKR ${totalOnlineSales.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Gross Sales:', 'PKR ${totalGrossSales.toStringAsFixed(0)}');
+
+    builder.divider();
+    builder.writeLine('CASH DRAWER RECONCILIATION', align: EscPosAlign.left, size: EscPosFontSize.bold);
+    _writeTwoColumnLine(builder, width, 'Starting Float:', 'PKR ${startingCash.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'System Cash Sales:', 'PKR ${totalCashSales.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Total Shift Expenses:', 'PKR ${totalExpenses.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Expected In Drawer:', 'PKR ${expectedCash.toStringAsFixed(0)}');
+    _writeTwoColumnLine(builder, width, 'Actual Counted:', 'PKR ${actualCash.toStringAsFixed(0)}');
+    final varianceLabel = variance >= 0
+        ? '+PKR ${variance.toStringAsFixed(0)} (Over)'
+        : '-PKR ${variance.abs().toStringAsFixed(0)} (Short)';
+    _writeTwoColumnLine(builder, width, 'Cash Variance:', varianceLabel);
+
+    builder.divider();
+    builder.feed(2);
+    builder.writeLine('Cashier Signature: __________________', align: EscPosAlign.left);
+    builder.feed(1);
+    builder.writeLine('Manager Signature: __________________', align: EscPosAlign.left);
+    builder.feed(3);
+
+    if (autoCut) {
+      builder.cut(fullCut: false);
+    }
+
+    return builder.getBytes();
+  }
 }
+
 

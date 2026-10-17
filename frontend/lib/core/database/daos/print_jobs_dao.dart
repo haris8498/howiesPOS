@@ -19,8 +19,45 @@ class PrintJobsDao extends DatabaseAccessor<AppDatabase> with _$PrintJobsDaoMixi
       .get();
   }
 
+  Future<List<OfflinePrintJob>> getFailedJobs() {
+    return (select(offlinePrintJobs)
+      ..where((t) => t.status.equals(PrintJobStatus.failed))
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+      .get();
+  }
+
   Future<OfflinePrintJob?> getJobById(int id) {
     return (select(offlinePrintJobs)..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
+  Future<OfflinePrintJob?> getPrintedJobForOrder(String orderId, String jobType) async {
+    final list = await (select(offlinePrintJobs)
+      ..where((t) =>
+          t.orderId.equals(orderId) &
+          t.jobType.equals(jobType) &
+          t.status.equals(PrintJobStatus.printed))
+      ..limit(1))
+      .get();
+    return list.firstOrNull;
+  }
+
+  Future<List<OfflinePrintJob>> getJobsForOrder(String orderId) {
+    return (select(offlinePrintJobs)
+      ..where((t) => t.orderId.equals(orderId))
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+      .get();
+  }
+
+  Future<OfflinePrintJob?> getQueuedJobForOrder(String orderId, String jobType) async {
+    final list = await (select(offlinePrintJobs)
+      ..where((t) =>
+          t.orderId.equals(orderId) &
+          t.jobType.equals(jobType) &
+          t.status.equals(PrintJobStatus.queued))
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1))
+      .get();
+    return list.firstOrNull;
   }
 
   Future<int> markJobStatus(int id, String status, {int? retryCount}) {
@@ -31,4 +68,18 @@ class PrintJobsDao extends DatabaseAccessor<AppDatabase> with _$PrintJobsDaoMixi
       ),
     );
   }
+
+  Future<int> updateJobPayloadAndTarget(int id, Uint8List rawBytes, String printerTarget) {
+    return (update(offlinePrintJobs)..where((t) => t.id.equals(id))).write(
+      OfflinePrintJobsCompanion(
+        rawEscPosData: Value(rawBytes),
+        printerTarget: Value(printerTarget),
+      ),
+    );
+  }
+
+  Future<int> deleteJobsForOrder(String orderId) {
+    return (delete(offlinePrintJobs)..where((t) => t.orderId.equals(orderId))).go();
+  }
 }
+

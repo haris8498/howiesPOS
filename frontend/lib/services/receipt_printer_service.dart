@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -9,6 +10,8 @@ import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import '../core/database/app_database.dart';
+import '../core/database/tables/offline_print_jobs_table.dart';
 import '../domain/models/order_model.dart';
 import '../domain/models/restaurant_table.dart';
 import '../domain/models/takeaway_model.dart';
@@ -150,6 +153,78 @@ class ReceiptData {
     this.isReprint = false,
     this.isModified = false,
   });
+
+  ReceiptData copyWith({
+    ReceiptType? type,
+    String? storeName,
+    String? branchName,
+    String? branchCode,
+    String? storePhone,
+    String? storeTaxId,
+    String? orderNumber,
+    String? tokenNumber,
+    String? tableNumber,
+    String? tableName,
+    String? tableSection,
+    String? orderType,
+    String? customerName,
+    String? customerPhone,
+    String? customerAddress,
+    String? riderName,
+    String? cashierOrServer,
+    DateTime? dateTime,
+    List<ReceiptItemData>? items,
+    double? subtotal,
+    double? discountAmount,
+    double? taxAmount,
+    double? taxRate,
+    double? serviceChargeAmount,
+    double? deliveryFee,
+    double? grandTotal,
+    String? paymentMethod,
+    double? tenderedAmount,
+    double? changeReturned,
+    String? transactionRef,
+    String? notes,
+    bool? isReprint,
+    bool? isModified,
+  }) {
+    return ReceiptData(
+      type: type ?? this.type,
+      storeName: storeName ?? this.storeName,
+      branchName: branchName ?? this.branchName,
+      branchCode: branchCode ?? this.branchCode,
+      storePhone: storePhone ?? this.storePhone,
+      storeTaxId: storeTaxId ?? this.storeTaxId,
+      orderNumber: orderNumber ?? this.orderNumber,
+      tokenNumber: tokenNumber ?? this.tokenNumber,
+      tableNumber: tableNumber ?? this.tableNumber,
+      tableName: tableName ?? this.tableName,
+      tableSection: tableSection ?? this.tableSection,
+      orderType: orderType ?? this.orderType,
+      customerName: customerName ?? this.customerName,
+      customerPhone: customerPhone ?? this.customerPhone,
+      customerAddress: customerAddress ?? this.customerAddress,
+      riderName: riderName ?? this.riderName,
+      cashierOrServer: cashierOrServer ?? this.cashierOrServer,
+      dateTime: dateTime ?? this.dateTime,
+      items: items ?? this.items,
+      subtotal: subtotal ?? this.subtotal,
+      discountAmount: discountAmount ?? this.discountAmount,
+      taxAmount: taxAmount ?? this.taxAmount,
+      taxRate: taxRate ?? this.taxRate,
+      serviceChargeAmount: serviceChargeAmount ?? this.serviceChargeAmount,
+      deliveryFee: deliveryFee ?? this.deliveryFee,
+      grandTotal: grandTotal ?? this.grandTotal,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
+      tenderedAmount: tenderedAmount ?? this.tenderedAmount,
+      changeReturned: changeReturned ?? this.changeReturned,
+      transactionRef: transactionRef ?? this.transactionRef,
+      notes: notes ?? this.notes,
+      isReprint: isReprint ?? this.isReprint,
+      isModified: isModified ?? this.isModified,
+    );
+  }
 
   /// Factory helper for Restaurant Table Final Paid Receipt
   factory ReceiptData.fromTablePaid({
@@ -689,6 +764,26 @@ class ReceiptPrinterService {
   static const String _prefKeyKitchenPaperWidth = 'pos_kitchen_paper_width';
   static const String _prefKeyKitchenAutoCut = 'pos_kitchen_auto_cut';
 
+  /// Active database instance backing the OfflinePrintJobs spooler
+  static AppDatabase? _database;
+
+  /// Sets the database instance for OfflinePrintJobs durable spooling
+  static void setDatabase(AppDatabase? db) {
+    _database = db;
+  }
+
+  /// Gets the currently configured database
+  static AppDatabase? get database => _database;
+
+  /// Test hook to simulate physical thermal printer hardware in unit tests.
+  /// If set, calls to physical printing route through this callback instead
+  /// of native winspool / P-Invoke.
+  @visibleForTesting
+  static Future<bool> Function(String targetPrinter, Uint8List rawBytes, {String docName})? testPrinterFn;
+
+  /// In-flight job locks to prevent concurrent duplicate spooling for the same ticket
+  static final Set<String> _inFlightJobLocks = <String>{};
+
   // Rapid debounce map to prevent accidental double-click duplicate prints
   static final Map<String, DateTime> _recentPrintLocks = {};
 
@@ -767,6 +862,7 @@ class ReceiptPrinterService {
     String? idOrOrderNumber, {
     String? tokenNumber,
     String? currentItemsSignature,
+    AppDatabase? db,
   }) async {
     final candidateIds = <String>[];
     if (idOrOrderNumber != null && idOrOrderNumber.trim().isNotEmpty) {
@@ -785,37 +881,52 @@ class ReceiptPrinterService {
       }
     }
 
-    // 1. Check if the ticket/order exists in the printed KOT set
-    final set = await _loadPrintedKitchenTickets();
+    // 1. Tier 5 Durable Winspool KOT Deduplication: Check OfflinePrintJobs in Drift SQLite
+    final targetDb = db ?? _database;
     bool isInPrintedSet = false;
     String matchedKey = candidateIds.first.toLowerCase();
 
-    for (final raw in candidateIds) {
-      final clean = raw.toLowerCase();
-      if (set.contains(clean)) {
-        isInPrintedSet = true;
-        matchedKey = clean;
-        break;
+    if (targetDb != null) {
+      for (final raw in candidateIds) {
+        final job = await targetDb.printJobsDao.getPrintedJobForOrder(raw, PrintJobType.kitchenTicket);
+        if (job != null) {
+          isInPrintedSet = true;
+          matchedKey = raw.toLowerCase();
+          break;
+        }
       }
-      final numeric = int.tryParse(clean);
-      if (numeric != null) {
-        final formatted3 = numeric.toString().padLeft(3, '0');
-        if (set.contains(formatted3) || set.contains(numeric.toString())) {
+    }
+
+    // 2. Check SharedPreferences / in-memory set as fallback
+    if (!isInPrintedSet) {
+      final set = await _loadPrintedKitchenTickets();
+      for (final raw in candidateIds) {
+        final clean = raw.toLowerCase();
+        if (set.contains(clean)) {
           isInPrintedSet = true;
           matchedKey = clean;
           break;
         }
-      }
-      for (final m in RegExp(r'\d+').allMatches(clean)) {
-        final s = m.group(0)!;
-        final n = int.tryParse(s);
-        if (n != null && (set.contains(n.toString()) || set.contains(n.toString().padLeft(3, '0')))) {
-          isInPrintedSet = true;
-          matchedKey = clean;
-          break;
+        final numeric = int.tryParse(clean);
+        if (numeric != null) {
+          final formatted3 = numeric.toString().padLeft(3, '0');
+          if (set.contains(formatted3) || set.contains(numeric.toString())) {
+            isInPrintedSet = true;
+            matchedKey = clean;
+            break;
+          }
         }
+        for (final m in RegExp(r'\d+').allMatches(clean)) {
+          final s = m.group(0)!;
+          final n = int.tryParse(s);
+          if (n != null && (set.contains(n.toString()) || set.contains(n.toString().padLeft(3, '0')))) {
+            isInPrintedSet = true;
+            matchedKey = clean;
+            break;
+          }
+        }
+        if (isInPrintedSet) break;
       }
-      if (isInPrintedSet) break;
     }
 
     // If it is not in the printed set (e.g. unmarketed when modified or cancelled), it can print
@@ -823,7 +934,7 @@ class ReceiptPrinterService {
       return false;
     }
 
-    // 2. If it was printed, check if current items signature differs from the printed signature.
+    // 3. If it was printed, check if current items signature differs from the printed signature.
     // If the items were modified or cancelled, signature differs -> return false so updated KOT can print!
     if (currentItemsSignature != null && currentItemsSignature.isNotEmpty) {
       final sigMap = await _loadPrintedKitchenSignatures();
@@ -855,8 +966,12 @@ class ReceiptPrinterService {
     return true;
   }
 
-  /// Marks a kitchen receipt as printed (persisted across app reloads)
-  static Future<void> markKitchenReceiptPrinted(String? idOrOrderNumber, {String? signature}) async {
+  /// Marks a kitchen receipt as printed (persisted across app reloads via Drift OfflinePrintJobs)
+  static Future<void> markKitchenReceiptPrinted(
+    String? idOrOrderNumber, {
+    String? signature,
+    AppDatabase? db,
+  }) async {
     if (idOrOrderNumber == null || idOrOrderNumber.trim().isEmpty) return;
     final cleanId = idOrOrderNumber.trim().toLowerCase();
 
@@ -864,6 +979,37 @@ class ReceiptPrinterService {
       return;
     }
 
+    // 1. Mark in Drift SQLite OfflinePrintJobs table for persistent durability across app restarts
+    final targetDb = db ?? _database;
+    if (targetDb != null) {
+      try {
+        final jobs = await targetDb.printJobsDao.getJobsForOrder(idOrOrderNumber.trim());
+        bool updated = false;
+        for (final job in jobs) {
+          if (job.jobType == PrintJobType.kitchenTicket && job.status != PrintJobStatus.printed) {
+            await targetDb.printJobsDao.markJobStatus(job.id, PrintJobStatus.printed);
+            updated = true;
+          }
+        }
+        if (!updated && jobs.isEmpty) {
+          await targetDb.printJobsDao.insertJob(
+            OfflinePrintJobsCompanion(
+              jobType: const Value(PrintJobType.kitchenTicket),
+              orderId: Value(idOrOrderNumber.trim()),
+              printerTarget: const Value('KITCHEN_WIN_SPOOLER'),
+              rawEscPosData: Value(Uint8List.fromList(utf8.encode('KOT_$cleanId'))),
+              status: const Value(PrintJobStatus.printed),
+              retryCount: const Value(0),
+              createdAt: Value(DateTime.now()),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('Error marking kitchen receipt printed in SQLite: $e');
+      }
+    }
+
+    // 2. Mark in-memory and SharedPreferences cache
     await _loadPrintedKitchenTickets();
     _printedKitchenTickets.add(cleanId);
 
@@ -895,7 +1041,22 @@ class ReceiptPrinterService {
     String? orderNumber,
     String? tokenNumber,
     String? tableNumber,
+    AppDatabase? db,
   }) async {
+    final targetDb = db ?? _database;
+    if (targetDb != null) {
+      final ids = [orderId, orderNumber, tokenNumber, tableNumber];
+      for (final id in ids) {
+        if (id != null && id.trim().isNotEmpty) {
+          try {
+            await targetDb.printJobsDao.deleteJobsForOrder(id.trim());
+          } catch (e) {
+            debugPrint('Error deleting print jobs in SQLite for $id: $e');
+          }
+        }
+      }
+    }
+
     await _loadPrintedKitchenTickets();
     await _loadPrintedKitchenSignatures();
 
@@ -960,6 +1121,37 @@ class ReceiptPrinterService {
     } catch (e) {
       debugPrint('Error clearing printed KOT history: $e');
     }
+  }
+
+  /// Reset all internal caches and test hooks for unit testing
+  @visibleForTesting
+  static void resetForTesting() {
+    _printedKitchenTickets.clear();
+    _printedKitchenSignatures.clear();
+    _hasLoadedPrintedKotSet = false;
+    _hasLoadedPrintedKotSignatures = false;
+    _inFlightJobLocks.clear();
+    _recentPrintLocks.clear();
+    testPrinterFn = null;
+    _database = null;
+    _cachedPrinterName = null;
+    _cachedPrinterUrl = null;
+    _cachedPaperWidth = null;
+    _cachedDirectPrint = null;
+    _cachedAutoCut = null;
+    _cachedDrawerKick = null;
+    _cachedKitchenPrinterName = null;
+    _cachedKitchenSameAsCustomer = null;
+    _cachedKitchenPaperWidth = null;
+    _cachedKitchenAutoCut = null;
+    _hasLoadedSettings = false;
+  }
+
+  /// Clears in-flight debounce locks for testing
+  @visibleForTesting
+  static void clearRecentPrintLocks() {
+    _recentPrintLocks.clear();
+    _inFlightJobLocks.clear();
   }
 
   // In-memory high-speed cache for printer settings to eliminate async disk I/O per print
@@ -1201,7 +1393,10 @@ class ReceiptPrinterService {
     required ReceiptData receipt,
     bool forceDialog = false,
     bool forcePrint = false,
+    AppDatabase? db,
   }) async {
+    final targetDb = db ?? _database;
+
     // Debounce protection: Prevent duplicate rapid clicks within 1.5 seconds
     final lockKey = '${receipt.type.name}_${receipt.orderNumber}';
     final now = DateTime.now();
@@ -1214,11 +1409,43 @@ class ReceiptPrinterService {
     }
     _recentPrintLocks[lockKey] = now;
 
+    // Concurrency lock (job id lock)
+    if (_inFlightJobLocks.contains(lockKey)) {
+      debugPrint('Concurrency lock: Print request in-flight for $lockKey');
+      return true;
+    }
+    _inFlightJobLocks.add(lockKey);
+
     try {
       final isKot = receipt.type == ReceiptType.kitchenKot;
 
       // -----------------------------------------------------------------------
-      // STRICT ONE-TIME KITCHEN PRINT ENFORCEMENT
+      // CANCELLED-ITEM HANDLING (cancelled-item tickets only for items already printed)
+      // -----------------------------------------------------------------------
+      if (isKot) {
+        final hasCancelled = receipt.items.any((i) => i.isCancelled);
+        if (hasCancelled) {
+          final isAlreadyPrinted = await isKitchenReceiptPrinted(
+            receipt.orderNumber,
+            tokenNumber: receipt.tokenNumber,
+            db: targetDb,
+          );
+
+          if (!isAlreadyPrinted) {
+            // If all items are cancelled and ticket was never printed, skip printing
+            if (receipt.items.every((i) => i.isCancelled)) {
+              debugPrint('Skipping KOT print: All items are cancelled and order was never printed to kitchen.');
+              return true;
+            }
+            // If some items are active and some cancelled, only print active items on initial KOT
+            final activeOnly = receipt.items.where((i) => !i.isCancelled).toList();
+            receipt = receipt.copyWith(items: activeOnly);
+          }
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // STRICT ONE-TIME KITCHEN PRINT ENFORCEMENT (Tier 5 of §15.2)
       // If an unmodified kitchen ticket has already been printed once, reject duplicate prints.
       // If the order has been modified, or if forcePrint/isReprint is set, allow printing!
       // -----------------------------------------------------------------------
@@ -1229,10 +1456,11 @@ class ReceiptPrinterService {
 
         if (!isTestTicket) {
           final isAlreadyPrinted = await isKitchenReceiptPrinted(
-                receipt.orderNumber,
-                tokenNumber: receipt.tokenNumber,
-                currentItemsSignature: receipt.itemsSignature,
-              );
+            receipt.orderNumber,
+            tokenNumber: receipt.tokenNumber,
+            currentItemsSignature: receipt.itemsSignature,
+            db: targetDb,
+          );
 
           if (isAlreadyPrinted) {
             final displayNum = EscPosBuilder.format3DigitOrderNumber(receipt.orderNumber);
@@ -1270,7 +1498,6 @@ class ReceiptPrinterService {
       if (isPrinterConfigured(rawPos)) {
         posPrinter = rawPos;
       } else if (rawPos == null) {
-        // Fresh install before user ever configured printer settings
         final autoResolved = await _resolveBestThermalPrinter();
         if (isPrinterConfigured(autoResolved)) {
           posPrinter = autoResolved;
@@ -1283,16 +1510,13 @@ class ReceiptPrinterService {
 
       if (isKot) {
         // =========================================================================
-        // KITCHEN ORDER TICKET (KOT) PRINTING:
-        // Prints to Kitchen Printer ("Kitchen Receipt") and/or POS Printer ("Food Picker - Dine In")
-        // depending on what the user has selected.
+        // KITCHEN ORDER TICKET (KOT) PRINTING
         // =========================================================================
         final rawKitchen = await getKitchenPrinterName();
         final String? kitchenPrinter = isPrinterConfigured(rawKitchen) ? rawKitchen : null;
         final kitchenWidth = await getKitchenPaperWidth();
         final kitchenCut = await isKitchenAutoCutEnabled();
 
-        // If neither printer is selected, gracefully skip
         if (kitchenPrinter == null && posPrinter == null) {
           debugPrint('No printer configured for Kitchen KOT (Kitchen: None, POS: None). Skipping print.');
           return true;
@@ -1300,13 +1524,14 @@ class ReceiptPrinterService {
 
         final hasCancelled = receipt.items.any((i) => i.isCancelled);
 
-        // Case 1: Both are configured and set to the SAME printer
+        // Case 1: Both configured and set to the SAME printer
         if (kitchenPrinter != null && posPrinter != null && kitchenPrinter == posPrinter) {
           final prebuiltBytes = hasCancelled
-              ? await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)
+              ? ((await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)) ??
+                  EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true))
               : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true);
 
-          final success = await _printSingleJob(
+          final printResult = await _printSingleJob(
             receipt: receipt,
             targetPrinter: kitchenPrinter,
             paperWidth: kitchenWidth,
@@ -1314,15 +1539,17 @@ class ReceiptPrinterService {
             drawerKick: false,
             prebuiltBytes: prebuiltBytes,
             isKitchenPrinter: true,
+            db: targetDb,
           );
 
+          final success = printResult.success;
           final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
               receipt.orderNumber == 'KOT-101' ||
               receipt.orderNumber == 'KOT-TEST';
           if (success && !isTestTicket) {
-            await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature);
+            await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature, db: targetDb);
             if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
-              await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature);
+              await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature, db: targetDb);
             }
           }
 
@@ -1346,19 +1573,22 @@ class ReceiptPrinterService {
                 duration: const Duration(seconds: 2),
               ),
             );
+          } else if (!success && context != null && context.mounted) {
+            _showPrinterFailureSnackBar(context, printResult.jobId, targetDb);
           }
           return success;
         }
 
         // Case 2: One or both distinct printers configured
-        final List<Future<bool>> printJobs = [];
+        final List<Future<_JobPrintResult>> printJobs = [];
         bool printingKitchen = false;
         bool printingPos = false;
 
         if (kitchenPrinter != null) {
           printingKitchen = true;
           final prebuiltKitchenBytes = hasCancelled
-              ? await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)
+              ? ((await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)) ??
+                  EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true))
               : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true);
 
           printJobs.add(
@@ -1370,6 +1600,7 @@ class ReceiptPrinterService {
               drawerKick: false,
               prebuiltBytes: prebuiltKitchenBytes,
               isKitchenPrinter: true,
+              db: targetDb,
             ),
           );
         }
@@ -1377,7 +1608,8 @@ class ReceiptPrinterService {
         if (posPrinter != null) {
           printingPos = true;
           final prebuiltPosBytes = hasCancelled
-              ? await generateRasterEscPosBytes(receipt, posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false)
+              ? ((await generateRasterEscPosBytes(receipt, posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false)) ??
+                  EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false))
               : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false);
 
           printJobs.add(
@@ -1389,20 +1621,22 @@ class ReceiptPrinterService {
               drawerKick: false,
               prebuiltBytes: prebuiltPosBytes,
               isKitchenPrinter: false,
+              db: targetDb,
             ),
           );
         }
 
-        final printResults = await Future.wait<bool>(printJobs);
-        final bool overallSuccess = printResults.any((s) => s);
+        final printResults = await Future.wait<_JobPrintResult>(printJobs);
+        final bool overallSuccess = printResults.any((s) => s.success);
+        final int? failedJobId = printResults.where((r) => !r.success && r.jobId != null).map((r) => r.jobId!).firstOrNull;
 
         final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
             receipt.orderNumber == 'KOT-101' ||
             receipt.orderNumber == 'KOT-TEST';
         if (overallSuccess && !isTestTicket) {
-          await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature);
+          await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature, db: targetDb);
           if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
-            await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature);
+            await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature, db: targetDb);
           }
         }
 
@@ -1435,12 +1669,13 @@ class ReceiptPrinterService {
               duration: const Duration(seconds: 2),
             ),
           );
+        } else if (!overallSuccess && context != null && context.mounted) {
+          _showPrinterFailureSnackBar(context, failedJobId, targetDb);
         }
         return overallSuccess;
       } else {
         // =========================================================================
-        // ALL OTHER RECEIPTS (Customer Bills, Pre-Bills, Takeaway, Delivery):
-        // Prints ONLY to the POS Counter Printer!
+        // ALL OTHER RECEIPTS (Customer Bills, Pre-Bills, Takeaway, Delivery)
         // =========================================================================
         if (posPrinter == null) {
           debugPrint('POS Printer is not selected (None). Skipping customer receipt print.');
@@ -1456,14 +1691,16 @@ class ReceiptPrinterService {
           return false;
         }
 
-        final success = await _printSingleJob(
+        final printResult = await _printSingleJob(
           receipt: receipt,
           targetPrinter: posPrinter,
           paperWidth: posWidth,
           autoCut: posCut,
           drawerKick: posDrawer,
+          db: targetDb,
         );
 
+        final success = printResult.success;
         if (success && context != null && context.mounted) {
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1484,25 +1721,56 @@ class ReceiptPrinterService {
               duration: const Duration(seconds: 2),
             ),
           );
+        } else if (!success && context != null && context.mounted) {
+          _showPrinterFailureSnackBar(context, printResult.jobId, targetDb);
         }
         return success;
       }
     } catch (e, stack) {
       debugPrint('Printing error: $e\n$stack');
       if (context != null && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Unable to print receipt. Please check printer connection.'),
-            backgroundColor: Color(0xFFDC2626),
-          ),
-        );
+        _showPrinterFailureSnackBar(context, null, targetDb);
       }
       return false;
+    } finally {
+      _inFlightJobLocks.remove(lockKey);
     }
   }
 
+  /// Displays non-blocking warning snackbar with 'Retry Print' action per Spec §15.4 & §21 (Decision 1)
+  static void _showPrinterFailureSnackBar(BuildContext context, int? jobId, AppDatabase? db) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Printer out of paper / Printer unavailable',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFFDC2626),
+        duration: const Duration(seconds: 8),
+        action: jobId != null
+            ? SnackBarAction(
+                label: 'Retry Print',
+                textColor: Colors.white,
+                onPressed: () {
+                  retryPrintJob(jobId, context: context, db: db);
+                },
+              )
+            : null,
+      ),
+    );
+  }
+
   /// Internal helper to send a single print job to a specific physical printer
-  static Future<bool> _printSingleJob({
+  static Future<_JobPrintResult> _printSingleJob({
     required ReceiptData receipt,
     required String targetPrinter,
     required PaperWidth paperWidth,
@@ -1510,9 +1778,16 @@ class ReceiptPrinterService {
     required bool drawerKick,
     Uint8List? prebuiltBytes,
     bool isKitchenPrinter = false,
+    AppDatabase? db,
   }) async {
+    final targetDb = db ?? _database;
+    final String jobType = (isKitchenPrinter || receipt.type == ReceiptType.kitchenKot)
+        ? PrintJobType.kitchenTicket
+        : PrintJobType.customerReceipt;
+
+    int? jobId;
+
     try {
-      bool printSuccess = false;
       final hasCancelledItems = receipt.items.any((i) => i.isCancelled);
 
       // 1. GENERATE ESC/POS BINARY (or reuse pre-rendered byte buffer)
@@ -1537,103 +1812,395 @@ class ReceiptPrinterService {
         );
       }
 
-      // 2. PRIORITY 1: DIRECT BACKEND PRINT API (Works on Web & Desktop)
-      try {
-        final b64 = base64Encode(escposBytes);
-        final res = await http.post(
-          Uri.parse('${ApiConfig.baseUrl}/printer/print'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'printerName': targetPrinter,
-            'base64Data': b64,
-            'docName': '${receipt.type.name}_${receipt.orderNumber}',
-          }),
-        ).timeout(const Duration(seconds: 5));
-
-        if (res.statusCode == 200) {
-          final decoded = jsonDecode(res.body);
-          if (decoded['success'] == true) {
-            printSuccess = true;
-          }
-        }
-      } catch (e) {
-        debugPrint('Backend direct print attempt: $e');
-      }
-
-      // 3. PRIORITY 2: DIRECT NATIVE WIN32 DESKTOP PRINTING
-      if (!printSuccess && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
-        if (targetPrinter.startsWith('Port: ')) {
-          final port = targetPrinter.replaceFirst('Port: ', '').trim();
-          printSuccess = await NativeWin32Printer.printRawBytesToPort(port, escposBytes);
-          if (!printSuccess) {
-            await NativeWin32Printer.ensurePosPrinterInstalled(
-              printerName: 'POS Receipt Printer',
-              portName: port,
-            );
-            printSuccess = await NativeWin32Printer.printRawBytesToSpooler('POS Receipt Printer', escposBytes);
-          }
-        } else if (targetPrinter.contains(':') && RegExp(r'^\d+\.\d+\.\d+\.\d+:\d+$').hasMatch(targetPrinter)) {
-          final parts = targetPrinter.split(':');
-          final host = parts[0];
-          final port = int.tryParse(parts[1]) ?? 9100;
-          printSuccess = await NetworkPrinter.sendRawBytesToNetworkPrinter(host, port, escposBytes);
-        } else {
-          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
-            targetPrinter,
-            escposBytes,
-            docName: '${receipt.type.name}_${receipt.orderNumber}',
-          );
-
-          if (!printSuccess && targetPrinter != 'POS Receipt Printer') {
-            printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
-              'POS Receipt Printer',
-              escposBytes,
-            );
-          }
-        }
-      }
-
-      // 4. PRIORITY 3: PDF SPOOLER DIRECT PRINTING FALLBACK
-      if (!printSuccess && !kIsWeb) {
+      // 2. ENQUEUE IN OFFLINEPRINTJOBS TABLE (§5.4.3: Durable Hardware Print Spooler Queue)
+      if (targetDb != null) {
         try {
-          final printers = await Printing.listPrinters();
-          final matchingPrinter = printers.cast<Printer?>().firstWhere(
-                (p) => p?.name == targetPrinter || p?.name == 'POS Receipt Printer',
-                orElse: () => printers.isNotEmpty
-                    ? printers.firstWhere(
-                        (p) => !p.name.toLowerCase().contains('pdf') && !p.name.toLowerCase().contains('onenote'),
-                        orElse: () => printers.first,
-                      )
-                    : null,
-              );
-
-          if (matchingPrinter != null) {
-            final pageFormat = paperWidth == PaperWidth.roll58mm
-                ? const PdfPageFormat(58 * PdfPageFormat.mm, double.infinity, marginAll: 2 * PdfPageFormat.mm)
-                : const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity, marginAll: 3.5 * PdfPageFormat.mm);
-
-            final doc = await _generateReceiptPdf(
-              receipt,
-              paperWidth,
-              isKitchenPrinter: isKitchenPrinter,
+          final existingQueued = (jobType == PrintJobType.customerReceipt)
+              ? await targetDb.printJobsDao.getQueuedJobForOrder(
+                  receipt.orderNumber,
+                  jobType,
+                )
+              : null;
+          if (existingQueued != null) {
+            jobId = existingQueued.id;
+            await targetDb.printJobsDao.updateJobPayloadAndTarget(
+              jobId,
+              escposBytes,
+              targetPrinter,
             );
-            final pdfBytes = await doc.save();
-
-            printSuccess = await Printing.directPrintPdf(
-              printer: matchingPrinter,
-              onLayout: (PdfPageFormat format) async => pdfBytes,
-              format: pageFormat,
-              name: '${receipt.type.name}_${receipt.orderNumber}',
+          } else {
+            jobId = await targetDb.printJobsDao.insertJob(
+              OfflinePrintJobsCompanion(
+                jobType: Value(jobType),
+                orderId: Value(receipt.orderNumber),
+                printerTarget: Value(targetPrinter),
+                rawEscPosData: Value(escposBytes),
+                status: const Value(PrintJobStatus.queued),
+                retryCount: const Value(0),
+                createdAt: Value(DateTime.now()),
+              ),
             );
           }
         } catch (e) {
-          debugPrint('Spooler fallback error: $e');
+          debugPrint('Notice enqueueing OfflinePrintJob: $e');
         }
       }
 
-      return printSuccess;
+      // 3. HARDWARE THERMAL PRINT EXECUTION VIA NATIVE WIN32 / TEST HOOK
+      bool printSuccess = false;
+      try {
+        printSuccess = await _sendRawBytesToPrinter(
+          targetPrinter: targetPrinter,
+          escposBytes: escposBytes,
+          docName: '${receipt.type.name}_${receipt.orderNumber}',
+          receipt: receipt,
+          paperWidth: paperWidth,
+          isKitchenPrinter: isKitchenPrinter,
+        );
+      } catch (e) {
+        debugPrint('Hardware printing threw exception: $e');
+        printSuccess = false;
+      }
+
+      // 4. UPDATE STATUS IN OFFLINEPRINTJOBS: QUEUED -> PRINTED / FAILED
+      if (targetDb != null && jobId != null) {
+        try {
+          await targetDb.printJobsDao.markJobStatus(
+            jobId,
+            printSuccess ? PrintJobStatus.printed : PrintJobStatus.failed,
+          );
+        } catch (e) {
+          debugPrint('Notice updating OfflinePrintJob status: $e');
+        }
+      }
+
+      return _JobPrintResult(success: printSuccess, jobId: jobId);
     } catch (e) {
       debugPrint('Single print job error for $targetPrinter: $e');
+      if (targetDb != null && jobId != null) {
+        try {
+          await targetDb.printJobsDao.markJobStatus(jobId, PrintJobStatus.failed);
+        } catch (_) {}
+      }
+      return _JobPrintResult(success: false, jobId: jobId);
+    }
+  }
+
+  /// Direct hardware byte transmission to Win32 spooler / test fake printer
+  static Future<bool> _sendRawBytesToPrinter({
+    required String targetPrinter,
+    required Uint8List escposBytes,
+    String docName = 'POS Thermal Receipt',
+    ReceiptData? receipt,
+    PaperWidth paperWidth = PaperWidth.roll80mm,
+    bool isKitchenPrinter = false,
+  }) async {
+    // Priority 0: Fake physical printer hook for unit tests
+    if (testPrinterFn != null) {
+      return await testPrinterFn!(targetPrinter, escposBytes, docName: docName);
+    }
+
+    bool printSuccess = false;
+
+    // 1. PRIORITY 1: DIRECT BACKEND PRINT API (Works on Web & Desktop)
+    try {
+      final b64 = base64Encode(escposBytes);
+      final res = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/printer/print'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'printerName': targetPrinter,
+          'base64Data': b64,
+          'docName': docName,
+        }),
+      ).timeout(const Duration(seconds: 5));
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded['success'] == true) {
+          printSuccess = true;
+        }
+      }
+    } catch (e) {
+      debugPrint('Backend direct print attempt: $e');
+    }
+
+    // 2. PRIORITY 2: DIRECT NATIVE WIN32 DESKTOP PRINTING
+    if (!printSuccess && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      if (targetPrinter.startsWith('Port: ')) {
+        final port = targetPrinter.replaceFirst('Port: ', '').trim();
+        printSuccess = await NativeWin32Printer.printRawBytesToPort(port, escposBytes);
+        if (!printSuccess) {
+          await NativeWin32Printer.ensurePosPrinterInstalled(
+            printerName: 'POS Receipt Printer',
+            portName: port,
+          );
+          printSuccess = await NativeWin32Printer.printRawBytesToSpooler('POS Receipt Printer', escposBytes);
+        }
+      } else if (targetPrinter.contains(':') && RegExp(r'^\d+\.\d+\.\d+\.\d+:\d+$').hasMatch(targetPrinter)) {
+        final parts = targetPrinter.split(':');
+        final host = parts[0];
+        final port = int.tryParse(parts[1]) ?? 9100;
+        printSuccess = await NetworkPrinter.sendRawBytesToNetworkPrinter(host, port, escposBytes);
+      } else {
+        printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
+          targetPrinter,
+          escposBytes,
+          docName: docName,
+        );
+
+        if (!printSuccess && targetPrinter != 'POS Receipt Printer') {
+          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
+            'POS Receipt Printer',
+            escposBytes,
+          );
+        }
+      }
+    }
+
+    // 3. PRIORITY 3: PDF SPOOLER DIRECT PRINTING FALLBACK
+    if (!printSuccess && !kIsWeb && receipt != null) {
+      try {
+        final printers = await Printing.listPrinters();
+        final matchingPrinter = printers.cast<Printer?>().firstWhere(
+              (p) => p?.name == targetPrinter || p?.name == 'POS Receipt Printer',
+              orElse: () => printers.isNotEmpty
+                  ? printers.firstWhere(
+                      (p) => !p.name.toLowerCase().contains('pdf') && !p.name.toLowerCase().contains('onenote'),
+                      orElse: () => printers.first,
+                    )
+                  : null,
+            );
+
+        if (matchingPrinter != null) {
+          final pageFormat = paperWidth == PaperWidth.roll58mm
+              ? const PdfPageFormat(58 * PdfPageFormat.mm, double.infinity, marginAll: 2 * PdfPageFormat.mm)
+              : const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity, marginAll: 3.5 * PdfPageFormat.mm);
+
+          final doc = await _generateReceiptPdf(
+            receipt,
+            paperWidth,
+            isKitchenPrinter: isKitchenPrinter,
+          );
+          final pdfBytes = await doc.save();
+
+          printSuccess = await Printing.directPrintPdf(
+            printer: matchingPrinter,
+            onLayout: (PdfPageFormat format) async => pdfBytes,
+            format: pageFormat,
+            name: docName,
+          );
+        }
+      } catch (e) {
+        debugPrint('Spooler fallback error: $e');
+      }
+    }
+
+    return printSuccess;
+  }
+
+  /// Retries printing a failed or queued print job from OfflinePrintJobs.
+  /// Per Architecture Spec §15.4 and §21 (Decision 1): Simple retry without recovery daemons.
+  static Future<bool> retryPrintJob(
+    int jobId, {
+    BuildContext? context,
+    AppDatabase? db,
+  }) async {
+    final targetDb = db ?? _database;
+    if (targetDb == null) {
+      debugPrint('Cannot retry print: no database configured.');
+      return false;
+    }
+
+    final job = await targetDb.printJobsDao.getJobById(jobId);
+    if (job == null) {
+      debugPrint('Retry print: job #$jobId not found in OfflinePrintJobs.');
+      return false;
+    }
+
+    if (job.status == PrintJobStatus.printed) {
+      debugPrint('Retry print: job #$jobId has already been printed. Skipping duplicate print.');
+      return true;
+    }
+
+    final nextRetry = job.retryCount + 1;
+    bool printSuccess = false;
+    try {
+      printSuccess = await _sendRawBytesToPrinter(
+        targetPrinter: job.printerTarget,
+        escposBytes: job.rawEscPosData,
+        docName: '${job.jobType}_${job.orderId ?? jobId}',
+      );
+    } catch (e) {
+      debugPrint('Retry print threw exception: $e');
+      printSuccess = false;
+    }
+
+    await targetDb.printJobsDao.markJobStatus(
+      jobId,
+      printSuccess ? PrintJobStatus.printed : PrintJobStatus.failed,
+      retryCount: nextRetry,
+    );
+
+    if (printSuccess) {
+      if (job.jobType == PrintJobType.kitchenTicket && job.orderId != null) {
+        await markKitchenReceiptPrinted(job.orderId, db: targetDb);
+      }
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Print succeeded on retry!',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Color(0xFF16A34A),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return true;
+    } else {
+      if (context != null && context.mounted) {
+        _showPrinterFailureSnackBar(context, jobId, targetDb);
+      }
+      return false;
+    }
+  }
+
+  /// Prints and enqueues a Daily Shift Z-Report in OfflinePrintJobs per Spec §5.4.3 & §15.4.
+  static Future<bool> printShiftZReport({
+    BuildContext? context,
+    required String shiftId,
+    required DateTime date,
+    required String cashierName,
+    required double startingCash,
+    required double totalCashSales,
+    required double totalCardSales,
+    required double totalOnlineSales,
+    required double totalGrossSales,
+    required double totalExpenses,
+    required double expectedCash,
+    required double actualCash,
+    required double variance,
+    int dineInCount = 0,
+    int takeawayCount = 0,
+    int deliveryCount = 0,
+    int totalOrders = 0,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = "Near UOG Gate # 2 Gujrat",
+    String? printerName,
+    bool isReprint = false,
+    AppDatabase? db,
+  }) async {
+    final targetDb = db ?? _database;
+    final rawPos = printerName ?? await getSavedPrinterName();
+    final targetPrinter = (rawPos != null && isPrinterConfigured(rawPos))
+        ? rawPos
+        : 'POS Receipt Printer';
+    final paperWidth = await getSavedPaperWidth();
+    final autoCut = await isAutoCutEnabled();
+
+    final escposBytes = EscPosBuilder.buildShiftZReportBytes(
+      shiftId: shiftId,
+      date: date,
+      cashierName: cashierName,
+      startingCash: startingCash,
+      totalCashSales: totalCashSales,
+      totalCardSales: totalCardSales,
+      totalOnlineSales: totalOnlineSales,
+      totalGrossSales: totalGrossSales,
+      totalExpenses: totalExpenses,
+      expectedCash: expectedCash,
+      actualCash: actualCash,
+      variance: variance,
+      dineInCount: dineInCount,
+      takeawayCount: takeawayCount,
+      deliveryCount: deliveryCount,
+      totalOrders: totalOrders,
+      storeName: storeName,
+      branchName: branchName,
+      paperWidth: paperWidth,
+      autoCut: autoCut,
+      isReprint: isReprint,
+    );
+
+    int? jobId;
+    if (targetDb != null) {
+      try {
+        jobId = await targetDb.printJobsDao.insertJob(
+          OfflinePrintJobsCompanion(
+            jobType: const Value(PrintJobType.shiftZReport),
+            orderId: Value(shiftId),
+            printerTarget: Value(targetPrinter),
+            rawEscPosData: Value(escposBytes),
+            status: const Value(PrintJobStatus.queued),
+            retryCount: const Value(0),
+            createdAt: Value(DateTime.now()),
+          ),
+        );
+      } catch (e) {
+        debugPrint('Notice inserting shift Z-report job: $e');
+      }
+    }
+
+    bool success = false;
+    try {
+      success = await _sendRawBytesToPrinter(
+        targetPrinter: targetPrinter,
+        escposBytes: escposBytes,
+        docName: 'SHIFT_Z_REPORT_$shiftId',
+        paperWidth: paperWidth,
+      );
+    } catch (e) {
+      debugPrint('Shift Z-report print threw exception: $e');
+      success = false;
+    }
+
+    if (targetDb != null && jobId != null) {
+      try {
+        await targetDb.printJobsDao.markJobStatus(
+          jobId,
+          success ? PrintJobStatus.printed : PrintJobStatus.failed,
+        );
+      } catch (_) {}
+    }
+
+    if (success) {
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Shift Z-Report printed to [$targetPrinter]',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF16A34A),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      return true;
+    } else {
+      if (context != null && context.mounted) {
+        _showPrinterFailureSnackBar(context, jobId, targetDb);
+      }
       return false;
     }
   }
@@ -1647,6 +2214,7 @@ class ReceiptPrinterService {
     bool openCashDrawer = false,
     bool isKitchenPrinter = false,
   }) async {
+    if (testPrinterFn != null) return null;
     try {
       final doc = await _generateReceiptPdf(
         receipt,
@@ -2285,4 +2853,10 @@ class ReceiptPrinterService {
       ),
     );
   }
+}
+
+class _JobPrintResult {
+  final bool success;
+  final int? jobId;
+  const _JobPrintResult({required this.success, this.jobId});
 }

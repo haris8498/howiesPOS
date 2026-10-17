@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../application/orders/complete_order_usecase.dart';
+import '../config/feature_flags.dart';
+import '../core/sync/sync_providers.dart';
 import '../domain/models/menu_item.dart';
 import '../domain/models/order_model.dart';
 import '../domain/models/restaurant_table.dart';
@@ -16,8 +19,11 @@ import '../services/api/settings_api_service.dart';
 import '../services/mock_api_service.dart';
 import 'repositories/api_inventory_repository.dart';
 import 'repositories/api_kitchen_repository.dart';
-import 'repositories/api_order_repository.dart';
 import 'repositories/api_table_repository.dart';
+import 'repositories/drift_offline_first_order_repository.dart';
+import 'repositories/order_repository_provider.dart';
+
+export 'repositories/order_repository_provider.dart' show orderRepositoryProvider;
 
 class PosState {
   final List<MenuItem> menuItems;
@@ -142,11 +148,7 @@ class PosState {
   }
 }
 
-// Concrete Singletons backed by REST APIs
-final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
-  return ApiOrderRepository(ordersApiService: ref.read(ordersApiServiceProvider));
-});
-
+// Concrete Singletons backed by REST APIs or Offline Drift Storage
 final tableRepositoryProvider = Provider<ITableRepository>((ref) {
   return ApiTableRepository(tablesApiService: ref.read(tablesApiServiceProvider));
 });
@@ -160,16 +162,23 @@ final kitchenRepositoryProvider = Provider<IKitchenRepository>((ref) {
 });
 
 final pricingEngineProvider = Provider<PricingEngine>((ref) => const PricingEngine());
-final orderNumberGeneratorProvider = Provider<IOrderNumberGenerator>((ref) => OrderNumberGenerator());
+
+final orderNumberGeneratorProvider = Provider<IOrderNumberGenerator>((ref) {
+  if (FeatureFlags.offlineFirstEnabled) {
+    final db = ref.watch(appDatabaseProvider);
+    return OrderNumberGenerator(terminalSequencesDao: db.terminalSequencesDao);
+  }
+  return OrderNumberGenerator();
+});
 
 final completeOrderUseCaseProvider = Provider<CompleteOrderUseCase>((ref) {
   return CompleteOrderUseCase(
-    orderRepository: ref.read(orderRepositoryProvider),
-    tableRepository: ref.read(tableRepositoryProvider),
-    kitchenRepository: ref.read(kitchenRepositoryProvider),
-    inventoryRepository: ref.read(inventoryRepositoryProvider),
-    pricingEngine: ref.read(pricingEngineProvider),
-    orderNumberGenerator: ref.read(orderNumberGeneratorProvider),
+    orderRepository: ref.watch(orderRepositoryProvider),
+    tableRepository: ref.watch(tableRepositoryProvider),
+    kitchenRepository: ref.watch(kitchenRepositoryProvider),
+    inventoryRepository: ref.watch(inventoryRepositoryProvider),
+    pricingEngine: ref.watch(pricingEngineProvider),
+    orderNumberGenerator: ref.watch(orderNumberGeneratorProvider),
   );
 });
 
@@ -178,19 +187,52 @@ class PosNotifier extends StateNotifier<PosState> {
   final IOrderNumberGenerator _numberGenerator;
   final MenuApiService _menuApiService;
   final SettingsApiService _settingsApiService;
+  final IOrderRepository? _orderRepository;
+  StreamSubscription<List<OrderModel>>? _ordersSubscription;
+
+  /// In-flight checkout future lock for Tier 1 duplicate submit defense (§15.2)
+  Future<OrderModel>? _activeCheckoutFuture;
 
   PosNotifier({
     this.completeOrderUseCase,
     IOrderNumberGenerator? numberGenerator,
     MenuApiService? menuApiService,
     SettingsApiService? settingsApiService,
+    IOrderRepository? orderRepository,
   })  : _numberGenerator = numberGenerator ?? OrderNumberGenerator(),
         _menuApiService = menuApiService ?? MenuApiService(),
         _settingsApiService = settingsApiService ?? SettingsApiService(),
+        _orderRepository = orderRepository,
         super(PosState(
           menuItems: MockApiService.getInitialMenuItems(),
         )) {
     _loadMenuAndSettings();
+    _initOrderStream();
+  }
+
+  void _initOrderStream() {
+    final repo = _orderRepository;
+    if (repo is DriftOfflineFirstOrderRepository) {
+      _ordersSubscription = repo.watchAllOrders().listen((orders) {
+        if (!mounted || orders.isEmpty) return;
+        final completed = orders
+            .where((o) =>
+                o.status == OrderStatus.completed ||
+                o.status == OrderStatus.accepted)
+            .toList();
+        final held = orders.where((o) => o.isHeld).toList();
+        state = state.copyWith(
+          completedOrders: completed,
+          heldOrders: held,
+        );
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _ordersSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadMenuAndSettings() async {
@@ -484,6 +526,22 @@ class PosNotifier extends StateNotifier<PosState> {
   }
 
   Future<OrderModel> processOrderCheckout(PaymentMethod paymentMethod) async {
+    // Tier 1 Duplicate-Submit Protection (§15.2):
+    // Reuse existing in-flight future if checkout is already executing
+    if (_activeCheckoutFuture != null) {
+      return _activeCheckoutFuture!;
+    }
+
+    final future = _doProcessOrderCheckout(paymentMethod);
+    _activeCheckoutFuture = future;
+    try {
+      return await future;
+    } finally {
+      _activeCheckoutFuture = null;
+    }
+  }
+
+  Future<OrderModel> _doProcessOrderCheckout(PaymentMethod paymentMethod) async {
     final command = CompleteOrderCommand(
       items: state.currentCart,
       orderType: state.selectedOrderType,
@@ -503,8 +561,9 @@ class PosNotifier extends StateNotifier<PosState> {
       final result = await useCase.execute(command);
       if (result.isSuccess) {
         final completed = result.data;
+        final existing = state.completedOrders.where((o) => o.id != completed.id).toList();
         state = state.copyWith(
-          completedOrders: [completed, ...state.completedOrders],
+          completedOrders: [completed, ...existing],
           currentCart: [],
           discountPercentage: 0.0,
           discountAmount: 0.0,
@@ -549,8 +608,9 @@ class PosNotifier extends StateNotifier<PosState> {
       kitchenTicketSent: true,
     );
 
+    final existing = state.completedOrders.where((o) => o.id != newOrder.id).toList();
     state = state.copyWith(
-      completedOrders: [newOrder, ...state.completedOrders],
+      completedOrders: [newOrder, ...existing],
       currentCart: [],
       discountAmount: 0.0,
       selectedTable: null,
@@ -562,15 +622,17 @@ class PosNotifier extends StateNotifier<PosState> {
 }
 
 final posProvider = StateNotifierProvider<PosNotifier, PosState>((ref) {
-  final useCase = ref.read(completeOrderUseCaseProvider);
-  final numberGen = ref.read(orderNumberGeneratorProvider);
-  final menuApi = ref.read(menuApiServiceProvider);
-  final settingsApi = ref.read(settingsApiServiceProvider);
+  final useCase = ref.watch(completeOrderUseCaseProvider);
+  final numberGen = ref.watch(orderNumberGeneratorProvider);
+  final menuApi = ref.watch(menuApiServiceProvider);
+  final settingsApi = ref.watch(settingsApiServiceProvider);
+  final orderRepo = ref.watch(orderRepositoryProvider);
 
   return PosNotifier(
     completeOrderUseCase: useCase,
     numberGenerator: numberGen,
     menuApiService: menuApi,
     settingsApiService: settingsApi,
+    orderRepository: orderRepo,
   );
 });

@@ -1,6 +1,8 @@
 import '../models/order_model.dart';
 
-/// Abstract contract for Order persistence and queries
+/// Abstract contract for Order persistence and queries.
+/// Derived directly from legacy ApiOrderRepository so that ApiOrderRepository
+/// implements this interface unchanged (Spec §17.2).
 abstract class IOrderRepository {
   Future<List<OrderModel>> getAllOrders();
   Future<OrderModel?> getOrderById(String id);

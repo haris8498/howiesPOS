@@ -7,6 +7,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { DailyCalculationService } from './daily-calculation.service';
 import { SubmitDailyCalculationDto } from './dto/submit-daily-calculation.dto';
@@ -16,6 +17,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/rbac/guards/permissions.guard';
 import { RequirePermission } from '../common/rbac/decorators/permissions.decorator';
+import { IdempotencyInterceptor } from '../sync/interceptors/idempotency.interceptor';
 
 @Controller(['daily-calculations', 'daily-calculation'])
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -61,6 +63,7 @@ export class DailyCalculationController {
   }
 
   @Post('start-session')
+  @UseInterceptors(IdempotencyInterceptor)
   async startSession(@Body() dto: StartSessionDto, @CurrentUser() user?: any) {
     const cashierInfo = user ? { id: user.userId || user.id, username: user.username } : undefined;
     const data = await this.dailyCalculationService.startSession(dto, cashierInfo);
@@ -82,6 +85,7 @@ export class DailyCalculationController {
   }
 
   @Post('submit')
+  @UseInterceptors(IdempotencyInterceptor)
   async submitDailyCalculation(
     @Body() dto: SubmitDailyCalculationDto,
     @CurrentUser() user: any,

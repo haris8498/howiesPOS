@@ -9,6 +9,8 @@ import { OrderHandler } from './handlers/order.handler';
 import { OrdersModule } from '../orders/orders.module';
 import { KitchenModule } from '../kitchen/kitchen.module';
 
+import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor';
+
 @Module({
   imports: [OrdersModule, KitchenModule],
   controllers: [SyncController],
@@ -19,6 +21,7 @@ import { KitchenModule } from '../kitchen/kitchen.module';
     ChangeLogService,
     HandlerRegistry,
     OrderHandler,
+    IdempotencyInterceptor,
   ],
   exports: [
     SyncService,
@@ -27,6 +30,7 @@ import { KitchenModule } from '../kitchen/kitchen.module';
     ChangeLogService,
     HandlerRegistry,
     OrderHandler,
+    IdempotencyInterceptor,
   ],
 })
 export class SyncModule {}

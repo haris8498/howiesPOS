@@ -1,11 +1,21 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService, OrderWithDetails } from './orders.service';
+import { KitchenGateway } from '../kitchen/kitchen.gateway';
 
 describe('OrdersService', () => {
   let service: OrdersService;
+  let prisma: PrismaService;
+  const mockKitchenGateway = {
+    emitOrderCreated: jest.fn(),
+    emitOrderUpdated: jest.fn(),
+    emitOrderStatusChanged: jest.fn(),
+    emitOrderReady: jest.fn(),
+    emitOrderCancelled: jest.fn(),
+    emitKitchenTicketSent: jest.fn(),
+  };
 
   const mockItem = {
     id: 'oi-1',
@@ -147,6 +157,7 @@ describe('OrdersService', () => {
             $transaction: jest.fn().mockImplementation(async (callback) => {
               return callback({
                 order: {
+                  findMany: jest.fn().mockResolvedValue([mockOrder]),
                   create: jest.fn().mockResolvedValue(mockOrder),
                   update: jest.fn().mockResolvedValue(mockOrder),
                   findUnique: jest.fn().mockImplementation(({ where }) => {
@@ -230,10 +241,16 @@ describe('OrdersService', () => {
             }),
           },
         },
+        {
+          provide: KitchenGateway,
+          useValue: mockKitchenGateway,
+        },
       ],
     }).compile();
 
     service = module.get<OrdersService>(OrdersService);
+    prisma = module.get<PrismaService>(PrismaService);
+    jest.clearAllMocks();
   });
 
   it('should list all orders with query filters', async () => {
@@ -385,5 +402,79 @@ describe('OrdersService', () => {
   it('should delete order', async () => {
     const result = await service.deleteOrder('ord-1');
     expect(result.message).toContain('deleted successfully');
+  });
+
+  describe('Terminal-Prefixed Order Numbers & Post-Commit Events (§4.3, §8.3(2), §9.4)', () => {
+    it('should accept terminal-prefixed order number (e.g. P1-101)', async () => {
+      const result = await service.createOrder({
+        order_type: 'takeaway',
+        order_number: 'P1-101',
+        items: [
+          {
+            item_name: 'Cheese Pizza',
+            quantity: 1,
+            unit_price: 500,
+          },
+        ],
+      });
+
+      expect(result).toBeDefined();
+      expect(mockKitchenGateway.emitOrderCreated).toHaveBeenCalledWith(result);
+    });
+
+    it('should throw ConflictException if terminal order number already exists', async () => {
+      // Mock findUnique to simulate existing order number in transaction
+      jest.spyOn(prisma, '$transaction').mockImplementationOnce(async (cb: any) => {
+        return cb({
+          order: {
+            findUnique: jest.fn().mockResolvedValue({ id: 'existing-ord', order_number: 'P1-101' }),
+            findMany: jest.fn().mockResolvedValue([]),
+          },
+          restaurantTable: { findFirst: jest.fn().mockResolvedValue(null) },
+          menuItem: { findUnique: jest.fn().mockResolvedValue(null) },
+          customer: { findUnique: jest.fn().mockResolvedValue(null) },
+          dailyCalculation: { findFirst: jest.fn().mockResolvedValue(null) },
+        });
+      });
+
+      await expect(
+        service.createOrder({
+          order_type: 'takeaway',
+          order_number: 'P1-101',
+          items: [
+            {
+              item_name: 'Cheese Pizza',
+              quantity: 1,
+              unit_price: 500,
+            },
+          ],
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      // Verify that kitchenGateway.emitOrderCreated was NOT called on conflict
+      expect(mockKitchenGateway.emitOrderCreated).not.toHaveBeenCalled();
+    });
+
+    it('should NOT emit kitchen event when transaction rolls back / throws', async () => {
+      jest.spyOn(prisma, '$transaction').mockImplementationOnce(async () => {
+        throw new Error('Database connection failed');
+      });
+
+      await expect(
+        service.createOrder({
+          order_type: 'takeaway',
+          items: [
+            {
+              item_name: 'Cheese Pizza',
+              quantity: 1,
+              unit_price: 500,
+            },
+          ],
+        }),
+      ).rejects.toThrow('Database connection failed');
+
+      // Fundamental invariant: event emitted strictly AFTER commit (§9.4), never on rollback
+      expect(mockKitchenGateway.emitOrderCreated).not.toHaveBeenCalled();
+    });
   });
 });

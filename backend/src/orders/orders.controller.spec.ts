@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { OrdersController } from './orders.controller';
 import { OrdersService, OrderWithDetails } from './orders.service';
 import { PermissionsService } from '../permissions/permissions.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 describe('OrdersController', () => {
   let controller: OrdersController;
@@ -62,6 +63,17 @@ describe('OrdersController', () => {
           provide: PermissionsService,
           useValue: {
             hasPermission: jest.fn().mockResolvedValue(true),
+          },
+        },
+        {
+          provide: PrismaService,
+          useValue: {
+            processedOperation: {
+              findUnique: jest.fn().mockResolvedValue(null),
+              create: jest.fn().mockResolvedValue({}),
+              update: jest.fn().mockResolvedValue({}),
+              delete: jest.fn().mockResolvedValue({}),
+            },
           },
         },
       ],

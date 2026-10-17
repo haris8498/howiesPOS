@@ -8,10 +8,12 @@ import {
   Req,
   Res,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import * as zlib from 'zlib';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor';
 import { SyncService } from './sync.service';
 import { SyncPushService } from './sync-push.service';
 import { SyncPullService } from './sync-pull.service';
@@ -37,6 +39,7 @@ export class SyncController {
    * Ingest offline mutations batch (§8.1.1)
    */
   @Post('push')
+  @UseInterceptors(IdempotencyInterceptor)
   async pushMutations(@Body() dto: SyncPushDto) {
     return this.syncPushService.pushMutations(dto);
   }

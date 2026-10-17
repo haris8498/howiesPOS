@@ -246,17 +246,29 @@ export class OrdersService {
           ? this.round(dto.grand_total)
           : this.round(subtotal - discountAmountRaw + taxAmountRaw + deliveryFeeRaw);
 
-      // 5. Order number (Clean 3-digit sequential receipt number e.g. 101, 102, 103...)
+      // 5. Order number (Terminal-prefixed P<terminal>-<seq> or legacy 3-digit sequential 101-999)
       let orderNumber = dto.order_number;
       if (!orderNumber) {
-        const latestOrder = await tx.order.findFirst({
-          orderBy: { created_at: 'desc' },
-          select: { order_number: true },
-        });
+        // Query recent orders to find latest pure 3-digit numeric order number
+        const recentOrders: Array<{ order_number: string }> = tx.order.findMany
+          ? await tx.order.findMany({
+              orderBy: { created_at: 'desc' },
+              take: 50,
+              select: { order_number: true },
+            })
+          : [await tx.order.findFirst({ orderBy: { created_at: 'desc' }, select: { order_number: true } })].filter((o): o is { order_number: string } => Boolean(o));
 
         let nextNum = 101;
-        if (latestOrder?.order_number) {
-          const parsed = parseInt(latestOrder.order_number.replace(/\D/g, ''), 10);
+        const latestLegacy = recentOrders.find((o) => /^\d{3}$/.test(o.order_number));
+        if (latestLegacy) {
+          const parsed = parseInt(latestLegacy.order_number, 10);
+          if (!isNaN(parsed) && parsed >= 100 && parsed < 999) {
+            nextNum = parsed + 1;
+          } else if (!isNaN(parsed) && parsed >= 999) {
+            nextNum = 101;
+          }
+        } else if (recentOrders.length > 0) {
+          const parsed = parseInt(recentOrders[0].order_number.replace(/\D/g, ''), 10);
           if (!isNaN(parsed) && parsed >= 100 && parsed < 999) {
             nextNum = parsed + 1;
           } else if (!isNaN(parsed) && parsed >= 999) {
@@ -272,6 +284,7 @@ export class OrdersService {
         }
         orderNumber = String(nextNum);
       } else {
+        orderNumber = orderNumber.trim();
         const existingOrderNum = await tx.order.findUnique({ where: { order_number: orderNumber } });
         if (existingOrderNum && (!explicitOrderId || existingOrderNum.id !== explicitOrderId)) {
           throw new ConflictException(`Order number '${orderNumber}' already exists`);

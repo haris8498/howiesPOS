@@ -13,6 +13,9 @@ import {
 } from './handlers/sync-entity.handler';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
 
+import * as crypto from 'crypto';
+import { canonicalJson } from './interceptors/idempotency.interceptor';
+
 @Injectable()
 export class SyncPushService {
   private readonly logger = new Logger(SyncPushService.name);
@@ -50,6 +53,25 @@ export class SyncPushService {
     );
 
     for (const mutation of sortedMutations) {
+      // 1. Check idempotency ledger for this mutation (§8.2, §7.1)
+      const existingOp = this.prisma.processedOperation?.findUnique
+        ? await this.prisma.processedOperation.findUnique({
+            where: { operation_id: mutation.operation_id },
+          })
+        : null;
+
+      if (existingOp && existingOp.status === 'COMPLETED') {
+        const cachedPayload = existingOp.response_payload as any;
+        results.push({
+          operation_id: mutation.operation_id,
+          entity_id: mutation.entity_id,
+          status: 'DUPLICATE',
+          server_version: cachedPayload?.server_version ?? mutation.base_version ?? 1,
+          server_timestamp: (existingOp.completed_at || existingOp.created_at).toISOString(),
+        });
+        continue;
+      }
+
       const context: SyncMutationContext = {
         deviceId: device_id,
         operationId: mutation.operation_id,
@@ -79,6 +101,62 @@ export class SyncPushService {
           return await handler.handle(tx, mutation, context);
         });
         results.push(result);
+
+        // Durably record in idempotency ledger (§7.1, §8.2)
+        if (this.prisma.processedOperation?.upsert) {
+          try {
+            const reqHash = crypto
+              .createHash('sha256')
+              .update(canonicalJson(mutation.payload || {}))
+              .digest('hex');
+
+            await this.prisma.processedOperation.upsert({
+              where: { operation_id: mutation.operation_id },
+              create: {
+                operation_id: mutation.operation_id,
+                device_id: device_id,
+                entity_type: mutation.entity_type,
+                entity_id: mutation.entity_id,
+                request_hash: reqHash,
+                status: 'COMPLETED',
+                response_payload: result as any,
+                http_status: 200,
+                completed_at: new Date(),
+              },
+              update: {
+                status: 'COMPLETED',
+                response_payload: result as any,
+                completed_at: new Date(),
+              },
+            });
+          } catch (ledgerErr: any) {
+            this.logger.warn(
+              `Could not update processedOperation for ${mutation.operation_id}: ${ledgerErr.message}`,
+            );
+          }
+        }
+
+        // Post-commit realtime broadcast (§9.4)
+        if (
+          result.status === 'SYNCED' &&
+          mutation.entity_type === 'order' &&
+          this.kitchenGateway
+        ) {
+          try {
+            this.kitchenGateway.emitOrderCreated({
+              id: mutation.entity_id,
+              order_number: mutation.payload?.order_number,
+              order_type: mutation.payload?.order_type,
+              status: mutation.payload?.status || 'newOrder',
+              grand_total: mutation.payload?.grand_total || 0,
+              created_at: mutation.payload?.created_at || new Date(),
+              device_id: device_id,
+              order_items: mutation.payload?.items || [],
+            });
+          } catch (wsErr: any) {
+            this.logger.warn(`Could not emit kitchen event: ${wsErr?.message}`);
+          }
+        }
       } catch (err: any) {
         this.logger.error(
           `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) failed: ${err.message}`,

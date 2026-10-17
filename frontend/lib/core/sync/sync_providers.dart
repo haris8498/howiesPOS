@@ -2,14 +2,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/feature_flags.dart';
 import '../database/app_database.dart';
 import '../../services/api/api_providers.dart';
+import '../../services/receipt_printer_service.dart';
 import 'connectivity_notifier.dart';
 import 'sync_background_worker.dart';
+
+import '../database/tables/sync_conflicts_table.dart';
 
 /// Database provider (singleton root for SQLite/Drift).
 /// Can be overridden in tests with an in-memory database.
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();
+  ReceiptPrinterService.setDatabase(db);
   ref.onDispose(() {
+    ReceiptPrinterService.setDatabase(null);
     db.close();
   });
   return db;
@@ -66,6 +71,51 @@ final pendingOutboxCountProvider = StreamProvider<int>((ref) {
   return db.outboxDao.watchPendingCount();
 });
 
+/// Reactive stream of unresolved pending conflicts in sync_conflicts (§3.3 Tier 5).
+final unresolvedConflictCountProvider = StreamProvider<int>((ref) {
+  final db = ref.watch(appDatabaseProvider);
+  return (db.select(db.syncConflicts)
+        ..where((t) => t.resolutionStatus.equals(ConflictResolutionStatus.pending)))
+      .watch()
+      .map((list) => list.length);
+});
+
+/// Model representing conflict badge state for supervisory alert (§3.3 Tier 5).
+class SyncConflictBadgeState {
+  final bool hasConflict;
+  final int conflictCount;
+  final String label;
+  final String colorName; // 'orange' (warning) or 'red' (critical)
+  final int colorHex; // 0xFFFF5722 (Deep Orange) or 0xFFE53935 (Red)
+
+  const SyncConflictBadgeState({
+    this.hasConflict = false,
+    this.conflictCount = 0,
+    this.label = '',
+    this.colorName = 'red',
+    this.colorHex = 0xFFE53935,
+  });
+
+  static const none = SyncConflictBadgeState();
+}
+
+/// Provider exposing red/orange badge state for unresolved sync conflicts.
+/// Surfaces state through Riverpod without modifying existing screen layouts.
+final syncConflictBadgeProvider = Provider<SyncConflictBadgeState>((ref) {
+  final conflictCount = ref.watch(unresolvedConflictCountProvider).value ?? 0;
+  if (conflictCount <= 0) {
+    return SyncConflictBadgeState.none;
+  }
+
+  return SyncConflictBadgeState(
+    hasConflict: true,
+    conflictCount: conflictCount,
+    label: '$conflictCount Conflict${conflictCount > 1 ? 's' : ''} Detected',
+    colorName: conflictCount > 3 ? 'red' : 'orange',
+    colorHex: conflictCount > 3 ? 0xFFE53935 : 0xFFFF5722,
+  );
+});
+
 /// UI Sync Indicator Display Model per Spec §3.3.
 enum SyncIndicatorState {
   allSynced, // Green dot: "All Synced"
@@ -98,6 +148,7 @@ final syncIndicatorProvider = Provider<SyncIndicatorViewModel>((ref) {
   final workerState = ref.watch(syncStateProvider);
   final connState = ref.watch(connectivityNotifierProvider);
   final pendingCount = ref.watch(pendingOutboxCountProvider).value ?? workerState.pendingCount;
+  final conflictCount = ref.watch(unresolvedConflictCountProvider).value ?? 0;
 
   if (workerState.isAuthPaused) {
     return SyncIndicatorViewModel(
@@ -116,6 +167,16 @@ final syncIndicatorProvider = Provider<SyncIndicatorViewModel>((ref) {
       pendingCount: pendingCount,
       lastSyncAt: workerState.lastSuccessfulPush,
       isOnline: false,
+    );
+  }
+
+  if (conflictCount > 0) {
+    return SyncIndicatorViewModel(
+      state: SyncIndicatorState.conflict,
+      label: '$conflictCount Conflict${conflictCount > 1 ? 's' : ''} Detected',
+      pendingCount: pendingCount,
+      lastSyncAt: workerState.lastSuccessfulPush,
+      isOnline: connState.isOnline,
     );
   }
 

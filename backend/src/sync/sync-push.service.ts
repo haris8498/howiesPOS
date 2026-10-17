@@ -72,6 +72,30 @@ export class SyncPushService {
         continue;
       }
 
+      // 2. Validate dependency graph (§6.3)
+      if (mutation.depends_on_operation_id) {
+        const depOp = this.prisma.processedOperation?.findUnique
+          ? await this.prisma.processedOperation.findUnique({
+              where: { operation_id: mutation.depends_on_operation_id },
+            })
+          : null;
+
+        if (!depOp || depOp.status !== 'COMPLETED') {
+          this.logger.warn(
+            `Mutation ${mutation.operation_id} has unsynced dependency: ${mutation.depends_on_operation_id}`,
+          );
+          results.push({
+            operation_id: mutation.operation_id,
+            entity_id: mutation.entity_id,
+            status: 'FAILED_RETRYABLE',
+            server_version: mutation.base_version ?? 1,
+            server_timestamp: new Date().toISOString(),
+            error_message: `Unsynced dependency: operation '${mutation.depends_on_operation_id}' has not completed yet`,
+          });
+          continue;
+        }
+      }
+
       const context: SyncMutationContext = {
         deviceId: device_id,
         operationId: mutation.operation_id,
@@ -137,24 +161,45 @@ export class SyncPushService {
         }
 
         // Post-commit realtime broadcast (§9.4)
-        if (
-          result.status === 'SYNCED' &&
-          mutation.entity_type === 'order' &&
-          this.kitchenGateway
-        ) {
-          try {
-            this.kitchenGateway.emitOrderCreated({
-              id: mutation.entity_id,
-              order_number: mutation.payload?.order_number,
-              order_type: mutation.payload?.order_type,
-              status: mutation.payload?.status || 'newOrder',
-              grand_total: mutation.payload?.grand_total || 0,
-              created_at: mutation.payload?.created_at || new Date(),
-              device_id: device_id,
-              order_items: mutation.payload?.items || [],
-            });
-          } catch (wsErr: any) {
-            this.logger.warn(`Could not emit kitchen event: ${wsErr?.message}`);
+        if (result.status === 'SYNCED' && this.kitchenGateway) {
+          if (mutation.entity_type === 'order') {
+            try {
+              this.kitchenGateway.emitOrderCreated({
+                id: mutation.entity_id,
+                order_number: mutation.payload?.order_number,
+                order_type: mutation.payload?.order_type,
+                status: mutation.payload?.status || 'newOrder',
+                grand_total: mutation.payload?.grand_total || 0,
+                created_at: mutation.payload?.created_at || new Date(),
+                device_id: device_id,
+                order_items: mutation.payload?.items || [],
+              });
+            } catch (wsErr: any) {
+              this.logger.warn(`Could not emit kitchen event: ${wsErr?.message}`);
+            }
+          } else if (
+            mutation.entity_type === 'table' ||
+            mutation.entity_type === 'restaurant_table'
+          ) {
+            try {
+              const envelope = this.kitchenGateway.createEnvelope({
+                eventName: 'table.status_changed',
+                entity: 'restaurant_tables',
+                entityId: result.entity_id,
+                action: 'STATUS_CHANGED',
+                version: result.server_version,
+                originDeviceId: device_id,
+                payload: {
+                  table_id: result.entity_id,
+                  version: result.server_version,
+                  status: mutation.payload?.status,
+                  active_order_id: mutation.payload?.active_order_id,
+                },
+              });
+              this.kitchenGateway.emitRealtimeEnvelope(envelope);
+            } catch (wsErr: any) {
+              this.logger.warn(`Could not emit table event: ${wsErr?.message}`);
+            }
           }
         }
       } catch (err: any) {

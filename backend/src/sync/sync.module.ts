@@ -6,6 +6,8 @@ import { SyncPullService } from './sync-pull.service';
 import { ChangeLogService } from './change-log.service';
 import { HandlerRegistry } from './handlers/handler-registry.service';
 import { OrderHandler } from './handlers/order.handler';
+import { TableHandler } from './handlers/table.handler';
+import { ShiftHandler } from './handlers/shift.handler';
 import { OrdersModule } from '../orders/orders.module';
 import { KitchenModule } from '../kitchen/kitchen.module';
 
@@ -21,6 +23,8 @@ import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor';
     ChangeLogService,
     HandlerRegistry,
     OrderHandler,
+    TableHandler,
+    ShiftHandler,
     IdempotencyInterceptor,
   ],
   exports: [
@@ -30,6 +34,8 @@ import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor';
     ChangeLogService,
     HandlerRegistry,
     OrderHandler,
+    TableHandler,
+    ShiftHandler,
     IdempotencyInterceptor,
   ],
 })

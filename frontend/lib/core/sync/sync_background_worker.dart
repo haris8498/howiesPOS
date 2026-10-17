@@ -358,6 +358,8 @@ class SyncBackgroundWorker {
         'operation_type': entry.operationType,
         'base_version': entry.baseVersion,
         'dependency_order': entry.dependencyOrder,
+        if (entry.dependsOnOperationId != null)
+          'depends_on_operation_id': entry.dependsOnOperationId,
         'created_at': entry.createdAt.toIso8601String(),
         'payload': parsedPayload,
       };
@@ -441,31 +443,99 @@ class SyncBackgroundWorker {
             // Stamp replicated operational tables (§3.3 Tier 4)
             if (entry.entityType == 'order') {
               await db.ordersDao.markOrderSynced(entry.entityId, serverVersion, serverTimestamp);
+            } else if (entry.entityType == 'shift') {
+              await db.dailyCalculationsDao.markCalculationSynced(entry.entityId, serverVersion);
             }
           } else if (status == 'CONFLICT') {
-            await db.outboxDao.markConflict(
-              entry.id,
-              conflictDetails: errorMessage ?? 'Server OCC conflict detected',
-            );
+            Map<String, dynamic>? detailsMap;
+            if (conflictDetails is Map<String, dynamic>) {
+              detailsMap = conflictDetails;
+            } else if (conflictDetails is String) {
+              try {
+                final parsed = jsonDecode(conflictDetails);
+                if (parsed is Map<String, dynamic>) {
+                  detailsMap = parsed;
+                }
+              } catch (_) {}
+            }
 
-            // Quarantine to sync_conflicts table (§3.3 Tier 5)
-            await db.into(db.syncConflicts).insert(
-                  SyncConflictsCompanion(
-                    id: Value(const Uuid().v7()),
-                    operationId: Value(entry.operationId),
-                    entityType: Value(entry.entityType),
-                    entityId: Value(entry.entityId),
-                    conflictType: const Value(ConflictType.occMismatch),
-                    resolutionStatus: const Value(ConflictResolutionStatus.pending),
-                    errorMessage: Value(errorMessage),
-                    payload: Value(entry.payload),
-                    serverState: Value(conflictDetails != null ? jsonEncode(conflictDetails) : null),
-                    createdAt: Value(DateTime.now()),
-                  ),
-                );
+            final isTable = entry.entityType == 'table' || entry.entityType == 'restaurant_table';
+            final isAutoResolvable = detailsMap?['auto_resolvable'] == true;
+            final serverState = detailsMap?['server_state'] as Map<String, dynamic>?;
 
-            if (entry.entityType == 'order') {
-              await db.ordersDao.markOrderConflict(entry.entityId);
+            if (isTable && isAutoResolvable && serverState != null) {
+              // Auto-resolve per Hospitality Policy (§10.1, §10.2):
+              // Update local row to server state, mark outbox SYNCED
+              await db.catalogDao.upsertRestaurantTables([
+                LocalRestaurantTablesCompanion(
+                  id: Value(entry.entityId),
+                  zoneId: Value(serverState['zone_id']?.toString()),
+                  tableNumber: Value(serverState['table_number']?.toString() ?? ''),
+                  name: Value(serverState['name']?.toString() ?? ''),
+                  capacity: Value((serverState['capacity'] as num?)?.toInt() ?? 4),
+                  status: Value(serverState['status']?.toString() ?? 'available'),
+                  activeOrderId: Value(serverState['active_order_id']?.toString()),
+                  version: Value((serverState['version'] as num?)?.toInt() ?? serverVersion),
+                ),
+              ]);
+
+              await db.outboxDao.markSynced(entry.id, serverTimestamp);
+
+              // Durably record resolved conflict in sync_conflicts for audit trail
+              await db.into(db.syncConflicts).insert(
+                    SyncConflictsCompanion(
+                      id: Value(const Uuid().v7()),
+                      operationId: Value(entry.operationId),
+                      entityType: Value(entry.entityType),
+                      entityId: Value(entry.entityId),
+                      conflictType: Value(
+                        detailsMap?['conflict_code']?.toString() ?? ConflictType.occMismatch,
+                      ),
+                      resolutionStatus: const Value(ConflictResolutionStatus.autoResolved),
+                      errorMessage: Value(errorMessage),
+                      payload: Value(entry.payload),
+                      serverState: Value(jsonEncode(serverState)),
+                      createdAt: Value(DateTime.now()),
+                      resolvedAt: Value(DateTime.now()),
+                    ),
+                  );
+            } else {
+              // Cannot auto-resolve: record in sync_conflicts with conflictDetails and mark outbox as CONFLICT
+              final conflictCode = detailsMap?['conflict_code']?.toString() ?? ConflictType.occMismatch;
+              final formattedDetails = conflictDetails != null
+                  ? (conflictDetails is String ? conflictDetails : jsonEncode(conflictDetails))
+                  : (errorMessage ?? 'Server OCC conflict detected');
+
+              await db.outboxDao.markConflict(
+                entry.id,
+                conflictDetails: formattedDetails,
+              );
+
+              // Quarantine to sync_conflicts table (§3.3 Tier 5) with pending resolution
+              await db.into(db.syncConflicts).insert(
+                    SyncConflictsCompanion(
+                      id: Value(const Uuid().v7()),
+                      operationId: Value(entry.operationId),
+                      entityType: Value(entry.entityType),
+                      entityId: Value(entry.entityId),
+                      conflictType: Value(conflictCode),
+                      resolutionStatus: const Value(ConflictResolutionStatus.pending),
+                      errorMessage: Value(errorMessage),
+                      payload: Value(entry.payload),
+                      serverState: Value(
+                        serverState != null
+                            ? jsonEncode(serverState)
+                            : (conflictDetails != null
+                                ? (conflictDetails is String ? conflictDetails : jsonEncode(conflictDetails))
+                                : null),
+                      ),
+                      createdAt: Value(DateTime.now()),
+                    ),
+                  );
+
+              if (entry.entityType == 'order') {
+                await db.ordersDao.markOrderConflict(entry.entityId);
+              }
             }
           } else if (status == 'FAILED_FATAL') {
             // Poison-pill isolation: quarantine fatal error without blocking other mutations
@@ -938,8 +1008,21 @@ class SyncBackgroundWorker {
     switch (entityType) {
       case 'restaurant_table':
       case 'table':
+        // Ignore echo of own writes (§10.1 & Phase 5)
+        final changeDeviceId = payload['origin_device_id'] ?? payload['device_id'];
+        if (changeDeviceId != null && changeDeviceId.toString() == deviceId) {
+          return; // Ignore echo of own writes
+        }
+        final changeOpId = payload['operation_id']?.toString();
+        if (changeOpId != null) {
+          final ownEntry = await db.outboxDao.getEntryByOperationId(changeOpId);
+          if (ownEntry != null) {
+            return; // Ignore echo of own writes via operation_id match
+          }
+        }
+
         final existing = await db.catalogDao.getTableById(entityId);
-        // Stale / Duplicate OCC check: only apply if incoming version > existing version
+        // Apply table changes only when version is newer (§10 OCC)
         if (existing != null && existing.version >= recordVersion) {
           return;
         }

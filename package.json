@@ -1,0 +1,14 @@
+{
+  "name": "hungry-howies-pos",
+  "version": "1.0.0",
+  "description": "Hungry Howie's POS Fullstack Application",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "start:backend": "npm --prefix backend start",
+    "start:frontend": "npm --prefix frontend start",
+    "build:backend": "npm --prefix backend run build",
+    "test:backend": "npm --prefix backend test"
+  }
+}

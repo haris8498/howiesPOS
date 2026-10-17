@@ -1,0 +1,18 @@
+{
+  "name": "hungry-howies-pos-frontend",
+  "version": "1.0.0",
+  "description": "Hungry Howie's POS Frontend - Flutter POS App",
+  "private": true,
+  "scripts": {
+    "dev": "flutter run",
+    "dev:chrome": "flutter run -d chrome",
+    "dev:windows": "flutter run -d windows",
+    "dev:edge": "flutter run -d edge",
+    "start": "flutter run",
+    "build": "flutter build",
+    "build:web": "flutter build web",
+    "build:windows": "flutter build windows",
+    "build:apk": "flutter build apk",
+    "test": "flutter test"
+  }
+}

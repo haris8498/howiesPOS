@@ -1,0 +1,624 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------
+// 1. STORE SETTINGS (Singleton Configuration)
+// ----------------------------------------------------
+model StoreSetting {
+  
+  id                         String   @id @default(uuid()) @db.VarChar(36)
+  chain_name                 String   @default("Hungry Howie's") @map("chain_name") @db.VarChar(100)
+  branch_code                String   @default("Branch #402") @map("branch_code") @db.VarChar(50)
+  branch_name                String   @default("Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.") @map("branch_name") @db.VarChar(150)
+  store_phone                String   @map("store_phone") @db.VarChar(30)
+  updated_at                 DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
+
+  @@map("store_settings")
+}
+
+// ----------------------------------------------------
+// 2. STAFF USERS (Authentication Credentials)
+// ----------------------------------------------------
+model StaffUser {
+  id           String        @id @default(uuid()) @db.VarChar(36)
+  username     String        @unique @db.VarChar(50)
+  password_hash String       @map("password_hash") @db.VarChar(255)
+  plain_password String?     @map("plain_password") @db.VarChar(100)
+  role         String        @db.VarChar(20)
+  is_default   Boolean       @default(false) @map("is_default")
+  is_active    Boolean       @default(true) @map("is_active")
+  last_updated DateTime      @default(now()) @updatedAt @map("last_updated") @db.Timestamp()
+  updated_by   String        @default("Super Admin") @map("updated_by") @db.VarChar(50)
+
+  // Relationships
+  staff_member StaffMember?
+
+  @@map("staff_users")
+}
+
+// ----------------------------------------------------
+// 3. ROLE PERMISSIONS (RBAC Matrix)
+// ----------------------------------------------------
+model RolePermission {
+  id           String  @id @db.VarChar(50)
+  role         String  @db.VarChar(20)
+  module_name  String  @map("module_name") @db.VarChar(50)
+  action_name  String  @map("action_name") @db.VarChar(100)
+  description  String  @db.VarChar(255)
+  is_granted   Boolean @default(false) @map("is_granted")
+  is_sensitive Boolean @default(false) @map("is_sensitive")
+
+  @@map("role_permissions")
+}
+
+// ----------------------------------------------------
+// 4. STAFF MEMBERS (HR & Payroll)
+// ----------------------------------------------------
+model StaffMember {
+  id               String     @id @default(uuid()) @db.VarChar(36)
+  user_id          String?    @unique @map("user_id") @db.VarChar(36)
+  full_name        String     @map("full_name") @db.VarChar(100)
+  phone            String     @db.VarChar(30)
+  role             String     @db.VarChar(20)
+  status           String     @default("Active") @db.VarChar(30)
+  joining_date     DateTime   @map("joining_date") @db.Date
+  leaving_date     DateTime?  @map("leaving_date") @db.Date
+  assigned_shift   String     @default("Morning Shift") @map("assigned_shift") @db.VarChar(50)
+  monthly_salary   Decimal    @default(65000.00) @map("monthly_salary") @db.Decimal(10, 2)
+  hourly_rate      Decimal    @default(406.00) @map("hourly_rate") @db.Decimal(10, 2)
+  is_salary_paid   Boolean    @default(false) @map("is_salary_paid")
+  salary_paid_date DateTime?  @map("salary_paid_date") @db.Timestamp()
+
+  // Relationships
+  user             StaffUser? @relation(fields: [user_id], references: [id])
+  payslips         Payslip[]
+
+  @@map("staff_members")
+}
+
+// ----------------------------------------------------
+// 4B. PAYSLIPS (Monthly Salary Records)
+// ----------------------------------------------------
+model Payslip {
+  id               String      @id @default(uuid()) @db.VarChar(36)
+  staff_id         String      @map("staff_id") @db.VarChar(36)
+  month_year       String      @map("month_year") @db.VarChar(20)
+  base_salary      Decimal     @map("base_salary") @db.Decimal(10, 2)
+  net_pay          Decimal     @map("net_pay") @db.Decimal(10, 2)
+  status           String      @default("Pending") @db.VarChar(20)
+  paid_at          DateTime?   @map("paid_at") @db.Timestamp()
+  created_at       DateTime    @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationships
+  staff_member     StaffMember @relation(fields: [staff_id], references: [id], onDelete: Cascade)
+
+  @@map("payslips")
+}
+
+// ----------------------------------------------------
+// 5. CUSTOMERS (CRM & Loyalty)
+// ----------------------------------------------------
+model Customer {
+  id                 String    @id @default(uuid()) @db.VarChar(36)
+  full_name          String    @map("full_name") @db.VarChar(100)
+  phone              String    @unique @db.VarChar(30)
+  email              String    @default("") @db.VarChar(100)
+  address            String    @default("") @db.Text
+  birth_date         DateTime? @map("birth_date") @db.Date
+  loyalty_points     Int       @default(0) @map("loyalty_points")
+  total_orders_count Int       @default(0) @map("total_orders_count")
+  total_spent        Decimal   @default(0.00) @map("total_spent") @db.Decimal(10, 2)
+  special_notes      String    @default("") @map("special_notes") @db.Text
+
+  // Relationships — customer appears in online and takeaway orders
+  online_orders      OnlineOrderDetail[]
+  takeaway_orders    TakeawayOrderDetail[]
+
+  @@map("customers")
+}
+
+// ----------------------------------------------------
+// 6. RESTAURANT TABLES & FLOOR ZONES (Floor Plan)
+// ----------------------------------------------------
+model FloorZone {
+  id         String            @id @default(uuid()) @db.VarChar(36)
+  name       String            @unique @db.VarChar(50)
+  created_at DateTime          @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationships
+  tables     RestaurantTable[]
+
+  @@map("floor_zones")
+}
+
+model RestaurantTable {
+  id                     String            @id @default(uuid()) @db.VarChar(36)
+  table_number           String            @unique @map("table_number") @db.VarChar(20)
+  name                   String            @db.VarChar(50)
+  capacity               Int               @default(4)
+  section                String            @default("Hall") @db.VarChar(50)
+  zone_id                String?           @map("zone_id") @db.VarChar(36)
+  status                 String            @default("available") @db.VarChar(20)
+  current_customer_count Int               @default(0) @map("current_customer_count")
+  current_bill_amount    Decimal           @default(0.00) @map("current_bill_amount") @db.Decimal(10, 2)
+  occupied_since         DateTime?         @map("occupied_since") @db.Timestamp()
+  active_order_id        String?           @map("active_order_id") @db.VarChar(36)
+  reserved_customer_name String?           @map("reserved_customer_name") @db.VarChar(100)
+  reservation_time       DateTime?         @map("reservation_time") @db.Timestamp()
+
+  // Relationships — table only appears in Dine-In orders
+  zone                   FloorZone?        @relation(fields: [zone_id], references: [id], onDelete: SetNull)
+  dine_in_orders         DineInOrderDetail[]
+
+  @@map("restaurant_tables")
+}
+
+// ----------------------------------------------------
+// 7. MENU CATEGORIES (Catalog Taxonomy)
+// ----------------------------------------------------
+model MenuCategory {
+  id          String     @id @db.VarChar(36)
+  name        String     @db.VarChar(50)
+  badge_text  String     @default("Category") @map("badge_text") @db.VarChar(30)
+  image_path  String     @default("") @map("image_path") @db.Text
+  description String     @default("") @db.Text
+  icon_name   String     @default("fastfood") @map("icon_name") @db.VarChar(50)
+
+  // Relationships
+  menu_items  MenuItem[]
+
+  @@map("menu_categories")
+}
+
+// ----------------------------------------------------
+// 8. MENU ITEMS (Food & Drink Catalog)
+// ----------------------------------------------------
+model MenuItem {
+  id           String           @id @default(uuid()) @db.VarChar(36)
+  category_id  String           @map("category_id") @db.VarChar(36)
+  name         String           @db.VarChar(100)
+  description  String           @default("") @db.Text
+  base_price   Decimal          @map("base_price") @db.Decimal(10, 2)
+  image_url    String           @default("") @map("image_url") @db.Text
+  is_veg       Boolean          @default(false) @map("is_veg")
+  is_spicy     Boolean          @default(false) @map("is_spicy")
+  is_available Boolean          @default(true) @map("is_available")
+
+  // Relationships
+  category     MenuCategory     @relation(fields: [category_id], references: [id])
+  sizes        MenuItemSize[]
+  options      MenuItemOption[]
+  order_items  OrderItem[]
+
+  @@map("menu_items")
+}
+
+// ----------------------------------------------------
+// 9. MENU ITEM SIZES (Tiered Pricing)
+// ----------------------------------------------------
+model MenuItemSize {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  menu_item_id String   @map("menu_item_id") @db.VarChar(36)
+  size_name    String   @map("size_name") @db.VarChar(30)
+  price        Decimal  @db.Decimal(10, 2)
+
+  // Relationships
+  menu_item    MenuItem @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+
+  @@map("menu_item_sizes")
+}
+
+// ----------------------------------------------------
+// 10. MENU ITEM OPTIONS (Customizations & Surcharges)
+// ----------------------------------------------------
+model MenuItemOption {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  menu_item_id     String   @map("menu_item_id") @db.VarChar(36)
+  option_type      String   @map("option_type") @db.VarChar(30)
+  option_name      String   @map("option_name") @db.VarChar(50)
+  additional_price Decimal  @default(0.00) @map("additional_price") @db.Decimal(10, 2)
+
+  // Relationships
+  menu_item        MenuItem @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+
+  @@map("menu_item_options")
+}
+
+// ----------------------------------------------------
+// 11. DEALS (Promotional Bundles)
+// ----------------------------------------------------
+model Deal {
+  id             String          @id @default(uuid()) @db.VarChar(36)
+  title          String          @db.VarChar(100)
+  subtitle       String          @default("") @db.VarChar(150)
+  deal_price     Decimal         @map("deal_price") @db.Decimal(10, 2)
+  original_price Decimal?        @map("original_price") @db.Decimal(10, 2)
+  badge_text     String          @default("EXCLUSIVE DEAL") @map("badge_text") @db.VarChar(30)
+  image_path     String          @default("") @map("image_path") @db.Text
+  description    String          @default("") @db.Text
+  is_available   Boolean         @default(true) @map("is_available")
+
+  // Relationships
+  components     DealComponent[]
+
+  @@map("deals")
+}
+
+// ----------------------------------------------------
+// 12. DEAL COMPONENTS (Itemized Combo Products)
+// ----------------------------------------------------
+model DealComponent {
+  id        String @id @default(uuid()) @db.VarChar(36)
+  deal_id   String @map("deal_id") @db.VarChar(36)
+  item_name String @map("item_name") @db.VarChar(100)
+  category  String @db.VarChar(50)
+  quantity  String @default("1x") @db.VarChar(20)
+
+  // Relationships
+  deal      Deal   @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+
+  @@map("deal_components")
+}
+
+// ----------------------------------------------------
+// 13. ORDERS (Base Table — Universal Billing Fields Only)
+// order_type: 'online' | 'takeaway' | 'dineIn'
+// Each type has its own detail table (1:1) with type-specific fields.
+// ----------------------------------------------------
+model Order {
+  id                   String   @id @default(uuid()) @db.VarChar(36)
+  order_number         String   @unique @map("order_number") @db.VarChar(30)
+  order_type           String   @map("order_type") @db.VarChar(20) // 'online' | 'takeaway' | 'dineIn'
+  status               String   @default("newOrder") @db.VarChar(30)
+  // ---- Billing (universal) ----
+  subtotal             Decimal  @default(0.00) @db.Decimal(10, 2)
+  discount_percentage  Decimal  @default(0.00) @map("discount_percentage") @db.Decimal(5, 2)
+  discount_amount      Decimal  @default(0.00) @map("discount_amount") @db.Decimal(10, 2)
+  tax_amount           Decimal  @default(0.00) @map("tax_amount") @db.Decimal(10, 2)
+  grand_total          Decimal  @map("grand_total") @db.Decimal(10, 2)
+  payment_status       String   @default("UNPAID") @map("payment_status") @db.VarChar(20)
+  is_paid              Boolean  @default(false) @map("is_paid")
+  is_held              Boolean  @default(false) @map("is_held")
+  // ---- Kitchen ----
+  kitchen_ticket_sent  Boolean  @default(false) @map("kitchen_ticket_sent")
+  cooking_time_minutes Int?     @map("cooking_time_minutes")
+  estimated_ready_at   DateTime? @map("estimated_ready_at") @db.Timestamp()
+  rejection_reason     String?  @map("rejection_reason") @db.Text
+  // ---- Offline / SQLite Sync Metadata ----
+  sync_status          String   @default("synced") @map("sync_status") @db.VarChar(20) // 'synced' | 'pending' | 'failed'
+  is_synced            Boolean  @default(true) @map("is_synced")
+  synced_at            DateTime? @map("synced_at") @db.Timestamp()
+  local_sqlite_id      String?  @map("local_sqlite_id") @db.VarChar(100)
+  device_id            String?  @default("POS-LOCAL-01") @map("device_id") @db.VarChar(50)
+  // ---- Audit & Shift Association ----
+  shift_id             String?  @map("shift_id") @db.VarChar(36)
+  created_at           DateTime @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationships
+  daily_calculation    DailyCalculation? @relation(fields: [shift_id], references: [id], onDelete: SetNull)
+  order_items          OrderItem[]
+  payments             OrderPayment[]
+  online_detail        OnlineOrderDetail?
+  takeaway_detail      TakeawayOrderDetail?
+  dine_in_detail       DineInOrderDetail?
+
+  @@map("orders")
+}
+
+// ----------------------------------------------------
+// 13A. ONLINE ORDER DETAILS
+// Covers: POS-placed delivery, Website orders, Mobile App orders
+// Links to: customers, delivery_dispatches
+// ----------------------------------------------------
+model OnlineOrderDetail {
+  id                   String    @id @default(uuid()) @db.VarChar(36)
+  order_id             String    @unique @map("order_id") @db.VarChar(36)
+  // ---- Order Source: POS | Website | MobileApp ----
+  order_source         String    @default("POS") @map("order_source") @db.VarChar(30)
+  // ---- Customer Snapshot (denormalised for receipt integrity) ----
+  customer_id          String?   @map("customer_id") @db.VarChar(36)
+  customer_name        String    @map("customer_name") @db.VarChar(100)
+  customer_phone       String    @map("customer_phone") @db.VarChar(30)
+  // ---- Delivery ----
+  delivery_address     String    @map("delivery_address") @db.Text
+  delivery_fee         Decimal   @default(0.00) @map("delivery_fee") @db.Decimal(10, 2)
+
+  // Relationships
+  order                Order             @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  customer             Customer?         @relation(fields: [customer_id], references: [id])
+  delivery_dispatch    DeliveryDispatch?
+
+  @@map("online_order_details")
+}
+
+// ----------------------------------------------------
+// 13B. TAKEAWAY ORDER DETAILS
+// Covers: Walk-in counter pickup orders
+// Links to: customers (optional)
+// ----------------------------------------------------
+model TakeawayOrderDetail {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  order_id       String    @unique @map("order_id") @db.VarChar(36)
+  // ---- Token for Kitchen Display ----
+  token_number   String    @unique @map("token_number") @db.VarChar(20)
+  // ---- Customer (optional: walk-in may not register) ----
+  customer_id    String?   @map("customer_id") @db.VarChar(36)
+  customer_name  String    @default("Walk-in Customer") @map("customer_name") @db.VarChar(100)
+  customer_phone String    @default("") @map("customer_phone") @db.VarChar(30)
+  // ---- Counter Staff ----
+  served_by      String    @default("Cashier") @map("served_by") @db.VarChar(50)
+
+  // Relationships
+  order          Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  customer       Customer? @relation(fields: [customer_id], references: [id])
+
+  @@map("takeaway_order_details")
+}
+
+// ----------------------------------------------------
+// 13C. DINE-IN ORDER DETAILS
+// Covers: Table service inside the restaurant
+// Links to: restaurant_tables, floor_zones
+// ----------------------------------------------------
+model DineInOrderDetail {
+  id            String          @id @default(uuid()) @db.VarChar(36)
+  order_id      String          @unique @map("order_id") @db.VarChar(36)
+  // ---- Table Assignment ----
+  table_id      String          @map("table_id") @db.VarChar(36)
+  guest_count   Int             @default(1) @map("guest_count")
+  // ---- Staff ----
+  waiter_name   String          @default("Cashier") @map("waiter_name") @db.VarChar(50)
+  // ---- Dine In Tax ----
+  dine_in_tax   Decimal         @default(0.00) @map("dine_in_tax") @db.Decimal(10, 2)
+
+  // Relationships
+  order         Order           @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  table         RestaurantTable @relation(fields: [table_id], references: [id])
+
+  @@map("dine_in_order_details")
+}
+
+// ----------------------------------------------------
+// 14. ORDER ITEMS (Line Items with Snapshot Pricing)
+// ----------------------------------------------------
+model OrderItem {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  order_id       String    @map("order_id") @db.VarChar(36)
+  menu_item_id   String?   @map("menu_item_id") @db.VarChar(36)
+  item_name      String    @map("item_name") @db.VarChar(100)
+  quantity       Int       @default(1)
+  selected_size  String    @default("Regular") @map("selected_size") @db.VarChar(30)
+  selected_crust String    @default("Original") @map("selected_crust") @db.VarChar(50)
+  extra_toppings String    @default("") @map("extra_toppings") @db.Text
+  unit_price     Decimal   @map("unit_price") @db.Decimal(10, 2)
+  total_price    Decimal   @map("total_price") @db.Decimal(10, 2)
+  notes          String    @default("") @db.Text
+  is_cancelled   Boolean   @default(false) @map("is_cancelled")
+  cancelled_at   DateTime? @map("cancelled_at") @db.Timestamp()
+  cancel_reason  String?   @map("cancel_reason") @db.VarChar(255)
+  cancelled_by   String?   @map("cancelled_by") @db.VarChar(50)
+
+  // Relationships
+  order          Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  menu_item      MenuItem? @relation(fields: [menu_item_id], references: [id])
+
+  @@map("order_items")
+}
+
+// ----------------------------------------------------
+// 14B. ORDER PAYMENTS (Multi-Tender / Split Payment Ledger)
+// ----------------------------------------------------
+model OrderPayment {
+  id                    String    @id @default(uuid()) @db.VarChar(36)
+  order_id              String    @map("order_id") @db.VarChar(36)
+  payment_method        String    @map("payment_method") @db.VarChar(30) // 'cash', 'card', 'bankTransfer', 'other'
+  amount                Decimal   @map("amount") @db.Decimal(10, 2)
+  tendered_amount       Decimal?  @map("tendered_amount") @db.Decimal(10, 2)
+  change_returned       Decimal?  @map("change_returned") @db.Decimal(10, 2)
+  transaction_reference String?   @map("transaction_reference") @db.VarChar(100)
+  card_last_four        String?   @map("card_last_four") @db.VarChar(4)
+  bank_name             String?   @map("bank_name") @db.VarChar(50)
+  payment_status        String    @default("COMPLETED") @map("payment_status") @db.VarChar(20)
+  notes                 String?   @db.Text
+  received_by           String?   @map("received_by") @db.VarChar(50)
+  created_at            DateTime  @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationships
+  order                 Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@map("order_payments")
+}
+
+// ----------------------------------------------------
+// 15. DELIVERY RIDERS (Fleet Management)
+// ----------------------------------------------------
+model DeliveryRider {
+  id                         String             @id @default(uuid()) @db.VarChar(36)
+  name                       String             @db.VarChar(100)
+  phone                      String             @unique @db.VarChar(30)
+  is_available               Boolean            @default(true) @map("is_available")
+  is_clocked_in              Boolean            @default(true) @map("is_clocked_in")
+  active_deliveries_count    Int                @default(0) @map("active_deliveries_count")
+  total_completed_deliveries Int                @default(0) @map("total_completed_deliveries")
+  avg_delivery_time_mins     Decimal            @default(22.50) @map("avg_delivery_time_mins") @db.Decimal(5, 2)
+  rating                     Decimal            @default(5.00) @db.Decimal(3, 2)
+
+  // Relationships
+  dispatches                 DeliveryDispatch[]
+
+  @@map("delivery_riders")
+}
+
+// ----------------------------------------------------
+// 16. DELIVERY DISPATCHES (Transit Lifecycle)
+// ----------------------------------------------------
+model DeliveryDispatch {
+  id                      String             @id @default(uuid()) @db.VarChar(36)
+  // Links to OnlineOrderDetail (only online orders have dispatches)
+  online_order_detail_id  String             @unique @map("online_order_detail_id") @db.VarChar(36)
+  rider_id                String?            @map("rider_id") @db.VarChar(36)
+  dispatch_status         String             @default("pending") @map("dispatch_status") @db.VarChar(30)
+  estimated_delivery_time DateTime           @map("estimated_delivery_time") @db.Timestamp()
+  dispatched_at           DateTime?          @map("dispatched_at") @db.Timestamp()
+  delivered_at            DateTime?          @map("delivered_at") @db.Timestamp()
+
+  // Relationships
+  online_order_detail     OnlineOrderDetail  @relation(fields: [online_order_detail_id], references: [id], onDelete: Cascade)
+  rider                   DeliveryRider?     @relation(fields: [rider_id], references: [id])
+
+  @@map("delivery_dispatches")
+}
+
+// ----------------------------------------------------
+// 18. INVENTORY ITEMS (Raw Material Ledger)
+// ----------------------------------------------------
+model InventoryItem {
+  id                  String          @id @default(uuid()) @db.VarChar(36)
+  sku_code            String          @unique @map("sku_code") @db.VarChar(50)
+  name                String          @db.VarChar(100)
+  category            String          @default("General") @db.VarChar(50)
+  initial_stock       Decimal         @default(0.00) @map("initial_stock") @db.Decimal(10, 2)
+  used_stock          Decimal         @default(0.00) @map("used_stock") @db.Decimal(10, 2)
+  current_stock       Decimal         @default(0.00) @map("current_stock") @db.Decimal(10, 2)
+  min_threshold       Decimal         @default(10.00) @map("min_threshold") @db.Decimal(10, 2)
+  unit                String          @default("kg") @db.VarChar(20)
+  cost_per_unit       Decimal         @default(0.00) @map("cost_per_unit") @db.Decimal(10, 2)
+  supplier_name       String          @default("Central Depot") @map("supplier_name") @db.VarChar(100)
+  last_restocked_date DateTime?       @map("last_restocked_date") @db.Timestamp()
+
+  // Relationships
+  stock_movements     StockMovement[]
+
+  @@map("inventory_items")
+}
+
+// ----------------------------------------------------
+// 19. STOCK MOVEMENTS (Audit Trail Ledger)
+// ----------------------------------------------------
+model StockMovement {
+  id            String        @id @default(uuid()) @db.VarChar(36)
+  item_id       String        @map("item_id") @db.VarChar(36)
+  item_name     String        @map("item_name") @db.VarChar(100)
+  movement_type String        @map("movement_type") @db.VarChar(30)
+  quantity      Decimal       @db.Decimal(10, 2)
+  unit          String        @db.VarChar(20)
+  reason        String        @db.VarChar(255)
+  timestamp     DateTime      @default(now()) @db.Timestamp()
+  cost_impact   Decimal       @default(0.00) @map("cost_impact") @db.Decimal(10, 2)
+
+  // Relationships
+  item          InventoryItem @relation(fields: [item_id], references: [id])
+
+  @@map("stock_movements")
+}
+
+// ----------------------------------------------------
+// 20. EXPENSES (Store Operating Expenses)
+// ----------------------------------------------------
+model Expense {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  title       String   @db.VarChar(150)
+  category    String   @db.VarChar(50)
+  amount      Decimal  @db.Decimal(14, 2)
+  date        DateTime @db.Date
+  recorded_by String   @default("Store Manager") @map("recorded_by") @db.VarChar(100)
+
+  @@map("honor_expenses")
+}
+
+// ----------------------------------------------------
+// 21. DAILY CALCULATIONS / END-OF-DAY SETTLEMENT
+// ----------------------------------------------------
+model DailyCalculation {
+  id                   String             @id @default(uuid()) @db.VarChar(36)
+  date                 DateTime           @db.Date
+  shift_name           String             @default("Full Day") @map("shift_name") @db.VarChar(50)
+  cashier_id           String             @map("cashier_id") @db.VarChar(36)
+  cashier_name         String             @map("cashier_name") @db.VarChar(100)
+  
+  // System figures
+  total_gross_sales    Decimal            @default(0.00) @map("total_gross_sales") @db.Decimal(12, 2)
+  total_cash_sales     Decimal            @default(0.00) @map("total_cash_sales") @db.Decimal(12, 2)
+  total_card_sales     Decimal            @default(0.00) @map("total_card_sales") @db.Decimal(12, 2)
+  total_online_sales   Decimal            @default(0.00) @map("total_online_sales") @db.Decimal(12, 2)
+  total_discounts      Decimal            @default(0.00) @map("total_discounts") @db.Decimal(10, 2)
+  total_tax            Decimal            @default(0.00) @map("total_tax") @db.Decimal(10, 2)
+  total_orders_count   Int                @default(0) @map("total_orders_count")
+  dine_in_count        Int                @default(0) @map("dine_in_count")
+  takeaway_count       Int                @default(0) @map("takeaway_count")
+  online_count         Int                @default(0) @map("online_count")
+
+  // Cashier inputs & Change Cash Management
+  opening_float        Decimal            @default(0.00) @map("opening_float") @db.Decimal(10, 2)
+  starting_cash        Decimal            @default(0.00) @map("starting_cash") @db.Decimal(10, 2)
+  total_change_cash    Decimal            @default(0.00) @map("total_change_cash") @db.Decimal(12, 2)
+  
+  // 3 Primary Cashier Inputs
+  cash_submitted       Decimal            @default(0.00) @map("cash_submitted") @db.Decimal(12, 2)
+  total_cash           Decimal            @default(0.00) @map("total_cash") @db.Decimal(12, 2)
+  cash_skimming        Decimal            @default(0.00) @map("cash_skimming") @db.Decimal(12, 2)
+
+  total_cash_submitted Decimal            @default(0.00) @map("total_cash_submitted") @db.Decimal(12, 2)
+  total_cash_expenses  Decimal            @default(0.00) @map("total_cash_expenses") @db.Decimal(12, 2)
+  
+  // Variance
+  expected_cash_in_hand Decimal           @default(0.00) @map("expected_cash_in_hand") @db.Decimal(12, 2)
+  variance_amount       Decimal           @default(0.00) @map("variance_amount") @db.Decimal(12, 2)
+  
+  status               String             @default("ACTIVE") @db.VarChar(20)
+  closing_notes        String?            @map("closing_notes") @db.Text
+  created_at           DateTime           @default(now()) @map("created_at") @db.Timestamp()
+  submitted_at         DateTime?          @map("submitted_at") @db.Timestamp()
+
+  // Relationships
+  expense_items        DailyExpenseItem[]
+  orders               Order[]
+
+  @@map("daily_calculations")
+}
+
+// ----------------------------------------------------
+// 22. DAILY EXPENSE ITEMS (Itemized Cash Breakdown)
+// ----------------------------------------------------
+model DailyExpenseItem {
+  id             String           @id @default(uuid()) @db.VarChar(36)
+  calculation_id String           @map("calculation_id") @db.VarChar(36)
+  item_name      String           @map("item_name") @db.VarChar(150)
+  category       String           @default("Supplies") @db.VarChar(50)
+  amount         Decimal          @db.Decimal(10, 2)
+  receipt_number String?          @map("receipt_number") @db.VarChar(50)
+  notes          String?          @db.Text
+  created_at     DateTime         @default(now()) @map("created_at") @db.Timestamp()
+
+  calculation    DailyCalculation @relation(fields: [calculation_id], references: [id], onDelete: Cascade)
+
+  @@map("daily_expense_items")
+}
+
+// ----------------------------------------------------
+// 23. DATA SYNC LEDGER (Offline SQLite / Cloud Synchronization)
+// ----------------------------------------------------
+model DataSyncLog {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  order_id        String?   @map("order_id") @db.VarChar(36)
+  order_number    String    @map("order_number") @db.VarChar(50)
+  sync_type       String    @default("ORDER") @map("sync_type") @db.VarChar(30) // 'ORDER', 'EXPENSE', 'TABLE', 'INVENTORY'
+  sync_status     String    @default("synced") @map("sync_status") @db.VarChar(20) // 'synced', 'pending', 'failed'
+  is_synced       Boolean   @default(true) @map("is_synced")
+  source_storage  String    @default("SQLite Local") @map("source_storage") @db.VarChar(50)
+  target_storage  String    @default("PostgreSQL Cloud") @map("target_storage") @db.VarChar(50)
+  synced_at       DateTime? @map("synced_at") @db.Timestamp()
+  created_at      DateTime  @default(now()) @map("created_at") @db.Timestamp()
+  error_message   String?   @map("error_message") @db.Text
+  device_id       String    @default("POS-TERMINAL-01") @map("device_id") @db.VarChar(50)
+  payload_json    String?   @map("payload_json") @db.Text
+
+  @@map("data_sync_logs")
+}
+

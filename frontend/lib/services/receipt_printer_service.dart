@@ -1,0 +1,2288 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../config/api_config.dart';
+import '../domain/models/order_model.dart';
+import '../domain/models/restaurant_table.dart';
+import '../domain/models/takeaway_model.dart';
+import '../domain/models/delivery_model.dart';
+import '../domain/models/online_order_model.dart';
+
+import 'printer/escpos_builder.dart';
+import 'printer/native_win32_printer.dart';
+import 'printer/network_printer.dart';
+
+enum ReceiptType {
+  customerReceipt, // Final Paid Bill / Tax Invoice
+  kitchenKot,      // Kitchen Order Ticket
+  preBill,         // Table / Customer Check before payment
+  deliveryDispatch,// Delivery Dispatch slip with customer address & COD
+}
+
+enum PaperWidth {
+  roll80mm, // 80mm thermal roll (Standard POS, 48 cols)
+  roll58mm, // 58mm thermal roll (Mini POS, 32 cols)
+}
+
+enum PrinterConnectionType {
+  windowsSpooler, // Direct Win32 Spooler RAW printing
+  usbPort,        // Direct USB/COM Port (e.g. USB001, COM1)
+  networkTcp,     // Network LAN/Wi-Fi TCP IP:Port 9100
+  systemDefault,  // Auto-detect attached thermal printer
+}
+
+class ReceiptItemData {
+  final String? id;
+  final String name;
+  final int quantity;
+  final double unitPrice;
+  final double totalPrice;
+  final String? size;
+  final String? crust;
+  final List<String> toppings;
+  final String? notes;
+  final bool isCancelled;
+  final String? cancelReason;
+
+  const ReceiptItemData({
+    this.id,
+    required this.name,
+    required this.quantity,
+    required this.unitPrice,
+    required this.totalPrice,
+    this.size,
+    this.crust,
+    this.toppings = const [],
+    this.notes,
+    this.isCancelled = false,
+    this.cancelReason,
+  });
+}
+
+class ReceiptData {
+  final ReceiptType type;
+  final String storeName;
+  final String branchName;
+  final String branchCode;
+  final String storePhone;
+  final String? storeTaxId;
+  final String orderNumber;
+  final String? tokenNumber;
+  final String? tableNumber;
+  final String? tableName;
+  final String? tableSection; // e.g. "Hall", "Main Hall", "Outdoor"
+  final String? orderType; // DINE-IN, TAKEAWAY, DELIVERY, ONLINE
+  final String? customerName;
+  final String? customerPhone;
+  final String? customerAddress;
+  final String? riderName;
+  final String? cashierOrServer;
+  final DateTime dateTime;
+  final List<ReceiptItemData> items;
+  final double subtotal;
+  final double discountAmount;
+  final double taxAmount;
+  final double taxRate;
+  final double serviceChargeAmount;
+  final double deliveryFee;
+  final double grandTotal;
+  final String paymentMethod;
+  final double tenderedAmount;
+  final double changeReturned;
+  final String? transactionRef;
+  final String? notes;
+  final bool isReprint;
+  final bool isModified;
+
+  String get itemsSignature {
+    final active = items
+        .where((i) => !i.isCancelled)
+        .map((i) => '${i.quantity}x${i.name}|${i.size ?? ""}|${i.crust ?? ""}|${i.notes ?? ""}')
+        .toList()
+      ..sort();
+    final cancelled = items
+        .where((i) => i.isCancelled)
+        .map((i) => '${i.quantity}x${i.name}|${i.size ?? ""}|${i.crust ?? ""}|${i.notes ?? ""}')
+        .toList()
+      ..sort();
+    return 'act:[${active.join(",")}]_cnc:[${cancelled.join(",")}]_sub:${subtotal.toStringAsFixed(0)}';
+  }
+
+  const ReceiptData({
+    required this.type,
+    this.storeName = "HUNGRY HOWIES",
+    this.branchName = 'Near UOG GATE # 2 Nawaz Sharif Medical College Gujrat',
+    this.branchCode = '',
+    this.storePhone = '',
+    this.storeTaxId,
+    required this.orderNumber,
+    this.tokenNumber,
+    this.tableNumber,
+    this.tableName,
+    this.tableSection,
+    this.orderType = 'DINE-IN',
+    this.customerName,
+    this.customerPhone,
+    this.customerAddress,
+    this.riderName,
+    this.cashierOrServer,
+    required this.dateTime,
+    required this.items,
+    required this.subtotal,
+    this.discountAmount = 0.0,
+    this.taxAmount = 0.0,
+    this.taxRate = 0.0,
+    this.serviceChargeAmount = 0.0,
+    this.deliveryFee = 0.0,
+    required this.grandTotal,
+    this.paymentMethod = 'CASH',
+    this.tenderedAmount = 0.0,
+    this.changeReturned = 0.0,
+    this.transactionRef,
+    this.notes,
+    this.isReprint = false,
+    this.isModified = false,
+  });
+
+  /// Factory helper for Restaurant Table Final Paid Receipt
+  factory ReceiptData.fromTablePaid({
+    required RestaurantTable table,
+    required String orderId,
+    required double subtotal,
+    required double taxAmount,
+    required double taxRate,
+    required double grandTotal,
+    required double tenderedAmount,
+    required double changeReturned,
+    double discountAmount = 0.0,
+    String paymentMethod = 'CASH',
+    String? cashierName,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+  }) {
+    final items = <ReceiptItemData>[];
+    for (final item in table.currentOrderItems) {
+      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      if (isCancelled) continue; // Do NOT include cancelled items in final customer bill
+      final name = item['name']?.toString() ?? 'Item';
+      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+      final size = item['selected_size']?.toString();
+      final crust = item['selected_crust']?.toString();
+      items.add(
+        ReceiptItemData(
+          id: item['id']?.toString(),
+          name: name,
+          quantity: qty,
+          unitPrice: unitPrice,
+          totalPrice: unitPrice * qty,
+          size: size,
+          crust: crust,
+          isCancelled: false,
+        ),
+      );
+    }
+
+    final effectiveOrderNo = orderId.isNotEmpty
+        ? orderId
+        : (table.activeOrderNumber ?? (table.activeOrderId ?? 'TBL-${table.tableNumber}'));
+
+    final activeSubtotal = items.fold<double>(0.0, (s, i) => s + i.totalPrice);
+    final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
+    final effDiscount = discountAmount > 0 ? discountAmount : table.discountAmount;
+    final effTax = taxRate > 0 ? (effSubtotal * taxRate / 100) : (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1) ? (effSubtotal * 0.05) : taxAmount);
+    final effGrandTotal = (effSubtotal - effDiscount + effTax).clamp(0.0, double.infinity);
+
+    return ReceiptData(
+      type: ReceiptType.customerReceipt,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: effectiveOrderNo,
+      tokenNumber: table.tableNumber,
+      tableNumber: table.tableNumber,
+      tableName: table.name,
+      orderType: 'DINE-IN (${table.name})',
+      cashierOrServer: cashierName ?? 'Cashier',
+      dateTime: DateTime.now(),
+      items: items,
+      subtotal: effSubtotal,
+      discountAmount: effDiscount,
+      taxAmount: effTax,
+      taxRate: taxRate,
+      grandTotal: effGrandTotal,
+      paymentMethod: paymentMethod,
+      tenderedAmount: tenderedAmount > 0 ? tenderedAmount : effGrandTotal,
+      changeReturned: changeReturned,
+    );
+  }
+
+  /// Factory helper for Restaurant Table Pre-Bill (Estimate)
+  factory ReceiptData.fromTablePreBill({
+    required RestaurantTable table,
+    required double subtotal,
+    required double taxAmount,
+    required double grandTotal,
+    required double taxRate,
+    double discountAmount = 0.0,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+  }) {
+    final items = <ReceiptItemData>[];
+    for (final item in table.currentOrderItems) {
+      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      if (isCancelled) continue; // Do NOT include cancelled items in customer pre-bill
+      final name = item['name']?.toString() ?? 'Item';
+      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+      final size = item['selected_size']?.toString();
+      final crust = item['selected_crust']?.toString();
+      items.add(
+        ReceiptItemData(
+          id: item['id']?.toString(),
+          name: name,
+          quantity: qty,
+          unitPrice: unitPrice,
+          totalPrice: unitPrice * qty,
+          size: size,
+          crust: crust,
+          isCancelled: false,
+        ),
+      );
+    }
+
+    final effectiveOrderNo = table.activeOrderNumber ?? (table.activeOrderId ?? 'TBL-${table.tableNumber}');
+    final activeSubtotal = items.fold<double>(0.0, (s, i) => s + i.totalPrice);
+    final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
+    final effDiscount = discountAmount > 0 ? discountAmount : table.discountAmount;
+    final effTax = taxRate > 0 ? (effSubtotal * taxRate / 100) : (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1) ? (effSubtotal * 0.05) : taxAmount);
+    final effGrandTotal = (effSubtotal - effDiscount + effTax).clamp(0.0, double.infinity);
+
+    return ReceiptData(
+      type: ReceiptType.preBill,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: effectiveOrderNo,
+      tokenNumber: table.tableNumber,
+      tableNumber: table.tableNumber,
+      tableName: table.name,
+      orderType: 'DINE-IN PRE-BILL',
+      dateTime: DateTime.now(),
+      items: items,
+      subtotal: effSubtotal,
+      discountAmount: effDiscount,
+      taxAmount: effTax,
+      taxRate: taxRate,
+      grandTotal: effGrandTotal,
+    );
+  }
+
+  /// Factory helper for Kitchen Order Ticket (KOT) from Table
+  factory ReceiptData.fromTableKot({
+    required RestaurantTable table,
+    required String ticketId,
+    String storeName = "HUNGRY HOWIES",
+    String? cashierOrServer,
+    bool isReprint = false,
+    bool isModified = false,
+  }) {
+    final items = <ReceiptItemData>[];
+    for (final item in table.currentOrderItems) {
+      final name = item['name']?.toString() ?? 'Item';
+      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+      final size = item['selected_size']?.toString();
+      final crust = item['selected_crust']?.toString();
+      final notes = item['notes']?.toString();
+      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      final cancelReason = item['cancel_reason']?.toString();
+      items.add(
+        ReceiptItemData(
+          id: item['id']?.toString(),
+          name: name,
+          quantity: qty,
+          unitPrice: unitPrice,
+          totalPrice: unitPrice * qty,
+          size: size,
+          crust: crust,
+          notes: notes,
+          isCancelled: isCancelled,
+          cancelReason: cancelReason,
+        ),
+      );
+    }
+
+    String section = table.section;
+    if (section.startsWith('Main ')) {
+      section = section.substring(5);
+    }
+
+    return ReceiptData(
+      type: ReceiptType.kitchenKot,
+      storeName: storeName,
+      orderNumber: ticketId,
+      tokenNumber: ticketId,
+      tableNumber: table.tableNumber,
+      tableName: table.name.toUpperCase(),
+      tableSection: section.isNotEmpty ? section : 'Hall',
+      orderType: 'DINE IN',
+      cashierOrServer: cashierOrServer ?? 'SRV',
+      dateTime: DateTime.now(),
+      items: items,
+      subtotal: table.currentBillAmount,
+      grandTotal: table.currentBillAmount,
+      isReprint: isReprint,
+      isModified: isModified,
+    );
+  }
+
+  /// Factory helper for generic OrderModel (POS)
+  factory ReceiptData.fromOrderModel({
+    required OrderModel order,
+    ReceiptType type = ReceiptType.customerReceipt,
+    double tenderedAmount = 0.0,
+    double changeReturned = 0.0,
+    String paymentMethod = 'CASH',
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+    bool isReprint = false,
+    bool isModified = false,
+  }) {
+    final items = order.items
+        .where((i) => type == ReceiptType.kitchenKot || !i.isCancelled)
+        .map((i) {
+      return ReceiptItemData(
+        id: i.id,
+        name: i.item.name,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        totalPrice: i.totalPrice,
+        size: i.selectedSize,
+        crust: i.selectedCrust,
+        toppings: i.extraToppings,
+        notes: i.notes,
+        isCancelled: i.isCancelled,
+        cancelReason: i.cancelReason,
+      );
+    }).toList();
+
+    String orderTypeStr = 'POS QUICK ORDER';
+    if (order.type == OrderType.takeaway || order.type == OrderType.takeAway) {
+      orderTypeStr = 'TAKEAWAY';
+    } else if (order.type == OrderType.online || order.type == OrderType.delivery) {
+      orderTypeStr = 'DELIVERY';
+    } else if (order.type == OrderType.dineIn || order.type == OrderType.quickOrder) {
+      orderTypeStr = 'DINE-IN';
+    }
+
+    return ReceiptData(
+      type: type,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: order.orderNumber,
+      tokenNumber: order.tokenNumber ?? order.orderNumber,
+      tableNumber: order.tableId,
+      orderType: orderTypeStr,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      customerAddress: order.deliveryAddress,
+      dateTime: order.createdAt,
+      items: items,
+      subtotal: items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice),
+      taxAmount: order.taxAmount > 0 ? order.taxAmount : order.dineInTax,
+      taxRate: order.subtotal > 0 && (order.taxAmount > 0 || order.dineInTax > 0)
+          ? ((order.taxAmount > 0 ? order.taxAmount : order.dineInTax) / order.subtotal * 100)
+          : 0.0,
+      deliveryFee: order.deliveryFee,
+      grandTotal: (items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice) -
+              order.discountAmount +
+              (order.taxAmount > 0 ? order.taxAmount : order.dineInTax) +
+              order.deliveryFee)
+          .clamp(0.0, double.infinity),
+      paymentMethod: paymentMethod,
+      tenderedAmount: tenderedAmount > 0 ? tenderedAmount : order.grandTotal,
+      changeReturned: changeReturned,
+      isReprint: isReprint,
+      isModified: isModified,
+    );
+  }
+
+  /// Factory helper for TakeawayOrder
+  factory ReceiptData.fromTakeawayOrder({
+    required TakeawayOrder order,
+    ReceiptType type = ReceiptType.customerReceipt,
+    double tenderedAmount = 0.0,
+    double changeReturned = 0.0,
+    String paymentMethod = 'CASH',
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+    bool isReprint = false,
+    bool isModified = false,
+  }) {
+    final items = <ReceiptItemData>[];
+
+    if (order.items.isNotEmpty) {
+      for (final i in order.items) {
+        if (type != ReceiptType.kitchenKot && i.isCancelled) continue;
+        items.add(
+          ReceiptItemData(
+            id: i.id,
+            name: i.item.name,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            totalPrice: i.totalPrice,
+            size: i.selectedSize,
+            crust: i.selectedCrust,
+            toppings: i.extraToppings,
+            notes: i.notes,
+            isCancelled: i.isCancelled,
+            cancelReason: i.cancelReason,
+          ),
+        );
+      }
+    } else {
+      final rawParts = order.itemsSummary.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      for (final part in rawParts) {
+        final regex = RegExp(r'^(\d+)x\s+(.+)$');
+        final match = regex.firstMatch(part);
+        final qty = match != null ? int.tryParse(match.group(1)!) ?? 1 : 1;
+        final name = match != null ? match.group(2)! : part;
+        final unitPrice = rawParts.length == 1 && order.subtotal > 0
+            ? order.subtotal / qty
+            : (order.subtotal / (rawParts.length * qty));
+
+        items.add(
+          ReceiptItemData(
+            name: name,
+            quantity: qty,
+            unitPrice: unitPrice,
+            totalPrice: unitPrice * qty,
+          ),
+        );
+      }
+    }
+
+    if (items.isEmpty) {
+      items.add(
+        ReceiptItemData(
+          name: order.itemsSummary.isNotEmpty ? order.itemsSummary : 'Takeaway Order Items',
+          quantity: 1,
+          unitPrice: order.subtotal,
+          totalPrice: order.subtotal,
+        ),
+      );
+    }
+
+    final activeSubtotal = items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice);
+    final effSubtotal = activeSubtotal > 0 ? activeSubtotal : order.subtotal;
+    final effTax = order.subtotal > 0 && order.taxAmount > 0 ? (order.taxAmount / order.subtotal * effSubtotal) : 0.0;
+    final effGrandTotal = (effSubtotal - order.discountAmount + effTax).clamp(0.0, double.infinity);
+
+    return ReceiptData(
+      type: type,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: order.id.isNotEmpty ? order.id : order.tokenNumber,
+      tokenNumber: order.tokenNumber,
+      orderType: 'TAKEAWAY',
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      dateTime: order.createdAt,
+      items: items,
+      subtotal: effSubtotal,
+      discountAmount: order.discountAmount,
+      taxAmount: effTax,
+      taxRate: effSubtotal > 0 && effTax > 0 ? (effTax / effSubtotal * 100) : 0.0,
+      grandTotal: effGrandTotal,
+      paymentMethod: paymentMethod,
+      tenderedAmount: tenderedAmount > 0 ? tenderedAmount : effGrandTotal,
+      changeReturned: changeReturned,
+      isReprint: isReprint,
+      isModified: isModified,
+    );
+  }
+
+  /// Factory helper for DeliveryOrder
+  factory ReceiptData.fromDeliveryOrder({
+    required DeliveryOrder order,
+    ReceiptType type = ReceiptType.customerReceipt,
+    double tenderedAmount = 0.0,
+    double changeReturned = 0.0,
+    String? paymentMethod,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+    bool isReprint = false,
+    bool isModified = false,
+  }) {
+    final items = <ReceiptItemData>[];
+    final subtotal = (order.totalAmount - order.deliveryCharge).clamp(0.0, double.infinity);
+
+    if (order.items.isNotEmpty) {
+      for (final i in order.items) {
+        if (type != ReceiptType.kitchenKot && i.isCancelled) continue;
+        items.add(
+          ReceiptItemData(
+            id: i.id,
+            name: i.item.name,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            totalPrice: i.totalPrice,
+            size: i.selectedSize,
+            crust: i.selectedCrust,
+            toppings: i.extraToppings,
+            notes: i.notes,
+            isCancelled: i.isCancelled,
+            cancelReason: i.cancelReason,
+          ),
+        );
+      }
+    } else {
+      final rawParts = order.itemsSummary.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      for (final part in rawParts) {
+        final regex = RegExp(r'^(\d+)x\s+(.+)$');
+        final match = regex.firstMatch(part);
+        final qty = match != null ? int.tryParse(match.group(1)!) ?? 1 : 1;
+        final name = match != null ? match.group(2)! : part;
+        final unitPrice = rawParts.length == 1 && subtotal > 0
+            ? subtotal / qty
+            : (subtotal / (rawParts.length * qty));
+
+        items.add(
+          ReceiptItemData(
+            name: name,
+            quantity: qty,
+            unitPrice: unitPrice,
+            totalPrice: unitPrice * qty,
+          ),
+        );
+      }
+    }
+
+    if (items.isEmpty) {
+      items.add(
+        ReceiptItemData(
+          name: order.itemsSummary.isNotEmpty ? order.itemsSummary : 'Delivery Order Items',
+          quantity: 1,
+          unitPrice: subtotal,
+          totalPrice: subtotal,
+        ),
+      );
+    }
+
+    final payMethod = paymentMethod ?? order.paymentMethod;
+    final activeSubtotal = items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice);
+    final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
+    final effGrandTotal = (effSubtotal + order.deliveryCharge).clamp(0.0, double.infinity);
+
+    return ReceiptData(
+      type: type,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: order.orderNumber,
+      tokenNumber: order.orderNumber,
+      orderType: 'DELIVERY (${order.orderSource})',
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      customerAddress: order.deliveryAddress,
+      riderName: order.riderName,
+      dateTime: order.createdAt,
+      items: items,
+      subtotal: effSubtotal,
+      deliveryFee: order.deliveryCharge,
+      grandTotal: effGrandTotal,
+      paymentMethod: payMethod.toUpperCase(),
+      tenderedAmount: tenderedAmount > 0 ? tenderedAmount : effGrandTotal,
+      changeReturned: changeReturned,
+      isReprint: isReprint,
+      isModified: isModified,
+    );
+  }
+
+  /// Factory helper for OnlineOrderModel
+  factory ReceiptData.fromOnlineOrder({
+    required OnlineOrderModel order,
+    ReceiptType type = ReceiptType.customerReceipt,
+    double tenderedAmount = 0.0,
+    double changeReturned = 0.0,
+    String? paymentMethod,
+    String storeName = "HUNGRY HOWIES",
+    String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
+    String storePhone = '+1 (800) 555-HOWIE',
+  }) {
+    final items = order.items.map((i) {
+      return ReceiptItemData(
+        name: i.itemName,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        totalPrice: i.totalPrice,
+        size: i.size,
+        toppings: i.toppings,
+        notes: i.specialInstructions,
+      );
+    }).toList();
+
+    final payMethod = paymentMethod ?? order.paymentMethod.name.toUpperCase();
+    final activeSubtotal = items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice);
+    final effSubtotal = activeSubtotal > 0 ? activeSubtotal : order.subtotal;
+    final effTax = order.subtotal > 0 && order.taxAmount > 0 ? (order.taxAmount / order.subtotal * effSubtotal) : 0.0;
+    final effGrandTotal = (effSubtotal - order.discountAmount + effTax + order.deliveryFee).clamp(0.0, double.infinity);
+
+    return ReceiptData(
+      type: type,
+      storeName: storeName,
+      branchName: branchName,
+      storePhone: storePhone,
+      orderNumber: order.orderNumber,
+      tokenNumber: order.orderNumber,
+      orderType: 'ONLINE ORDER (${order.orderSource ?? "WEB"})',
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      customerAddress: order.customerAddress,
+      riderName: order.riderName,
+      dateTime: order.createdAt,
+      items: items,
+      subtotal: effSubtotal,
+      discountAmount: order.discountAmount,
+      taxAmount: effTax,
+      taxRate: effSubtotal > 0 && effTax > 0 ? (effTax / effSubtotal * 100) : 5.0,
+      deliveryFee: order.deliveryFee,
+      grandTotal: effGrandTotal,
+      paymentMethod: payMethod,
+      tenderedAmount: tenderedAmount > 0 ? tenderedAmount : effGrandTotal,
+      changeReturned: changeReturned,
+      notes: order.notes,
+    );
+  }
+}
+
+/// Robust, Production-Grade POS Receipt & KOT Printing Engine
+/// Supports direct native Win32 Spooler raw ESC/POS, Direct USB Port, and Network TCP.
+/// Bypasses all browser dialogues, Windows preview dialogs, and OneNote.
+class ReceiptPrinterService {
+  // Preference Keys - Customer Printer
+  static const String _prefKeyPrinterName = 'pos_saved_printer_name';
+  static const String _prefKeyPrinterUrl = 'pos_saved_printer_url';
+  static const String _prefKeyPaperWidth = 'pos_paper_width'; // '80mm' or '58mm'
+  static const String _prefKeyDirectPrint = 'pos_direct_silent_print'; // bool
+  static const String _prefKeyAutoCut = 'pos_auto_cut_enabled'; // bool
+  static const String _prefKeyDrawerKick = 'pos_drawer_kick_enabled'; // bool
+
+  // Preference Keys - Kitchen / KOT Printer
+  static const String _prefKeyKitchenPrinterName = 'pos_kitchen_printer_name';
+  static const String _prefKeyKitchenSameAsCustomer = 'pos_kitchen_same_as_customer';
+  static const String _prefKeyKitchenPaperWidth = 'pos_kitchen_paper_width';
+  static const String _prefKeyKitchenAutoCut = 'pos_kitchen_auto_cut';
+
+  // Rapid debounce map to prevent accidental double-click duplicate prints
+  static final Map<String, DateTime> _recentPrintLocks = {};
+
+  // Preference Key & Cache for strictly One-Time Kitchen (KOT) Printed Ticket IDs
+  static const String _prefKeyPrintedKotList = 'pos_printed_kitchen_kot_set';
+  static const String _prefKeyPrintedKotSignatures = 'pos_printed_kot_signatures_map';
+  static final Set<String> _printedKitchenTickets = <String>{};
+  static final Map<String, String> _printedKitchenSignatures = <String, String>{};
+  static bool _hasLoadedPrintedKotSet = false;
+  static bool _hasLoadedPrintedKotSignatures = false;
+
+  /// Loads printed kitchen tickets from local persistent storage
+  static Future<Set<String>> _loadPrintedKitchenTickets() async {
+    if (!_hasLoadedPrintedKotSet) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedList = prefs.getStringList(_prefKeyPrintedKotList) ?? [];
+      _printedKitchenTickets.addAll(savedList.map((e) => e.trim().toLowerCase()));
+      _hasLoadedPrintedKotSet = true;
+    }
+    return _printedKitchenTickets;
+  }
+
+  /// Loads printed kitchen item signatures from local storage
+  static Future<Map<String, String>> _loadPrintedKitchenSignatures() async {
+    if (!_hasLoadedPrintedKotSignatures) {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(_prefKeyPrintedKotSignatures);
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(jsonStr);
+          if (decoded is Map) {
+            decoded.forEach((k, v) => _printedKitchenSignatures[k.toString().toLowerCase()] = v.toString());
+          }
+        } catch (_) {}
+      }
+      _hasLoadedPrintedKotSignatures = true;
+    }
+    return _printedKitchenSignatures;
+  }
+
+  /// Records an items signature when KOT is printed
+  static Future<void> recordPrintedKitchenSignature(String? idOrOrderNumber, String signature) async {
+    if (idOrOrderNumber == null || idOrOrderNumber.trim().isEmpty) return;
+    await _loadPrintedKitchenSignatures();
+    final clean = idOrOrderNumber.trim().toLowerCase();
+    _printedKitchenSignatures[clean] = signature;
+
+    // Also record under extracted numbers
+    for (final m in RegExp(r'\d+').allMatches(clean)) {
+      final s = m.group(0)!;
+      final n = int.tryParse(s);
+      if (n != null) {
+        _printedKitchenSignatures[n.toString()] = signature;
+        _printedKitchenSignatures[n.toString().padLeft(3, '0')] = signature;
+      }
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_printedKitchenSignatures.length > 3000) {
+        final keysToRemove = _printedKitchenSignatures.keys.take(_printedKitchenSignatures.length - 3000).toList();
+        for (final k in keysToRemove) {
+          _printedKitchenSignatures.remove(k);
+        }
+      }
+      await prefs.setString(_prefKeyPrintedKotSignatures, jsonEncode(_printedKitchenSignatures));
+    } catch (e) {
+      debugPrint('Error saving printed KOT signatures: $e');
+    }
+  }
+
+  /// Checks if a kitchen ticket / order has already been printed once for the exact current items.
+  /// If [currentItemsSignature] is provided and does not match the recorded signature,
+  /// returns false because the order was modified and must be allowed to print!
+  static Future<bool> isKitchenReceiptPrinted(
+    String? idOrOrderNumber, {
+    String? tokenNumber,
+    String? currentItemsSignature,
+  }) async {
+    final candidateIds = <String>[];
+    if (idOrOrderNumber != null && idOrOrderNumber.trim().isNotEmpty) {
+      candidateIds.add(idOrOrderNumber.trim());
+    }
+    if (tokenNumber != null && tokenNumber.trim().isNotEmpty) {
+      candidateIds.add(tokenNumber.trim());
+    }
+    if (candidateIds.isEmpty) return false;
+
+    // Test receipts are never blocked
+    for (final raw in candidateIds) {
+      final clean = raw.toLowerCase();
+      if (clean == 'kot-101' || clean == 'kot-test' || clean == 'test' || clean == 'kitchen test') {
+        return false;
+      }
+    }
+
+    // 1. Check if the ticket/order exists in the printed KOT set
+    final set = await _loadPrintedKitchenTickets();
+    bool isInPrintedSet = false;
+    String matchedKey = candidateIds.first.toLowerCase();
+
+    for (final raw in candidateIds) {
+      final clean = raw.toLowerCase();
+      if (set.contains(clean)) {
+        isInPrintedSet = true;
+        matchedKey = clean;
+        break;
+      }
+      final numeric = int.tryParse(clean);
+      if (numeric != null) {
+        final formatted3 = numeric.toString().padLeft(3, '0');
+        if (set.contains(formatted3) || set.contains(numeric.toString())) {
+          isInPrintedSet = true;
+          matchedKey = clean;
+          break;
+        }
+      }
+      for (final m in RegExp(r'\d+').allMatches(clean)) {
+        final s = m.group(0)!;
+        final n = int.tryParse(s);
+        if (n != null && (set.contains(n.toString()) || set.contains(n.toString().padLeft(3, '0')))) {
+          isInPrintedSet = true;
+          matchedKey = clean;
+          break;
+        }
+      }
+      if (isInPrintedSet) break;
+    }
+
+    // If it is not in the printed set (e.g. unmarketed when modified or cancelled), it can print
+    if (!isInPrintedSet) {
+      return false;
+    }
+
+    // 2. If it was printed, check if current items signature differs from the printed signature.
+    // If the items were modified or cancelled, signature differs -> return false so updated KOT can print!
+    if (currentItemsSignature != null && currentItemsSignature.isNotEmpty) {
+      final sigMap = await _loadPrintedKitchenSignatures();
+      String? recordedSig;
+      for (final raw in candidateIds) {
+        final clean = raw.toLowerCase();
+        recordedSig = sigMap[clean] ??
+            sigMap[clean.replaceAll('_cancel', '')] ??
+            sigMap[clean.replaceAll(RegExp(r'[^0-9]'), '')];
+        if (recordedSig != null) break;
+        for (final m in RegExp(r'\d+').allMatches(clean)) {
+          final s = m.group(0)!;
+          final n = int.tryParse(s);
+          if (n != null) {
+            recordedSig = sigMap[n.toString()] ?? sigMap[n.toString().padLeft(3, '0')];
+            if (recordedSig != null) break;
+          }
+        }
+        if (recordedSig != null) break;
+      }
+
+      if (recordedSig != null && recordedSig != currentItemsSignature) {
+        debugPrint('🔔 KOT Signature mismatch for [$matchedKey]: Order was modified ($recordedSig != $currentItemsSignature). Updated print unlocked.');
+        return false;
+      }
+    }
+
+    // If it was already printed and items have NOT been modified/cancelled -> return true (BLOCKED!)
+    return true;
+  }
+
+  /// Marks a kitchen receipt as printed (persisted across app reloads)
+  static Future<void> markKitchenReceiptPrinted(String? idOrOrderNumber, {String? signature}) async {
+    if (idOrOrderNumber == null || idOrOrderNumber.trim().isEmpty) return;
+    final cleanId = idOrOrderNumber.trim().toLowerCase();
+
+    if (cleanId == 'kot-101' || cleanId == 'kot-test' || cleanId == 'test' || cleanId == 'kitchen test') {
+      return;
+    }
+
+    await _loadPrintedKitchenTickets();
+    _printedKitchenTickets.add(cleanId);
+
+    final numeric = int.tryParse(cleanId);
+    if (numeric != null) {
+      _printedKitchenTickets.add(numeric.toString().padLeft(3, '0'));
+      _printedKitchenTickets.add(numeric.toString());
+    }
+
+    if (signature != null && signature.isNotEmpty) {
+      await recordPrintedKitchenSignature(cleanId, signature);
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final listToSave = _printedKitchenTickets.toList();
+      if (listToSave.length > 3000) {
+        listToSave.removeRange(0, listToSave.length - 3000);
+      }
+      await prefs.setStringList(_prefKeyPrintedKotList, listToSave);
+    } catch (e) {
+      debugPrint('Error saving printed KOT set: $e');
+    }
+  }
+
+  /// Comprehensive reset of KOT print lock and signatures for all permutations of an order
+  static Future<void> unmarkOrderKitchenReceiptPrinted({
+    String? orderId,
+    String? orderNumber,
+    String? tokenNumber,
+    String? tableNumber,
+  }) async {
+    await _loadPrintedKitchenTickets();
+    await _loadPrintedKitchenSignatures();
+
+    final idsToUnmark = <String>{};
+
+    void addId(String? raw) {
+      if (raw == null || raw.trim().isEmpty) return;
+      final c = raw.trim().toLowerCase();
+      idsToUnmark.add(c);
+      idsToUnmark.add('${c}_cancel');
+      if (c.endsWith('_cancel')) {
+        idsToUnmark.add(c.replaceAll('_cancel', ''));
+      }
+      // Extract all numbers inside the string
+      final matches = RegExp(r'\d+').allMatches(c);
+      for (final m in matches) {
+        final s = m.group(0)!;
+        final n = int.tryParse(s);
+        if (n != null) {
+          idsToUnmark.add(n.toString());
+          idsToUnmark.add(n.toString().padLeft(3, '0'));
+          idsToUnmark.add('${n}_cancel');
+          idsToUnmark.add('${n.toString().padLeft(3, '0')}_cancel');
+        }
+      }
+    }
+
+    addId(orderId);
+    addId(orderNumber);
+    addId(tokenNumber);
+    addId(tableNumber);
+
+    for (final id in idsToUnmark) {
+      _printedKitchenTickets.remove(id);
+      _printedKitchenSignatures.remove(id);
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_prefKeyPrintedKotList, _printedKitchenTickets.toList());
+      await prefs.setString(_prefKeyPrintedKotSignatures, jsonEncode(_printedKitchenSignatures));
+      debugPrint('🔄 KOT print lock and signatures reset for order keys: $idsToUnmark');
+    } catch (e) {
+      debugPrint('Error unmarking printed KOT: $e');
+    }
+  }
+
+  /// Unmarks a kitchen receipt as printed (called when an order is modified/items added/cancelled)
+  /// so that the kitchen ticket can be printed one more time for the updated order.
+  static Future<void> unmarkKitchenReceiptPrinted(String? idOrOrderNumber) async {
+    if (idOrOrderNumber == null || idOrOrderNumber.trim().isEmpty) return;
+    await unmarkOrderKitchenReceiptPrinted(orderNumber: idOrOrderNumber);
+  }
+
+  /// Clears printed kitchen receipts history (e.g., daily reset)
+  static Future<void> clearPrintedKitchenHistory() async {
+    _printedKitchenTickets.clear();
+    _hasLoadedPrintedKotSet = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefKeyPrintedKotList);
+    } catch (e) {
+      debugPrint('Error clearing printed KOT history: $e');
+    }
+  }
+
+  // In-memory high-speed cache for printer settings to eliminate async disk I/O per print
+  static String? _cachedPrinterName;
+  static String? _cachedPrinterUrl;
+  static PaperWidth? _cachedPaperWidth;
+  static bool? _cachedDirectPrint;
+  static bool? _cachedAutoCut;
+  static bool? _cachedDrawerKick;
+  static String? _cachedKitchenPrinterName;
+  static bool? _cachedKitchenSameAsCustomer;
+  static PaperWidth? _cachedKitchenPaperWidth;
+  static bool? _cachedKitchenAutoCut;
+  static bool _hasLoadedSettings = false;
+
+  static Future<void> _ensureSettingsLoaded() async {
+    if (_hasLoadedSettings) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _cachedPrinterName = prefs.getString(_prefKeyPrinterName);
+      _cachedPrinterUrl = prefs.getString(_prefKeyPrinterUrl);
+      final widthStr = prefs.getString(_prefKeyPaperWidth) ?? '80mm';
+      _cachedPaperWidth = widthStr == '58mm' ? PaperWidth.roll58mm : PaperWidth.roll80mm;
+      _cachedDirectPrint = prefs.getBool(_prefKeyDirectPrint) ?? true;
+      _cachedAutoCut = prefs.getBool(_prefKeyAutoCut) ?? true;
+      _cachedDrawerKick = prefs.getBool(_prefKeyDrawerKick) ?? false;
+      _cachedKitchenPrinterName = prefs.getString(_prefKeyKitchenPrinterName);
+      _cachedKitchenSameAsCustomer = prefs.getBool(_prefKeyKitchenSameAsCustomer) ?? true;
+      final kWidthStr = prefs.getString(_prefKeyKitchenPaperWidth) ?? '80mm';
+      _cachedKitchenPaperWidth = kWidthStr == '58mm' ? PaperWidth.roll58mm : PaperWidth.roll80mm;
+      _cachedKitchenAutoCut = prefs.getBool(_prefKeyKitchenAutoCut) ?? true;
+      _hasLoadedSettings = true;
+    } catch (_) {
+      _hasLoadedSettings = true;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preferences Management
+  // ---------------------------------------------------------------------------
+  static Future<String?> getSavedPrinterName() async {
+    await _ensureSettingsLoaded();
+    if (_cachedPrinterName != null && _cachedPrinterName!.toLowerCase().startsWith('port:')) {
+      return null;
+    }
+    return _cachedPrinterName;
+  }
+
+  static Future<String?> getSavedPrinterUrl() async {
+    await _ensureSettingsLoaded();
+    return _cachedPrinterUrl;
+  }
+
+  static Future<PaperWidth> getSavedPaperWidth() async {
+    await _ensureSettingsLoaded();
+    return _cachedPaperWidth ?? PaperWidth.roll80mm;
+  }
+
+  static Future<bool> isDirectPrintEnabled() async {
+    await _ensureSettingsLoaded();
+    return _cachedDirectPrint ?? true;
+  }
+
+  static Future<bool> isAutoCutEnabled() async {
+    await _ensureSettingsLoaded();
+    return _cachedAutoCut ?? true;
+  }
+
+  static Future<bool> isDrawerKickEnabled() async {
+    await _ensureSettingsLoaded();
+    return _cachedDrawerKick ?? false;
+  }
+
+  // Check if a printer is configured and not None/empty
+  static bool isPrinterConfigured(String? printerName) {
+    if (printerName == null) return false;
+    final trimmed = printerName.trim();
+    if (trimmed.isEmpty ||
+        trimmed.toLowerCase() == 'none' ||
+        trimmed.toLowerCase() == 'none (disabled)' ||
+        trimmed.toLowerCase().startsWith('none') ||
+        trimmed.toLowerCase().startsWith('port:')) {
+      return false;
+    }
+    return true;
+  }
+
+  // Kitchen Printer Preferences
+  static Future<String?> getKitchenPrinterName() async {
+    await _ensureSettingsLoaded();
+    if (_cachedKitchenPrinterName != null && _cachedKitchenPrinterName!.toLowerCase().startsWith('port:')) {
+      return null;
+    }
+    return _cachedKitchenPrinterName;
+  }
+
+  static Future<bool> isKitchenSameAsCustomer() async {
+    await _ensureSettingsLoaded();
+    return _cachedKitchenSameAsCustomer ?? false;
+  }
+
+  static Future<PaperWidth> getKitchenPaperWidth() async {
+    await _ensureSettingsLoaded();
+    return _cachedKitchenPaperWidth ?? PaperWidth.roll80mm;
+  }
+
+  static Future<bool> isKitchenAutoCutEnabled() async {
+    await _ensureSettingsLoaded();
+    return _cachedKitchenAutoCut ?? true;
+  }
+
+  static Future<void> savePrinterSettings({
+    String? printerName,
+    String? printerUrl,
+    PaperWidth? paperWidth,
+    bool? directPrint,
+    bool? autoCut,
+    bool? drawerKick,
+    String? kitchenPrinterName,
+    bool? kitchenSameAsCustomer,
+    PaperWidth? kitchenPaperWidth,
+    bool? kitchenAutoCut,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (printerName != null) {
+      await prefs.setString(_prefKeyPrinterName, printerName);
+      _cachedPrinterName = printerName;
+    }
+    if (printerUrl != null) {
+      await prefs.setString(_prefKeyPrinterUrl, printerUrl);
+      _cachedPrinterUrl = printerUrl;
+    }
+    if (paperWidth != null) {
+      await prefs.setString(_prefKeyPaperWidth, paperWidth == PaperWidth.roll58mm ? '58mm' : '80mm');
+      _cachedPaperWidth = paperWidth;
+    }
+    if (directPrint != null) {
+      await prefs.setBool(_prefKeyDirectPrint, directPrint);
+      _cachedDirectPrint = directPrint;
+    }
+    if (autoCut != null) {
+      await prefs.setBool(_prefKeyAutoCut, autoCut);
+      _cachedAutoCut = autoCut;
+    }
+    if (drawerKick != null) {
+      await prefs.setBool(_prefKeyDrawerKick, drawerKick);
+      _cachedDrawerKick = drawerKick;
+    }
+
+    if (kitchenPrinterName != null) {
+      await prefs.setString(_prefKeyKitchenPrinterName, kitchenPrinterName);
+      _cachedKitchenPrinterName = kitchenPrinterName;
+    }
+    if (kitchenSameAsCustomer != null) {
+      await prefs.setBool(_prefKeyKitchenSameAsCustomer, kitchenSameAsCustomer);
+      _cachedKitchenSameAsCustomer = kitchenSameAsCustomer;
+    }
+    if (kitchenPaperWidth != null) {
+      await prefs.setString(_prefKeyKitchenPaperWidth, kitchenPaperWidth == PaperWidth.roll58mm ? '58mm' : '80mm');
+      _cachedKitchenPaperWidth = kitchenPaperWidth;
+    }
+    if (kitchenAutoCut != null) {
+      await prefs.setBool(_prefKeyKitchenAutoCut, kitchenAutoCut);
+      _cachedKitchenAutoCut = kitchenAutoCut;
+    }
+    _hasLoadedSettings = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Discover Attached Printers & Ports
+  // ---------------------------------------------------------------------------
+  static Future<List<Printer>> getAvailablePrinters() async {
+    if (kIsWeb) return [];
+    try {
+      final spoolerPrinters = await Printing.listPrinters();
+      return spoolerPrinters;
+    } catch (e) {
+      debugPrint('Printer discovery notice: $e');
+      return [];
+    }
+  }
+
+  static Future<List<String>> getAllPrinterOptions() async {
+    final Set<String> options = {};
+
+    // 1. Query Windows Desktop spooler if running natively (instant, <50ms)
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      try {
+        final winPrinters = await NativeWin32Printer.getInstalledWindowsPrinters();
+        for (final p in winPrinters) {
+          final lower = p.toLowerCase();
+          if (!lower.contains('pdf') &&
+              !lower.contains('onenote') &&
+              !lower.contains('fax') &&
+              !lower.contains('xps') &&
+              !lower.contains('root print queue')) {
+            options.add(p);
+          }
+        }
+      } catch (e) {
+        debugPrint('Native Win32 printer query notice: $e');
+      }
+    }
+
+    // 2. Query local backend printer API (required for Web and multi-device access, actual printers only)
+    try {
+      final res = await http.get(Uri.parse('${ApiConfig.baseUrl}/printer/list')).timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded['success'] == true && decoded['data'] != null) {
+          final pList = (decoded['data']['printers'] as List?)?.map((e) => e.toString()) ?? [];
+          for (final p in pList) {
+            final lower = p.toLowerCase();
+            if (!lower.contains('pdf') &&
+                !lower.contains('onenote') &&
+                !lower.contains('fax') &&
+                !lower.contains('xps') &&
+                !lower.contains('root print queue')) {
+              options.add(p);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Backend printer list discovery notice: $e');
+    }
+
+    return options.toList();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Direct Silent Print Execution (Kitchen Dual Print + POS Single Print)
+  // ---------------------------------------------------------------------------
+  /// Directly prints the receipt to the configured physical thermal printer(s).
+  /// - Kitchen KOT: Prints to BOTH Kitchen Printer AND POS Printer.
+  /// - All Other Receipts (Customer bill, Pre-bill, Takeaway, Delivery): Prints ONLY to POS Printer.
+  static Future<bool> printReceipt({
+    BuildContext? context,
+    required ReceiptData receipt,
+    bool forceDialog = false,
+    bool forcePrint = false,
+  }) async {
+    // Debounce protection: Prevent duplicate rapid clicks within 1.5 seconds
+    final lockKey = '${receipt.type.name}_${receipt.orderNumber}';
+    final now = DateTime.now();
+    if (_recentPrintLocks.containsKey(lockKey)) {
+      final lastPrint = _recentPrintLocks[lockKey]!;
+      if (now.difference(lastPrint).inMilliseconds < 1500) {
+        debugPrint('Debounce: Print request ignored for $lockKey (already processing)');
+        return true;
+      }
+    }
+    _recentPrintLocks[lockKey] = now;
+
+    try {
+      final isKot = receipt.type == ReceiptType.kitchenKot;
+
+      // -----------------------------------------------------------------------
+      // STRICT ONE-TIME KITCHEN PRINT ENFORCEMENT
+      // If an unmodified kitchen ticket has already been printed once, reject duplicate prints.
+      // If the order has been modified, or if forcePrint/isReprint is set, allow printing!
+      // -----------------------------------------------------------------------
+      if (isKot && !forcePrint && !receipt.isReprint && !receipt.isModified) {
+        final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
+            receipt.orderNumber == 'KOT-101' ||
+            receipt.orderNumber == 'KOT-TEST';
+
+        if (!isTestTicket) {
+          final isAlreadyPrinted = await isKitchenReceiptPrinted(
+                receipt.orderNumber,
+                tokenNumber: receipt.tokenNumber,
+                currentItemsSignature: receipt.itemsSignature,
+              );
+
+          if (isAlreadyPrinted) {
+            final displayNum = EscPosBuilder.format3DigitOrderNumber(receipt.orderNumber);
+            debugPrint('⛔ KITCHEN PRINT BLOCKED: Order #$displayNum has already been printed once.');
+
+            if (context != null && context.mounted) {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const Icon(Icons.block_rounded, color: Colors.white, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '⚠️ Kitchen Receipt for Order #$displayNum has ALREADY been printed! Modify order or cancel items to print an updated ticket.',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                  backgroundColor: const Color(0xFFDC2626),
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+            return false;
+          }
+        }
+      }
+
+      // 1. Resolve POS Counter Printer
+      final rawPos = await getSavedPrinterName();
+      String? posPrinter;
+      if (isPrinterConfigured(rawPos)) {
+        posPrinter = rawPos;
+      } else if (rawPos == null) {
+        // Fresh install before user ever configured printer settings
+        final autoResolved = await _resolveBestThermalPrinter();
+        if (isPrinterConfigured(autoResolved)) {
+          posPrinter = autoResolved;
+        }
+      }
+
+      final posWidth = await getSavedPaperWidth();
+      final posCut = await isAutoCutEnabled();
+      final posDrawer = !isKot && await isDrawerKickEnabled();
+
+      if (isKot) {
+        // =========================================================================
+        // KITCHEN ORDER TICKET (KOT) PRINTING:
+        // Prints to Kitchen Printer ("Kitchen Receipt") and/or POS Printer ("Food Picker - Dine In")
+        // depending on what the user has selected.
+        // =========================================================================
+        final rawKitchen = await getKitchenPrinterName();
+        final String? kitchenPrinter = isPrinterConfigured(rawKitchen) ? rawKitchen : null;
+        final kitchenWidth = await getKitchenPaperWidth();
+        final kitchenCut = await isKitchenAutoCutEnabled();
+
+        // If neither printer is selected, gracefully skip
+        if (kitchenPrinter == null && posPrinter == null) {
+          debugPrint('No printer configured for Kitchen KOT (Kitchen: None, POS: None). Skipping print.');
+          return true;
+        }
+
+        final hasCancelled = receipt.items.any((i) => i.isCancelled);
+
+        // Case 1: Both are configured and set to the SAME printer
+        if (kitchenPrinter != null && posPrinter != null && kitchenPrinter == posPrinter) {
+          final prebuiltBytes = hasCancelled
+              ? await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)
+              : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true);
+
+          final success = await _printSingleJob(
+            receipt: receipt,
+            targetPrinter: kitchenPrinter,
+            paperWidth: kitchenWidth,
+            autoCut: kitchenCut,
+            drawerKick: false,
+            prebuiltBytes: prebuiltBytes,
+            isKitchenPrinter: true,
+          );
+
+          final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
+              receipt.orderNumber == 'KOT-101' ||
+              receipt.orderNumber == 'KOT-TEST';
+          if (success && !isTestTicket) {
+            await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature);
+            if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
+              await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature);
+            }
+          }
+
+          if (success && context != null && context.mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Kitchen KOT printed to [$kitchenPrinter]',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: const Color(0xFF16A34A),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+          return success;
+        }
+
+        // Case 2: One or both distinct printers configured
+        final List<Future<bool>> printJobs = [];
+        bool printingKitchen = false;
+        bool printingPos = false;
+
+        if (kitchenPrinter != null) {
+          printingKitchen = true;
+          final prebuiltKitchenBytes = hasCancelled
+              ? await generateRasterEscPosBytes(receipt, kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true)
+              : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: kitchenWidth, autoCut: kitchenCut, openCashDrawer: false, isKitchenPrinter: true);
+
+          printJobs.add(
+            _printSingleJob(
+              receipt: receipt,
+              targetPrinter: kitchenPrinter,
+              paperWidth: kitchenWidth,
+              autoCut: kitchenCut,
+              drawerKick: false,
+              prebuiltBytes: prebuiltKitchenBytes,
+              isKitchenPrinter: true,
+            ),
+          );
+        }
+
+        if (posPrinter != null) {
+          printingPos = true;
+          final prebuiltPosBytes = hasCancelled
+              ? await generateRasterEscPosBytes(receipt, posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false)
+              : EscPosBuilder.buildReceiptBytes(receipt: receipt, paperWidth: posWidth, autoCut: posCut, openCashDrawer: false, isKitchenPrinter: false);
+
+          printJobs.add(
+            _printSingleJob(
+              receipt: receipt,
+              targetPrinter: posPrinter,
+              paperWidth: posWidth,
+              autoCut: posCut,
+              drawerKick: false,
+              prebuiltBytes: prebuiltPosBytes,
+              isKitchenPrinter: false,
+            ),
+          );
+        }
+
+        final printResults = await Future.wait<bool>(printJobs);
+        final bool overallSuccess = printResults.any((s) => s);
+
+        final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
+            receipt.orderNumber == 'KOT-101' ||
+            receipt.orderNumber == 'KOT-TEST';
+        if (overallSuccess && !isTestTicket) {
+          await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature);
+          if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
+            await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature);
+          }
+        }
+
+        if (overallSuccess && context != null && context.mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          String successMsg;
+          if (printingKitchen && printingPos) {
+            successMsg = 'Kitchen KOT printed to Kitchen [$kitchenPrinter] + POS [$posPrinter]';
+          } else if (printingKitchen) {
+            successMsg = 'Kitchen KOT printed to Kitchen [$kitchenPrinter]';
+          } else {
+            successMsg = 'Kitchen KOT printed to POS [$posPrinter]';
+          }
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      successMsg,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF16A34A),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+        return overallSuccess;
+      } else {
+        // =========================================================================
+        // ALL OTHER RECEIPTS (Customer Bills, Pre-Bills, Takeaway, Delivery):
+        // Prints ONLY to the POS Counter Printer!
+        // =========================================================================
+        if (posPrinter == null) {
+          debugPrint('POS Printer is not selected (None). Skipping customer receipt print.');
+          if (context != null && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('POS printer is not configured (None). Please select a printer in Printer Setup.'),
+                backgroundColor: Color(0xFFD97706),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+          return false;
+        }
+
+        final success = await _printSingleJob(
+          receipt: receipt,
+          targetPrinter: posPrinter,
+          paperWidth: posWidth,
+          autoCut: posCut,
+          drawerKick: posDrawer,
+        );
+
+        if (success && context != null && context.mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Customer Receipt printed to POS Printer [$posPrinter]',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF16A34A),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+        return success;
+      }
+    } catch (e, stack) {
+      debugPrint('Printing error: $e\n$stack');
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to print receipt. Please check printer connection.'),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+      return false;
+    }
+  }
+
+  /// Internal helper to send a single print job to a specific physical printer
+  static Future<bool> _printSingleJob({
+    required ReceiptData receipt,
+    required String targetPrinter,
+    required PaperWidth paperWidth,
+    required bool autoCut,
+    required bool drawerKick,
+    Uint8List? prebuiltBytes,
+    bool isKitchenPrinter = false,
+  }) async {
+    try {
+      bool printSuccess = false;
+      final hasCancelledItems = receipt.items.any((i) => i.isCancelled);
+
+      // 1. GENERATE ESC/POS BINARY (or reuse pre-rendered byte buffer)
+      Uint8List? escposBytes = prebuiltBytes;
+      if (escposBytes == null) {
+        if (hasCancelledItems) {
+          escposBytes = await generateRasterEscPosBytes(
+            receipt,
+            paperWidth,
+            autoCut: autoCut,
+            openCashDrawer: drawerKick,
+            isKitchenPrinter: isKitchenPrinter,
+          );
+        }
+
+        escposBytes ??= EscPosBuilder.buildReceiptBytes(
+          receipt: receipt,
+          paperWidth: paperWidth,
+          autoCut: autoCut,
+          openCashDrawer: drawerKick,
+          isKitchenPrinter: isKitchenPrinter,
+        );
+      }
+
+      // 2. PRIORITY 1: DIRECT BACKEND PRINT API (Works on Web & Desktop)
+      try {
+        final b64 = base64Encode(escposBytes);
+        final res = await http.post(
+          Uri.parse('${ApiConfig.baseUrl}/printer/print'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'printerName': targetPrinter,
+            'base64Data': b64,
+            'docName': '${receipt.type.name}_${receipt.orderNumber}',
+          }),
+        ).timeout(const Duration(seconds: 5));
+
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(res.body);
+          if (decoded['success'] == true) {
+            printSuccess = true;
+          }
+        }
+      } catch (e) {
+        debugPrint('Backend direct print attempt: $e');
+      }
+
+      // 3. PRIORITY 2: DIRECT NATIVE WIN32 DESKTOP PRINTING
+      if (!printSuccess && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+        if (targetPrinter.startsWith('Port: ')) {
+          final port = targetPrinter.replaceFirst('Port: ', '').trim();
+          printSuccess = await NativeWin32Printer.printRawBytesToPort(port, escposBytes);
+          if (!printSuccess) {
+            await NativeWin32Printer.ensurePosPrinterInstalled(
+              printerName: 'POS Receipt Printer',
+              portName: port,
+            );
+            printSuccess = await NativeWin32Printer.printRawBytesToSpooler('POS Receipt Printer', escposBytes);
+          }
+        } else if (targetPrinter.contains(':') && RegExp(r'^\d+\.\d+\.\d+\.\d+:\d+$').hasMatch(targetPrinter)) {
+          final parts = targetPrinter.split(':');
+          final host = parts[0];
+          final port = int.tryParse(parts[1]) ?? 9100;
+          printSuccess = await NetworkPrinter.sendRawBytesToNetworkPrinter(host, port, escposBytes);
+        } else {
+          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
+            targetPrinter,
+            escposBytes,
+            docName: '${receipt.type.name}_${receipt.orderNumber}',
+          );
+
+          if (!printSuccess && targetPrinter != 'POS Receipt Printer') {
+            printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
+              'POS Receipt Printer',
+              escposBytes,
+            );
+          }
+        }
+      }
+
+      // 4. PRIORITY 3: PDF SPOOLER DIRECT PRINTING FALLBACK
+      if (!printSuccess && !kIsWeb) {
+        try {
+          final printers = await Printing.listPrinters();
+          final matchingPrinter = printers.cast<Printer?>().firstWhere(
+                (p) => p?.name == targetPrinter || p?.name == 'POS Receipt Printer',
+                orElse: () => printers.isNotEmpty
+                    ? printers.firstWhere(
+                        (p) => !p.name.toLowerCase().contains('pdf') && !p.name.toLowerCase().contains('onenote'),
+                        orElse: () => printers.first,
+                      )
+                    : null,
+              );
+
+          if (matchingPrinter != null) {
+            final pageFormat = paperWidth == PaperWidth.roll58mm
+                ? const PdfPageFormat(58 * PdfPageFormat.mm, double.infinity, marginAll: 2 * PdfPageFormat.mm)
+                : const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity, marginAll: 3.5 * PdfPageFormat.mm);
+
+            final doc = await _generateReceiptPdf(
+              receipt,
+              paperWidth,
+              isKitchenPrinter: isKitchenPrinter,
+            );
+            final pdfBytes = await doc.save();
+
+            printSuccess = await Printing.directPrintPdf(
+              printer: matchingPrinter,
+              onLayout: (PdfPageFormat format) async => pdfBytes,
+              format: pageFormat,
+              name: '${receipt.type.name}_${receipt.orderNumber}',
+            );
+          }
+        } catch (e) {
+          debugPrint('Spooler fallback error: $e');
+        }
+      }
+
+      return printSuccess;
+    } catch (e) {
+      debugPrint('Single print job error for $targetPrinter: $e');
+      return false;
+    }
+  }
+
+  /// Renders the PDF receipt into a monochrome thermal bitmap and generates standard ESC/POS GS v 0 bit image bytes.
+  /// This physically burns the exact continuous horizontal line through cancelled text on standard thermal printers.
+  static Future<Uint8List?> generateRasterEscPosBytes(
+    ReceiptData receipt,
+    PaperWidth paperWidth, {
+    bool autoCut = true,
+    bool openCashDrawer = false,
+    bool isKitchenPrinter = false,
+  }) async {
+    try {
+      final doc = await _generateReceiptPdf(
+        receipt,
+        paperWidth,
+        isKitchenPrinter: isKitchenPrinter,
+      );
+      final pdfBytes = await doc.save();
+      final dpi = 203.0; // Standard 203 DPI (8 dots/mm) for POS thermal printers
+      final pages = Printing.raster(pdfBytes, pages: [0], dpi: dpi);
+      await for (final page in pages) {
+        final pixels = page.pixels;
+        return EscPosBuilder.rasterToEscPosBytes(
+          rgbaPixels: pixels,
+          width: page.width,
+          height: page.height,
+          autoCut: autoCut,
+          openCashDrawer: openCashDrawer,
+        );
+      }
+    } catch (e) {
+      debugPrint('Raster ESC/POS generation error: $e');
+    }
+    return null;
+  }
+
+  /// Automatically resolves the most appropriate physical thermal printer
+  static Future<String?> _resolveBestThermalPrinter() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.windows) return null;
+
+    final winPrinters = await NativeWin32Printer.getInstalledWindowsPrinters();
+    const thermalKeywords = [
+      'pos', 'thermal', 'receipt', 'xp-', 'xp', 'tm-', 'rp-', 'zj-', 'zj',
+      '80', '58', 'xprinter', 'epson', 'rongta', 'gprinter', 'bixolon', 'sunmi', 'star', 'printer'
+    ];
+
+    // 1. Look for POS / Thermal in Windows printers
+    for (final p in winPrinters) {
+      final lower = p.toLowerCase();
+      if (lower.contains('pdf') || lower.contains('onenote') || lower.contains('fax') || lower.contains('xps')) {
+        continue;
+      }
+      if (thermalKeywords.any((kw) => lower.contains(kw))) {
+        await savePrinterSettings(printerName: p);
+        return p;
+      }
+    }
+
+    // 2. Check if POS Receipt Printer is installed
+    if (winPrinters.contains('POS Receipt Printer')) {
+      await savePrinterSettings(printerName: 'POS Receipt Printer');
+      return 'POS Receipt Printer';
+    }
+
+    // 3. Ensure POS Receipt Printer on USB001
+    final ensured = await NativeWin32Printer.ensurePosPrinterInstalled(
+      printerName: 'POS Receipt Printer',
+      portName: 'USB001',
+    );
+    if (ensured) {
+      await savePrinterSettings(printerName: 'POS Receipt Printer');
+      return 'POS Receipt Printer';
+    }
+
+    return winPrinters.isNotEmpty ? winPrinters.first : 'POS Receipt Printer';
+  }
+
+  // ---------------------------------------------------------------------------
+  // PDF Document Generator (for digital exports & raster printing)
+  // ---------------------------------------------------------------------------
+  static pw.Font? _cachedRobotoRegular;
+  static pw.Font? _cachedRobotoBold;
+  static pw.Font? _cachedRobotoItalic;
+  static bool _fontsLoaded = false;
+
+  static Future<void> _ensureFontsLoaded() async {
+    if (_fontsLoaded) return;
+    try {
+      _cachedRobotoRegular = await PdfGoogleFonts.robotoRegular().timeout(const Duration(milliseconds: 600));
+      _cachedRobotoBold = await PdfGoogleFonts.robotoBold().timeout(const Duration(milliseconds: 600));
+      _cachedRobotoItalic = await PdfGoogleFonts.robotoItalic().timeout(const Duration(milliseconds: 600));
+      _fontsLoaded = true;
+    } catch (_) {
+      _fontsLoaded = true;
+    }
+  }
+
+  static Future<pw.Document> _generateReceiptPdf(
+    ReceiptData receipt,
+    PaperWidth paperWidth, {
+    bool isKitchenPrinter = false,
+  }) async {
+    if (!_fontsLoaded) {
+      await _ensureFontsLoaded();
+    }
+
+    pw.ThemeData themeData;
+    if (_cachedRobotoRegular != null && _cachedRobotoBold != null) {
+      themeData = pw.ThemeData.withFont(
+        base: _cachedRobotoRegular!,
+        bold: _cachedRobotoBold!,
+        italic: _cachedRobotoItalic,
+      );
+    } else {
+      themeData = pw.ThemeData.base();
+    }
+
+    final pdf = pw.Document(theme: themeData);
+
+    final is58 = paperWidth == PaperWidth.roll58mm;
+    final contentWidth = is58 ? 46.0 * PdfPageFormat.mm : 68.0 * PdfPageFormat.mm;
+    final fontSizeBase = is58 ? 7.5 : 9.0;
+    final fontSizeTitle = is58 ? 10.0 : 13.0;
+    final fontSizeLarge = is58 ? 12.0 : 15.0;
+
+    // Calculate finite page height to allow PDF rasterization engine (pdfium/canvas) to render bitmap graphics
+    // 72mm matches the exact physical 576-dot printhead of 80mm thermal printers (widthBytes = 72)
+    // 48mm matches the exact physical 384-dot printhead of 58mm thermal printers (widthBytes = 48)
+    final double calculatedHeightMm = (receipt.type == ReceiptType.kitchenKot ? 90.0 : 125.0) + (receipt.items.length * 20.0);
+    final pageFormat = is58
+        ? PdfPageFormat(48 * PdfPageFormat.mm, calculatedHeightMm * PdfPageFormat.mm, marginAll: 1.0 * PdfPageFormat.mm)
+        : PdfPageFormat(72 * PdfPageFormat.mm, calculatedHeightMm * PdfPageFormat.mm, marginAll: 2.0 * PdfPageFormat.mm);
+
+    final dateStr = DateFormat('dd-MMM-yyyy  hh:mm a').format(receipt.dateTime);
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: pageFormat,
+        build: (pw.Context context) {
+          if (receipt.type == ReceiptType.kitchenKot) {
+            String orderTypeTitle = 'Dine In';
+            if (receipt.orderType != null) {
+              final ot = receipt.orderType!.toUpperCase();
+              if (ot.contains('TAKEAWAY') || ot.contains('TAKE AWAY')) {
+                orderTypeTitle = 'Takeaway';
+              } else if (ot.contains('DELIVERY')) {
+                orderTypeTitle = 'Delivery';
+              } else if (ot.contains('ONLINE')) {
+                orderTypeTitle = 'Online';
+              } else {
+                orderTypeTitle = 'Dine In';
+              }
+            }
+
+            final displayOrderNum = EscPosBuilder.format3DigitOrderNumber(receipt.orderNumber);
+            String subHeader = '';
+            if (orderTypeTitle == 'Dine In') {
+              final section = receipt.tableSection ?? 'Hall';
+              final table = receipt.tableName ?? 'TABLE ${receipt.tableNumber ?? "1"}';
+              subHeader = '$section - $table';
+            } else if (orderTypeTitle == 'Takeaway') {
+              subHeader = 'Takeaway - Token #$displayOrderNum';
+            } else if (orderTypeTitle == 'Delivery') {
+              subHeader = 'Delivery - #$displayOrderNum';
+            } else {
+              subHeader = 'Online - #$displayOrderNum';
+            }
+
+            final dateFormatted = DateFormat('MMM d yyyy').format(receipt.dateTime);
+            final timeFormatted = DateFormat('HH:mm').format(receipt.dateTime);
+            final totalQty = receipt.items.where((i) => !i.isCancelled).fold<double>(0.0, (sum, i) => sum + i.quantity);
+
+            return pw.Container(
+              width: contentWidth,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                children: [
+                  pw.Center(
+                    child: pw.Text(
+                      isKitchenPrinter ? 'Kitchen Receipt' : 'Food Picker - $orderTypeTitle',
+                      style: pw.TextStyle(fontSize: fontSizeTitle, fontWeight: pw.FontWeight.normal),
+                    ),
+                  ),
+                  pw.SizedBox(height: 1),
+                  pw.Center(
+                    child: pw.Text(
+                      subHeader,
+                      style: pw.TextStyle(fontSize: fontSizeLarge, fontWeight: pw.FontWeight.bold),
+                    ),
+                  ),
+                  pw.SizedBox(height: 3),
+
+                  // Metadata: Date, Time
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('Date: $dateFormatted', style: pw.TextStyle(fontSize: fontSizeBase)),
+                      pw.Text('Time: $timeFormatted', style: pw.TextStyle(fontSize: fontSizeBase)),
+                    ],
+                  ),
+                  pw.SizedBox(height: 3),
+
+                  // Table Header
+                  _divider(thickness: 0.8),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text('Product Name', style: pw.TextStyle(fontSize: fontSizeBase + 1, fontWeight: pw.FontWeight.bold)),
+                        pw.Text('Quantity', style: pw.TextStyle(fontSize: fontSizeBase + 1, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                  _divider(thickness: 0.8),
+
+                  // Items
+                  ...receipt.items.map((item) {
+                    final qtyStr = item.isCancelled
+                        ? '-${item.quantity}'
+                        : '${item.quantity}';
+                    final modifiers = <String>[];
+                    if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
+                      modifiers.add('(${item.size})');
+                    }
+                    if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
+                      modifiers.add('(${item.crust})');
+                    }
+                    if (item.toppings.isNotEmpty) {
+                      modifiers.add('(${item.toppings.join(", ")})');
+                    }
+                    if (item.notes != null && item.notes!.isNotEmpty) {
+                      modifiers.add('(${item.notes})');
+                    }
+
+                    return pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                          child: pw.Row(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                            children: [
+                              pw.Expanded(
+                                child: pw.Column(
+                                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                                  children: [
+                                    pw.Text(
+                                      item.name,
+                                      style: pw.TextStyle(
+                                        fontSize: fontSizeBase + 0.5,
+                                        fontWeight: pw.FontWeight.normal,
+                                        decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
+                                        decorationThickness: item.isCancelled ? 1.5 : null,
+                                        decorationColor: item.isCancelled ? PdfColors.black : null,
+                                        color: item.isCancelled ? PdfColors.black : null,
+                                      ),
+                                    ),
+                                    ...modifiers.map((m) => pw.Text(
+                                          m,
+                                          style: pw.TextStyle(
+                                            fontSize: fontSizeBase - 0.5,
+                                            fontStyle: _cachedRobotoItalic != null ? pw.FontStyle.italic : pw.FontStyle.normal,
+                                            decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
+                                            decorationThickness: item.isCancelled ? 1.5 : null,
+                                            decorationColor: item.isCancelled ? PdfColors.black : null,
+                                            color: item.isCancelled ? PdfColors.black : null,
+                                          ),
+                                        )),
+                                    if (item.isCancelled && item.cancelReason != null && item.cancelReason!.isNotEmpty)
+                                      pw.Text(
+                                        'Reason: ${item.cancelReason}',
+                                        style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontStyle: _cachedRobotoItalic != null ? pw.FontStyle.italic : pw.FontStyle.normal, color: PdfColors.black),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              pw.Text(
+                                qtyStr,
+                                style: pw.TextStyle(
+                                  fontSize: fontSizeBase + 1,
+                                  fontWeight: pw.FontWeight.bold,
+                                  decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
+                                  decorationThickness: item.isCancelled ? 1.5 : null,
+                                  decorationColor: item.isCancelled ? PdfColors.black : null,
+                                  color: item.isCancelled ? PdfColors.black : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        _divider(thickness: 0.5),
+                      ],
+                    );
+                  }),
+
+                  // Total Row
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text('Total:', style: pw.TextStyle(fontSize: fontSizeBase + 1, fontWeight: pw.FontWeight.bold)),
+                        pw.Text(
+                          totalQty.round().toString(),
+                          style: pw.TextStyle(fontSize: fontSizeBase + 1.5, fontWeight: pw.FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _divider(thickness: 0.8),
+
+                  if (receipt.notes != null && receipt.notes!.isNotEmpty) ...[
+                    pw.SizedBox(height: 4),
+                    pw.Text('Note: ${receipt.notes}', style: pw.TextStyle(fontSize: fontSizeBase, fontStyle: pw.FontStyle.italic)),
+                    pw.SizedBox(height: 4),
+                    _divider(thickness: 0.5),
+                  ],
+                  pw.SizedBox(height: 20),
+                ],
+              ),
+            );
+          }
+
+          final activeItems = (receipt.type == ReceiptType.kitchenKot)
+              ? receipt.items
+              : receipt.items.where((i) => !i.isCancelled).toList();
+
+          final grossAmt = activeItems.fold<double>(0.0, (s, i) => s + i.totalPrice);
+          final totalQty = activeItems.fold<double>(0.0, (s, i) => s + i.quantity);
+          final double calcTax = receipt.taxRate > 0
+              ? (grossAmt * receipt.taxRate / 100)
+              : (activeItems.isEmpty ? 0.0 : receipt.taxAmount);
+          final double netTotal = (grossAmt - receipt.discountAmount + calcTax + receipt.serviceChargeAmount + receipt.deliveryFee).clamp(0.0, double.infinity);
+
+          final address = receipt.branchName.isNotEmpty
+              ? receipt.branchName
+              : 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.';
+
+          final displayOrderNum = EscPosBuilder.format3DigitOrderNumber(receipt.orderNumber);
+
+          return pw.Container(
+            width: contentWidth,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                // 1. BRAND HEADER
+                pw.Center(
+                  child: pw.Text(
+                    'INVOICE',
+                    style: pw.TextStyle(fontSize: fontSizeBase + 1, fontWeight: pw.FontWeight.normal),
+                  ),
+                ),
+                pw.SizedBox(height: 1),
+                pw.Center(
+                  child: pw.Text(
+                    receipt.storeName.toUpperCase(),
+                    style: pw.TextStyle(fontSize: fontSizeLarge, fontWeight: pw.FontWeight.bold),
+                  ),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Center(
+                  child: pw.Text(
+                    address,
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(fontSize: fontSizeBase - 0.5),
+                  ),
+                ),
+                if (receipt.storePhone.isNotEmpty && receipt.storePhone != '+1 (800) 555-HOWIE') ...[
+                  pw.Center(
+                    child: pw.Text(
+                      'Tel: ${receipt.storePhone}',
+                      textAlign: pw.TextAlign.center,
+                      style: pw.TextStyle(fontSize: fontSizeBase - 0.5),
+                    ),
+                  ),
+                ],
+
+                pw.SizedBox(height: 4),
+
+                // 2. METADATA
+                pw.Text('Receipt #: $displayOrderNum', style: pw.TextStyle(fontSize: fontSizeBase)),
+                pw.Text('Date: $dateStr', style: pw.TextStyle(fontSize: fontSizeBase)),
+                if (receipt.tableNumber != null && receipt.tableNumber!.isNotEmpty)
+                  pw.Text('Table: ${receipt.tableName ?? receipt.tableNumber}', style: pw.TextStyle(fontSize: fontSizeBase)),
+
+                pw.SizedBox(height: 4),
+                _divider(),
+
+                // 3. ITEMS TABLE HEADER: Sr.  Product  Price  Qty  Total
+                pw.Row(
+                  children: [
+                    pw.Container(
+                      width: 14,
+                      child: pw.Text('Sr.', style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Expanded(
+                      flex: 5,
+                      child: pw.Text('Product', style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Container(
+                      width: 32,
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text('Price', style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Container(
+                      width: 26,
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text('Qty', style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Container(
+                      width: 38,
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text('Total', style: pw.TextStyle(fontSize: fontSizeBase - 0.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                  ],
+                ),
+                _divider(dashed: true),
+
+                // 4. ITEM ROWS
+                ...activeItems.asMap().entries.map((entry) {
+                  final idx = entry.key;
+                  final item = entry.value;
+                  final isCancelled = item.isCancelled;
+                  final displayName = item.name;
+                  final modifiers = <String>[];
+                  if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
+                    modifiers.add('(${item.size})');
+                  }
+                  if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
+                    modifiers.add('(${item.crust})');
+                  }
+                  if (item.toppings.isNotEmpty) {
+                    modifiers.add('(${item.toppings.join(", ")})');
+                  }
+                  if (item.notes != null && item.notes!.isNotEmpty) {
+                    modifiers.add('(${item.notes})');
+                  }
+
+                  final priceStr = isCancelled ? '-${item.unitPrice.round()}' : '${item.unitPrice.round()}';
+                  final qtyStr = isCancelled ? '-${item.quantity}' : '${item.quantity}';
+                  final totalStr = isCancelled ? '-${item.totalPrice.round()}' : '${item.totalPrice.round()}';
+
+                  return pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Row(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Container(
+                              width: 14,
+                              child: pw.Text(
+                                '${idx + 1}',
+                                style: pw.TextStyle(
+                                  fontSize: fontSizeBase,
+                                  decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                  decorationThickness: isCancelled ? 1.5 : null,
+                                  decorationColor: isCancelled ? PdfColors.black : null,
+                                  color: isCancelled ? PdfColors.black : null,
+                                ),
+                              ),
+                            ),
+                            pw.Expanded(
+                              flex: 5,
+                              child: pw.Column(
+                                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                                children: [
+                                  pw.Text(
+                                    displayName,
+                                    style: pw.TextStyle(
+                                      fontSize: fontSizeBase,
+                                      decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                      decorationThickness: isCancelled ? 1.5 : null,
+                                      decorationColor: isCancelled ? PdfColors.black : null,
+                                      color: isCancelled ? PdfColors.black : null,
+                                      fontWeight: isCancelled ? pw.FontWeight.bold : pw.FontWeight.normal,
+                                    ),
+                                  ),
+                                  ...modifiers.map((m) => pw.Text(
+                                        m,
+                                        style: pw.TextStyle(
+                                          fontSize: fontSizeBase - 1,
+                                          fontStyle: _cachedRobotoItalic != null ? pw.FontStyle.italic : pw.FontStyle.normal,
+                                          decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                          decorationThickness: isCancelled ? 1.5 : null,
+                                          decorationColor: isCancelled ? PdfColors.black : null,
+                                          color: isCancelled ? PdfColors.black : null,
+                                        ),
+                                      )),
+                                  if (isCancelled && item.cancelReason != null && item.cancelReason!.isNotEmpty)
+                                    pw.Text(
+                                      'Reason: ${item.cancelReason}',
+                                      style: pw.TextStyle(fontSize: fontSizeBase - 1, fontStyle: _cachedRobotoItalic != null ? pw.FontStyle.italic : pw.FontStyle.normal, color: PdfColors.black),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            pw.Container(
+                              width: 32,
+                              alignment: pw.Alignment.centerRight,
+                              child: pw.Text(
+                                priceStr,
+                                style: pw.TextStyle(
+                                  fontSize: fontSizeBase,
+                                  decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                  decorationThickness: isCancelled ? 1.5 : null,
+                                  decorationColor: isCancelled ? PdfColors.black : null,
+                                  color: isCancelled ? PdfColors.black : null,
+                                ),
+                              ),
+                            ),
+                            pw.Container(
+                              width: 26,
+                              alignment: pw.Alignment.centerRight,
+                              child: pw.Text(
+                                qtyStr,
+                                style: pw.TextStyle(
+                                  fontSize: fontSizeBase,
+                                  decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                  decorationThickness: isCancelled ? 1.5 : null,
+                                  decorationColor: isCancelled ? PdfColors.black : null,
+                                  color: isCancelled ? PdfColors.black : null,
+                                ),
+                              ),
+                            ),
+                            pw.Container(
+                              width: 38,
+                              alignment: pw.Alignment.centerRight,
+                              child: pw.Text(
+                                totalStr,
+                                style: pw.TextStyle(
+                                  fontSize: fontSizeBase,
+                                  decoration: isCancelled ? pw.TextDecoration.lineThrough : null,
+                                  decorationThickness: isCancelled ? 1.5 : null,
+                                  decorationColor: isCancelled ? PdfColors.black : null,
+                                  color: isCancelled ? PdfColors.black : null,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+
+                _divider(),
+
+                // 5. TOTALS SECTION
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.end,
+                    children: [
+                      pw.Text('Gross Total:', style: pw.TextStyle(fontSize: fontSizeBase, fontWeight: pw.FontWeight.bold)),
+                      pw.SizedBox(width: 8),
+                      pw.Text(totalQty.round().toString(), style: pw.TextStyle(fontSize: fontSizeBase, fontWeight: pw.FontWeight.bold)),
+                      pw.SizedBox(width: 12),
+                      pw.Text(grossAmt.round().toString(), style: pw.TextStyle(fontSize: fontSizeBase, fontWeight: pw.FontWeight.bold)),
+                    ],
+                  ),
+                ),
+
+                if (receipt.discountAmount > 0)
+                  _rowCalculation('Discount:', '- ${receipt.discountAmount.round()}', fontSizeBase),
+                if (calcTax > 0)
+                  _rowCalculation(
+                    'GST / Tax (${receipt.taxRate > 0 ? (receipt.taxRate == receipt.taxRate.roundToDouble() ? "${receipt.taxRate.toInt()}%" : "${receipt.taxRate.toStringAsFixed(1)}%") : ""}):',
+                    '+ ${calcTax.round()}',
+                    fontSizeBase,
+                  ),
+                if (receipt.serviceChargeAmount > 0)
+                  _rowCalculation('Service Charge:', '+ ${receipt.serviceChargeAmount.round()}', fontSizeBase),
+                if (receipt.deliveryFee > 0)
+                  _rowCalculation('Delivery Fee:', '+ ${receipt.deliveryFee.round()}', fontSizeBase),
+
+                _divider(thickness: 0.8),
+
+                // NET TOTAL
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text(
+                        'Net Total:',
+                        style: pw.TextStyle(fontSize: fontSizeTitle, fontWeight: pw.FontWeight.bold),
+                      ),
+                      pw.Text(
+                        netTotal.round().toString(),
+                        style: pw.TextStyle(fontSize: fontSizeTitle, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+                _divider(thickness: 0.8),
+
+                pw.SizedBox(height: 6),
+
+                // 6. FOOTER
+                pw.Center(
+                  child: pw.Text(
+                    'Thank you for your visit',
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(fontSize: fontSizeBase),
+                  ),
+                ),
+                pw.SizedBox(height: 20),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    return pdf;
+  }
+
+  static pw.Widget _divider({bool dashed = false, double thickness = 0.6}) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.symmetric(vertical: 3),
+      child: pw.Divider(
+        thickness: thickness,
+        borderStyle: dashed ? pw.BorderStyle.dashed : pw.BorderStyle.solid,
+      ),
+    );
+  }
+
+  static pw.Widget _rowCalculation(String label, String value, double fontSize, {bool isBold = false}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 1),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(label, style: pw.TextStyle(fontSize: fontSize, fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+          pw.Text(
+            value,
+            style: pw.TextStyle(
+              fontSize: fontSize,
+              fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

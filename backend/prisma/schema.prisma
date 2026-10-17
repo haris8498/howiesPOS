@@ -115,6 +115,8 @@ model Customer {
   total_orders_count Int       @default(0) @map("total_orders_count")
   total_spent        Decimal   @default(0.00) @map("total_spent") @db.Decimal(10, 2)
   special_notes      String    @default("") @map("special_notes") @db.Text
+  is_deleted         Boolean   @default(false) @map("is_deleted")
+  deleted_at         DateTime? @map("deleted_at") @db.Timestamp()
 
   // Relationships — customer appears in online and takeaway orders
   online_orders      OnlineOrderDetail[]
@@ -151,6 +153,8 @@ model RestaurantTable {
   active_order_id        String?           @map("active_order_id") @db.VarChar(36)
   reserved_customer_name String?           @map("reserved_customer_name") @db.VarChar(100)
   reservation_time       DateTime?         @map("reservation_time") @db.Timestamp()
+  version                Int               @default(1) @map("version")
+  updated_at             DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
 
   // Relationships — table only appears in Dine-In orders
   zone                   FloorZone?        @relation(fields: [zone_id], references: [id], onDelete: SetNull)
@@ -189,6 +193,8 @@ model MenuItem {
   is_veg       Boolean          @default(false) @map("is_veg")
   is_spicy     Boolean          @default(false) @map("is_spicy")
   is_available Boolean          @default(true) @map("is_available")
+  is_deleted   Boolean          @default(false) @map("is_deleted")
+  deleted_at   DateTime?        @map("deleted_at") @db.Timestamp()
 
   // Relationships
   category     MenuCategory     @relation(fields: [category_id], references: [id])
@@ -299,6 +305,8 @@ model Order {
   // ---- Audit & Shift Association ----
   shift_id             String?  @map("shift_id") @db.VarChar(36)
   created_at           DateTime @default(now()) @map("created_at") @db.Timestamp()
+  version              Int      @default(1) @map("version")
+  updated_at           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
 
   // Relationships
   daily_calculation    DailyCalculation? @relation(fields: [shift_id], references: [id], onDelete: SetNull)
@@ -570,10 +578,14 @@ model DailyCalculation {
   // Variance
   expected_cash_in_hand Decimal           @default(0.00) @map("expected_cash_in_hand") @db.Decimal(12, 2)
   variance_amount       Decimal           @default(0.00) @map("variance_amount") @db.Decimal(12, 2)
+  cash_variance         Decimal           @default(0.00) @map("cash_variance") @db.Decimal(10, 2)
+  variance_reason       String?           @map("variance_reason") @db.VarChar(255)
   
-  status               String             @default("ACTIVE") @db.VarChar(20)
+  status               String             @default("ACTIVE") @db.VarChar(20) // 'ACTIVE' | 'OFFLINE_CLOSED' | 'CLOSED'
   closing_notes        String?            @map("closing_notes") @db.Text
+  version              Int                @default(1) @map("version")
   created_at           DateTime           @default(now()) @map("created_at") @db.Timestamp()
+  updated_at           DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
   submitted_at         DateTime?          @map("submitted_at") @db.Timestamp()
 
   // Relationships
@@ -621,4 +633,43 @@ model DataSyncLog {
 
   @@map("data_sync_logs")
 }
+
+// ----------------------------------------------------
+// 24. OFFLINE REPLICATION & IDEMPOTENCY LEDGER (Spec §7.1)
+// ----------------------------------------------------
+
+// ── 1. IDEMPOTENCY LEDGER ─────────────────────────────────────
+model ProcessedOperation {
+  operation_id     String    @id @db.VarChar(36)
+  device_id        String    @db.VarChar(50)
+  entity_type      String    @db.VarChar(50)
+  entity_id        String    @db.VarChar(36)
+  request_hash     String    @db.VarChar(64)
+  status           String    @default("PROCESSING") @db.VarChar(20)
+  response_payload Json?
+  http_status      Int       @default(200)
+  created_at       DateTime  @default(now()) @db.Timestamp()
+  completed_at     DateTime? @db.Timestamp()
+
+  @@index([device_id, created_at])
+  @@index([entity_type, entity_id])
+  @@map("processed_operations")
+}
+
+// ── 2. MONOTONIC CHANGE-FEED REPLICATION STREAM ───────────────
+model SystemChangeLog {
+  global_sequence  BigInt    @id @default(autoincrement())
+  entity_type      String    @db.VarChar(50)
+  entity_id        String    @db.VarChar(36)
+  operation        String    @db.VarChar(20) // INSERT, UPDATE, DELETE
+  record_version   Int       @default(1)
+  is_deleted       Boolean   @default(false)
+  payload          Json
+  created_at       DateTime  @default(now()) @db.Timestamp()
+
+  @@index([global_sequence])
+  @@index([entity_type, entity_id])
+  @@map("system_change_logs")
+}
+
 

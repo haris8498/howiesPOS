@@ -85,4 +85,32 @@ export class SubmitDailyCalculationDto {
   @IsOptional()
   @IsString()
   closing_notes?: string;
+
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @IsOptional()
+  @IsString()
+  shift_id?: string;
+
+  @IsOptional()
+  @IsNumber()
+  cash_variance?: number;
+
+  @IsOptional()
+  @IsString()
+  variance_reason?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsNumber()
+  actual_cash_counted?: number;
+
+  @IsOptional()
+  @IsNumber()
+  expected_cash_drawer?: number;
 }

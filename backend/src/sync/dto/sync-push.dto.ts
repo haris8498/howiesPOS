@@ -37,6 +37,10 @@ export class SyncMutationDto {
   @Min(0)
   dependency_order?: number;
 
+  @IsString()
+  @IsOptional()
+  depends_on_operation_id?: string;
+
   @IsOptional()
   created_at?: string;
 

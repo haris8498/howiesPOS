@@ -408,51 +408,51 @@ export class DailyCalculationService {
       totalExpenses += Number(item.amount || 0);
     }
 
-    // Validation 1: Cash Skimming must strictly equal Total Shift Expenses
-    if (Math.abs(cashSkimming - totalExpenses) > 0.5) {
+    // Validation 1: Cash Skimming must strictly equal Total Shift Expenses (relaxed for OFFLINE_CLOSED)
+    if (dto.status !== 'OFFLINE_CLOSED' && (cashSkimming > 0 || totalExpenses > 0) && Math.abs(cashSkimming - totalExpenses) > 0.5) {
       throw new BadRequestException(
         `Validation Failed: Cash Skimming (PKR ${cashSkimming.toFixed(2)}) must equal Total Shift Expenses (PKR ${totalExpenses.toFixed(2)}).`
       );
     }
 
-    // Validation 2: Cash Submitted must equal System Cash Revenue - Total Expenses
-    // dto.total_cash represents cash submitted by cashier
+    // Validation 2 & 3 removed per Spec §8.3(3) and Decision 2:
+    // Cash variances (shortages/overages) are permitted without blocking.
+    // Variances are stored in PostgreSQL for supervisory audit.
     const submittedAmount = dto.total_cash !== undefined
       ? Number(dto.total_cash)
       : (dto.total_cash_submitted !== undefined ? Number(dto.total_cash_submitted) : Number(dto.cash_submitted || 0));
     const expectedSubmitted = Math.max(0, live.total_cash_sales - totalExpenses);
-    if (Math.abs(submittedAmount - expectedSubmitted) > 1.0) {
-      throw new BadRequestException(
-        `Validation Failed: Cash Submitted (PKR ${submittedAmount.toFixed(2)}) must equal System Cash Revenue (PKR ${live.total_cash_sales.toFixed(2)}) - Total Expenses (PKR ${totalExpenses.toFixed(2)}) = PKR ${expectedSubmitted.toFixed(2)}.`
-      );
-    }
-
-    // Validation 3: Cash Counted must equal Revenue + Starting Cash
     const expectedCounted = startingCash + live.total_cash_sales;
-    if ((cashSubmitted > 0 || expectedCounted > 0) && Math.abs(cashSubmitted - expectedCounted) > 1.0) {
-      const shortage = Math.abs(expectedCounted - cashSubmitted);
-      throw new BadRequestException(
-        `Validation Failed: Cash Counted (PKR ${cashSubmitted.toFixed(2)}) must equal System Cash Revenue (PKR ${live.total_cash_sales.toFixed(2)}) + Starting Cash (PKR ${startingCash.toFixed(2)}) = PKR ${expectedCounted.toFixed(2)}. Difference: PKR ${shortage.toFixed(2)}.`
-      );
-    }
 
     // Expected Cash = Starting Cash + System Cash Sales - Cash Skimming - Cash Expenses
     const expectedCash = startingCash + live.total_cash_sales - cashSkimming - totalExpenses;
-    const variance = submittedAmount - expectedSubmitted;
-
+    const variance = dto.cash_variance !== undefined
+      ? Number(dto.cash_variance)
+      : (submittedAmount - expectedSubmitted);
+    const cashVariance = dto.cash_variance !== undefined
+      ? Number(dto.cash_variance)
+      : (dto.actual_cash_counted !== undefined
+          ? Number(dto.actual_cash_counted) - expectedCounted
+          : (cashSubmitted - expectedCounted));
+    const shiftStatus = dto.status || 'SUBMITTED';
 
     const targetDateObj = dto.date ? new Date(dto.date) : new Date();
 
     // Execute within Prisma atomic transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // Find active session to update or create new
-      const activeSession = await tx.dailyCalculation.findFirst({
-        where: {
-          cashier_id: cashierId,
-          status: 'ACTIVE',
-        },
-        orderBy: { created_at: 'desc' },
-      });
+      const targetShiftId = dto.shift_id || dto.id;
+      const activeSession = targetShiftId
+        ? await tx.dailyCalculation.findUnique({
+            where: { id: targetShiftId },
+          })
+        : await tx.dailyCalculation.findFirst({
+            where: {
+              cashier_id: cashierId,
+              status: 'ACTIVE',
+            },
+            orderBy: { created_at: 'desc' },
+          });
 
       let calculation;
       if (activeSession) {
@@ -500,8 +500,11 @@ export class DailyCalculationService {
             total_cash_expenses: new Prisma.Decimal(totalExpenses),
             expected_cash_in_hand: new Prisma.Decimal(expectedCash),
             variance_amount: new Prisma.Decimal(variance),
-            status: 'SUBMITTED',
+            cash_variance: new Prisma.Decimal(cashVariance),
+            variance_reason: dto.variance_reason || null,
+            status: shiftStatus,
             closing_notes: dto.closing_notes || null,
+            version: { increment: 1 },
             submitted_at: new Date(),
           },
           include: { expense_items: true },
@@ -550,10 +553,14 @@ export class DailyCalculationService {
             opening_float: new Prisma.Decimal(startingCash),
             total_cash_submitted: new Prisma.Decimal(cashSubmitted),
             total_cash_expenses: new Prisma.Decimal(totalExpenses),
+            ...(dto.id ? { id: dto.id } : {}),
             expected_cash_in_hand: new Prisma.Decimal(expectedCash),
             variance_amount: new Prisma.Decimal(variance),
-            status: 'SUBMITTED',
+            cash_variance: new Prisma.Decimal(cashVariance),
+            variance_reason: dto.variance_reason || null,
+            status: shiftStatus,
             closing_notes: dto.closing_notes || null,
+            version: 1,
             submitted_at: new Date(),
             expense_items: {
               create: expenseItems.map((exp) => ({

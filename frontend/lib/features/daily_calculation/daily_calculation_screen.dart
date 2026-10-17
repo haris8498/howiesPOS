@@ -263,48 +263,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     }
 
 
-    if (!_isCountedMatched(expectedCounted)) {
-      final diff = (expectedCounted - _cashCounted).abs();
-      final diffMsg = _cashCounted < expectedCounted
-          ? 'Short by PKR ${diff.toStringAsFixed(0)}'
-          : 'Excess of PKR ${diff.toStringAsFixed(0)}';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Rule 3 Error: Cash Counted (PKR ${_cashCounted.toStringAsFixed(0)}) must equal System Cash Sales (PKR ${live.totalCashSales.toStringAsFixed(0)}) + Starting Cash (PKR ${startingCash.toStringAsFixed(0)}) = PKR ${expectedCounted.toStringAsFixed(0)}. ($diffMsg)',
-          ),
-          backgroundColor: AppColors.danger,
-        ),
-      );
-      return;
-    }
-
-    if (!_isSkimmingMatched) {
-      final diff = (_cashSkimming - _totalExpenses).abs();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Rule 1 Error: Cash Skimming (PKR ${_cashSkimming.toStringAsFixed(0)}) must equal Total Expenses (PKR ${_totalExpenses.toStringAsFixed(0)}). Difference: PKR ${diff.toStringAsFixed(0)}',
-          ),
-          backgroundColor: AppColors.danger,
-        ),
-      );
-      return;
-    }
-
-    if (!_isRevenueMatched(live.totalCashSales)) {
-      final expectedSubmitted = live.totalCashSales - _totalExpenses;
-      final diff = (_cashSubmitted - expectedSubmitted).abs();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Rule 2 Error: Cash Submitted (PKR ${_cashSubmitted.toStringAsFixed(0)}) must equal Cash Revenue (PKR ${live.totalCashSales.toStringAsFixed(0)}) - Expenses (PKR ${_totalExpenses.toStringAsFixed(0)}) = PKR ${expectedSubmitted.toStringAsFixed(0)}. Difference: PKR ${diff.toStringAsFixed(0)}',
-          ),
-          backgroundColor: AppColors.danger,
-        ),
-      );
-      return;
-    }
+    // Calculate cash variance per Spec §21 Decision 2 (negative = shortage, positive = overage)
+    final double cashVariance = _cashCounted - expectedCounted;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -322,7 +282,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'All calculation rules are verified. Submitting will record shift calculation into PostgreSQL database, reset occupied tables, and refresh the portal.',
+              'Shift closure records drawer counts and variances into the database, resets occupied tables, and refreshes the portal for the next shift.',
               style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -340,15 +300,27 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                   _buildConfirmRow('2. Cash Submitted:', 'PKR ${_cashSubmitted.toStringAsFixed(0)}'),
                   _buildConfirmRow('3. Cash Skimming:', 'PKR ${_cashSkimming.toStringAsFixed(0)}'),
                   _buildConfirmRow('Total Shift Expenses:', 'PKR ${_totalExpenses.toStringAsFixed(0)}'),
-                  _buildConfirmRow('Expected Cash Submitted (Revenue - Expense):', 'PKR ${(live.totalCashSales - _totalExpenses).toStringAsFixed(0)}'),
+                  _buildConfirmRow('Expected Cash Drawer:', 'PKR ${expectedCounted.toStringAsFixed(0)}'),
+                  _buildConfirmRow(
+                    'Cash Variance:',
+                    'PKR ${cashVariance.toStringAsFixed(0)} (${cashVariance < 0 ? "Shortage" : (cashVariance > 0 ? "Overage" : "Balanced")})',
+                  ),
                   _buildConfirmRow('System Cash Revenue:', 'PKR ${live.totalCashSales.toStringAsFixed(0)}'),
                 ],
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              '✓ Double-entry verification passed: Skimming == Expenses and Cash Submitted == Revenue - Expenses.',
-              style: TextStyle(fontSize: 11, color: Color(0xFF16A34A), fontWeight: FontWeight.bold),
+            Text(
+              cashVariance == 0
+                  ? '✓ Cash drawer matches expected figures.'
+                  : (cashVariance < 0
+                      ? '⚠️ Cash shortage of PKR ${(-cashVariance).toStringAsFixed(0)} will be recorded for supervisory review.'
+                      : 'ℹ️ Cash excess of PKR ${cashVariance.toStringAsFixed(0)} will be recorded for supervisory review.'),
+              style: TextStyle(
+                fontSize: 11,
+                color: cashVariance == 0 ? const Color(0xFF16A34A) : AppColors.warning,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
@@ -386,6 +358,13 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
       closingNotes: _closingNotesController.text.trim(),
       cashierId: cashierId,
       cashierName: cashierName,
+      cashVariance: cashVariance,
+      varianceReason: cashVariance != 0
+          ? (cashVariance < 0
+              ? 'Cash shortage of PKR ${(-cashVariance).toStringAsFixed(0)} reported at shift close'
+              : 'Cash overage of PKR ${cashVariance.toStringAsFixed(0)} reported at shift close')
+          : null,
+      expectedCashDrawer: expectedCounted,
     );
 
     if (record != null && mounted) {

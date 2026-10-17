@@ -37,6 +37,7 @@ class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCal
     required String id,
     required double actualCashCounted,
     required double cashVariance,
+    double? expectedCashDrawer,
     String? closingNotes,
     DateTime? submittedAt,
   }) {
@@ -44,6 +45,7 @@ class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCal
       LocalDailyCalculationsCompanion(
         status: const Value(DailyCalculationStatus.offlineClosed),
         actualCashCounted: Value(actualCashCounted),
+        expectedCashDrawer: expectedCashDrawer != null ? Value(expectedCashDrawer) : const Value.absent(),
         cashVariance: Value(cashVariance),
         closingNotes: Value(closingNotes),
         submittedAt: Value(submittedAt ?? DateTime.now()),

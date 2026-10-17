@@ -6,7 +6,11 @@ import 'table_repository.dart';
 import 'takeaway_repository.dart';
 import 'delivery_repository.dart';
 import 'pos_repository.dart';
+import 'package:uuid/uuid.dart';
+import '../config/feature_flags.dart';
+import '../core/database/tables/local_daily_calculations_table.dart';
 import '../features/reports/reports_providers.dart';
+import 'repositories/shift_repository_provider.dart';
 
 class DailyCalculationState {
   final DailyLiveSummaryModel liveSummary;
@@ -100,6 +104,21 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
 
   /// Check if active shift session exists or Starting Cash is needed
   Future<bool> checkActiveSession({String? cashierId}) async {
+    if (FeatureFlags.offlineFirstEnabled) {
+      try {
+        final shiftRepo = _ref.read(shiftRepositoryProvider);
+        final localSession = await shiftRepo.getActiveShift(cashierId ?? '');
+        if (localSession != null) {
+          state = state.copyWith(
+            hasActiveSession: true,
+            totalChangeCash: localSession.startingCash,
+            startingCash: localSession.startingCash,
+          );
+          return true;
+        }
+      } catch (_) {}
+    }
+
     try {
       final res = await _apiService.getActiveSession(cashierId: cashierId);
       final hasActive = res['has_active_session'] == true;
@@ -227,6 +246,44 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
     String? cashierName,
   }) async {
     state = state.copyWith(isSubmitting: true, clearMessages: true);
+
+    if (FeatureFlags.offlineFirstEnabled) {
+      try {
+        final shiftRepo = _ref.read(shiftRepositoryProvider);
+        final localShift = await shiftRepo.openShift(
+          cashierId: cashierId ?? 'UNKNOWN',
+          cashierName: cashierName ?? 'Cashier',
+          startingCash: startingCash,
+          shiftName: shiftName,
+        );
+
+        state = state.copyWith(
+          hasActiveSession: true,
+          startingCash: localShift.startingCash,
+          totalChangeCash: localShift.startingCash,
+          isSubmitting: false,
+          successMessage: 'Starting cash registered. Register is now open!',
+        );
+
+        try { await _ref.read(tableProvider.notifier).loadTables(); } catch (_) {}
+        try { await _ref.read(takeawayProvider.notifier).loadTakeawayOrders(); } catch (_) {}
+        try { await _ref.read(deliveryProvider.notifier).loadDeliveryData(); } catch (_) {}
+        try { _ref.read(posProvider.notifier).resetForNewShift(); } catch (_) {}
+        try {
+          _ref.invalidate(reportSummaryProvider);
+          _ref.invalidate(reportProductsProvider);
+        } catch (_) {}
+
+        return true;
+      } catch (e) {
+        state = state.copyWith(
+          isSubmitting: false,
+          errorMessage: 'Failed to start session offline: $e',
+        );
+        return false;
+      }
+    }
+
     try {
       final payload = {
         'starting_cash': startingCash,
@@ -337,17 +394,116 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
     String? closingNotes,
     String? cashierId,
     String? cashierName,
+    double? cashVariance,
+    String? varianceReason,
+    String? status,
+    double? expectedCashDrawer,
   }) async {
     state = state.copyWith(isSubmitting: true, clearMessages: true);
+
+    final effectiveStartingCash = startingCash ?? state.startingCash;
+    final effectiveExpectedCash = expectedCashDrawer ??
+        (effectiveStartingCash + state.liveSummary.totalCashSales - cashSkimming);
+    final effectiveVariance = cashVariance ?? (cashSubmitted - effectiveExpectedCash);
+
+    if (FeatureFlags.offlineFirstEnabled) {
+      try {
+        final shiftRepo = _ref.read(shiftRepositoryProvider);
+        final activeShift = await shiftRepo.getActiveShift(cashierId ?? '');
+        final shiftId = activeShift?.id ?? const Uuid().v7();
+
+        final closedShift = await shiftRepo.closeShift(
+          shiftId: shiftId,
+          actualCashCounted: cashSubmitted,
+          expectedCashDrawer: effectiveExpectedCash,
+          cashSubmitted: totalCash > 0 ? totalCash : cashSubmitted,
+          cashSkimming: cashSkimming,
+          cashVariance: effectiveVariance,
+          varianceReason: varianceReason,
+          closingNotes: closingNotes,
+          expenseItems: expenseItems.map((e) => e.toJson()).toList(),
+        );
+
+        // Reset Table, Takeaway, Delivery, POS, and Reports
+        try { await _ref.read(tableProvider.notifier).loadTables(); } catch (_) {}
+        try {
+          _ref.read(takeawayProvider.notifier).resetForNewShift();
+          await _ref.read(takeawayProvider.notifier).loadTakeawayOrders();
+        } catch (_) {}
+        try {
+          _ref.read(deliveryProvider.notifier).resetForNewShift();
+          await _ref.read(deliveryProvider.notifier).loadDeliveryData();
+        } catch (_) {}
+        try { _ref.read(posProvider.notifier).resetForNewShift(); } catch (_) {}
+        try {
+          _ref.invalidate(reportSummaryProvider);
+          _ref.invalidate(reportProductsProvider);
+        } catch (_) {}
+
+        final localRecord = DailyCalculationRecordModel(
+          id: closedShift.id,
+          date: closedShift.createdAt,
+          shiftName: 'Full Day',
+          cashierId: closedShift.cashierId,
+          cashierName: closedShift.cashierName,
+          totalGrossSales: state.liveSummary.totalGrossSales,
+          totalCashSales: state.liveSummary.totalCashSales,
+          totalCardSales: state.liveSummary.totalCardSales,
+          totalOnlineSales: state.liveSummary.totalOnlineSales,
+          totalDiscounts: state.liveSummary.totalDiscounts,
+          totalTax: state.liveSummary.totalTax,
+          totalOrdersCount: state.liveSummary.totalOrdersCount,
+          dineInCount: state.liveSummary.dineInCount,
+          takeawayCount: state.liveSummary.takeawayCount,
+          onlineCount: state.liveSummary.onlineCount,
+          openingFloat: closedShift.startingCash,
+          startingCash: closedShift.startingCash,
+          totalChangeCash: 0.0,
+          cashSubmitted: closedShift.actualCashCounted ?? cashSubmitted,
+          totalCash: totalCash > 0 ? totalCash : cashSubmitted,
+          cashSkimming: cashSkimming,
+          totalCashSubmitted: closedShift.actualCashCounted ?? cashSubmitted,
+          totalCashExpenses: 0.0,
+          expectedCashInHand: closedShift.expectedCashDrawer,
+          varianceAmount: closedShift.cashVariance,
+          status: DailyCalculationStatus.offlineClosed,
+          closingNotes: closedShift.closingNotes,
+          submittedAt: closedShift.submittedAt ?? DateTime.now(),
+          expenseItems: expenseItems,
+        );
+
+        state = state.copyWith(
+          hasActiveSession: false,
+          isSubmitting: false,
+          selectedRecord: localRecord,
+          totalChangeCash: 0.0,
+          startingCash: 0.0,
+          successMessage: 'Daily calculation submitted and shift closed offline successfully!',
+        );
+
+        return localRecord;
+      } catch (e) {
+        state = state.copyWith(
+          isSubmitting: false,
+          errorMessage: 'Failed to submit calculation offline: $e',
+        );
+        return null;
+      }
+    }
+
     try {
       final payload = {
         'cash_submitted': cashSubmitted,
         'total_cash': totalCash,
         'cash_skimming': cashSkimming,
         'total_cash_submitted': cashSubmitted,
-        'starting_cash': startingCash ?? state.startingCash,
-        'opening_float': startingCash ?? state.startingCash,
+        'starting_cash': effectiveStartingCash,
+        'opening_float': effectiveStartingCash,
         'expense_items': expenseItems.map((e) => e.toJson()).toList(),
+        'cash_variance': effectiveVariance,
+        'expected_cash_drawer': effectiveExpectedCash,
+        if (varianceReason != null && varianceReason.isNotEmpty) 'variance_reason': varianceReason,
+        if (status != null && status.isNotEmpty) 'status': status,
         if (closingNotes != null && closingNotes.isNotEmpty) 'closing_notes': closingNotes,
         if (cashierId != null && cashierId.isNotEmpty) 'cashier_id': cashierId,
         if (cashierName != null && cashierName.isNotEmpty) 'cashier_name': cashierName,

@@ -8,7 +8,7 @@ export interface SyncMutationContext {
   receivedAt: Date;
 }
 
-export type SyncResultStatus = 'SYNCED' | 'CONFLICT' | 'FAILED_FATAL' | 'DUPLICATE';
+export type SyncResultStatus = 'SYNCED' | 'CONFLICT' | 'FAILED_FATAL' | 'DUPLICATE' | 'FAILED_RETRYABLE';
 
 export interface SyncMutationResult {
   operation_id: string;

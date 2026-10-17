@@ -48,10 +48,19 @@ dependencies:
   pdf: ^3.13.1
   printing: ^5.15.1
   crypto: ^3.0.3
+  ffi: ^2.2.0
+  path_provider: ^2.1.5
+  drift: 2.35.2
+  sqlite3: 3.5.2
+  sqlcipher_flutter_libs: 0.7.0+eol
+  sqlite3_flutter_libs: 0.6.0+eol
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  drift_dev: 2.35.1
+  build_runner: 2.15.1
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -59,6 +68,11 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -18,5 +18,5 @@
 | GATE C | phase-verifier (Scope: 5) | Alone | Completed | [`docs/offline-implementation/GATE-C-verification.md`](file:///D:/HowiePOSUPdated/Hbackend-Hfrontend-main/docs/offline-implementation/GATE-C-verification.md) |
 | Stage 6 | security-cleanup | Alone | Completed | [`docs/offline-implementation/S6-security-cleanup.md`](file:///D:/HowiePOSUPdated/Hbackend-Hfrontend-main/docs/offline-implementation/S6-security-cleanup.md) |
 
-| Stage 7 | e2e-failure-scenario-tester | Alone | Pending | `docs/offline-implementation/S7-e2e-tests.md` |
+| Stage 7 | e2e-failure-scenario-tester | Alone | Completed | [`docs/offline-implementation/S7-e2e-tests.md`](file:///D:/HowiePOSUPdated/Hbackend-Hfrontend-main/docs/offline-implementation/S7-e2e-tests.md) |
 | GATE D | phase-verifier (Scope: Full Final) | Alone | Pending | `docs/offline-implementation/GATE-D-verification.md` |

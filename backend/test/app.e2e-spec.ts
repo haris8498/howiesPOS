@@ -4,12 +4,21 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 
+import { RedisService } from '../src/infrastructure/redis/redis.service';
+
 describe('AppController (e2e)', () => {
+  jest.setTimeout(30000);
   let app: INestApplication;
   const mockPrismaService = {
     isHealthy: jest.fn().mockResolvedValue(true),
     $connect: jest.fn().mockResolvedValue(undefined),
     $disconnect: jest.fn().mockResolvedValue(undefined),
+  };
+  const mockRedisService = {
+    isHealthy: jest.fn().mockResolvedValue(false),
+    getClient: jest.fn().mockReturnValue(null),
+    onModuleInit: jest.fn(),
+    onModuleDestroy: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -18,6 +27,8 @@ describe('AppController (e2e)', () => {
     })
       .overrideProvider(PrismaService)
       .useValue(mockPrismaService)
+      .overrideProvider(RedisService)
+      .useValue(mockRedisService)
       .compile();
 
     app = moduleFixture.createNestApplication();

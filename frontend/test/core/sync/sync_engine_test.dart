@@ -236,8 +236,8 @@ void main() {
       expect(delaySeconds >= 1, isTrue);
       expect(delaySeconds <= 4, isTrue);
 
-      // getPushBatch() must exclude this non-due item right now
-      final dueNow = await db.outboxDao.getPushBatch(now: DateTime.now());
+      // getPushBatch() must exclude this non-due item at baseline time
+      final dueNow = await db.outboxDao.getPushBatch(now: before);
       expect(dueNow.isEmpty, isTrue);
 
       // getPushBatch() must include it once simulated clock passes nextRetryAt

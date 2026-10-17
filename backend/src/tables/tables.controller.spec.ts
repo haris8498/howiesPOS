@@ -21,7 +21,10 @@ describe('TablesController', () => {
     active_order_id: null,
     reserved_customer_name: null,
     reservation_time: null,
+    version: 1,
+    updated_at: new Date(),
   };
+
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({

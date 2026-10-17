@@ -10,12 +10,16 @@ import 'package:uuid/uuid.dart';
 
 import '../../config/api_config.dart';
 import '../database/app_database.dart';
+import '../database/daos/retention_dao.dart';
 import '../database/tables/sync_outbox_table.dart';
 import '../database/tables/sync_conflicts_table.dart';
 import '../network/api_client.dart';
 import '../network/kitchen_socket_service.dart';
 import '../security/token_storage.dart';
 import 'connectivity_notifier.dart';
+
+export '../database/daos/retention_dao.dart' show RetentionPruneResult;
+
 
 /// Worker operational status
 enum SyncWorkerStatus {
@@ -137,9 +141,13 @@ class SyncBackgroundWorker {
   final int batchSize;
   final Duration pollInterval;
   final Duration circuitBreakerPauseDuration;
+  final Duration retentionPeriod;
+  final Duration retentionPruneInterval;
   final Duration zombieTimeout;
   final Random _random;
   final String? syncUrlOverride;
+
+  DateTime? _lastPruneAt;
 
   final SyncStateNotifier stateNotifier = SyncStateNotifier();
 
@@ -165,10 +173,13 @@ class SyncBackgroundWorker {
     this.batchSize = 25,
     this.pollInterval = const Duration(seconds: 30),
     this.circuitBreakerPauseDuration = const Duration(seconds: 30),
+    this.retentionPeriod = const Duration(days: 30),
+    this.retentionPruneInterval = const Duration(hours: 24),
     this.zombieTimeout = const Duration(seconds: 60),
     Random? random,
     this.syncUrlOverride,
   }) : _random = random ?? Random();
+
 
   SyncWorkerState get state => stateNotifier.currentState;
 
@@ -233,6 +244,9 @@ class SyncBackgroundWorker {
         _onPeriodicTick();
       }
     });
+
+    // 7. 30-Day Retention Pruning Job on Startup (§3.3, §18 Phase 7, Directive Q9.2)
+    await pruneOldSyncedData();
   }
 
   /// Stops background activities without disposing.
@@ -283,6 +297,36 @@ class SyncBackgroundWorker {
     } catch (_) {}
   }
 
+  /// 30-Day Retention Pruning Job per Spec §3.3, §18 Phase 7, Directive Q9.2.
+  ///
+  /// Prunes:
+  /// - `local_orders` with syncStatus = 'synced' older than [olderThan] (default 30 days)
+  /// - `sync_outbox` with status = 'SYNCED' older than [olderThan]
+  /// - `offline_print_jobs` with status = 'PRINTED' older than [olderThan]
+  ///
+  /// Invariant: NEVER prunes pending, retryable, conflict, or failed rows.
+  Future<RetentionPruneResult> pruneOldSyncedData({
+    Duration? olderThan,
+    DateTime? referenceDate,
+  }) async {
+    try {
+      final effectiveDuration = olderThan ?? retentionPeriod;
+      final result = await db.pruneSyncedDataOlderThan(
+        olderThan: effectiveDuration,
+        referenceDate: referenceDate,
+      );
+      _lastPruneAt = DateTime.now();
+      return result;
+    } catch (_) {
+      // Non-blocking: database pruning failure should never halt sync engine
+      return const RetentionPruneResult(
+        ordersDeleted: 0,
+        outboxDeleted: 0,
+        printJobsDeleted: 0,
+      );
+    }
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // 2. RECONNECTION & TRIGGERS (§13)
   // ───────────────────────────────────────────────────────────────────────────
@@ -299,7 +343,14 @@ class SyncBackgroundWorker {
       triggerPush();
       triggerPull();
     }
+
+    // Check retention pruning cadence (§3.3, §18 Phase 7, Directive Q9.2)
+    final now = DateTime.now();
+    if (_lastPruneAt == null || now.difference(_lastPruneAt!) >= retentionPruneInterval) {
+      pruneOldSyncedData();
+    }
   }
+
 
   // ───────────────────────────────────────────────────────────────────────────
   // 3. PUSH PIPELINE (Spec §6.1-§6.4, §8.1.1)

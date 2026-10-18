@@ -1,4 +1,11 @@
+import 'dart:convert';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+import '../config/feature_flags.dart';
+import '../core/database/app_database.dart';
+import '../core/database/tables/sync_outbox_table.dart';
+import '../core/sync/sync_providers.dart';
 import '../domain/models/restaurant_table.dart';
 import '../services/api/api_providers.dart';
 import '../services/api/tables_api_service.dart';
@@ -41,8 +48,9 @@ class TableState {
 
 class TableNotifier extends StateNotifier<TableState> {
   final TablesApiService _tablesApiService;
+  final AppDatabase? db;
 
-  TableNotifier({TablesApiService? tablesApiService})
+  TableNotifier({TablesApiService? tablesApiService, this.db})
       : _tablesApiService = tablesApiService ?? TablesApiService(),
         super(const TableState(
           tables: [],
@@ -52,9 +60,71 @@ class TableNotifier extends StateNotifier<TableState> {
 
   Future<void> loadTables() async {
     state = state.copyWith(isLoading: true);
+    final localDb = db;
     try {
       final jsonList = await _tablesApiService.listTables();
       final tables = jsonList.map((j) => RestaurantTable.fromBackendJson(j)).toList();
+      final currentMap = {for (final t in state.tables) t.id: t};
+      final mergedTables = await Future.wait(tables.map((st) async {
+        final local = currentMap[st.id];
+        if (local != null) {
+          if (local.status == TableStatus.occupied) {
+            if (st.status == TableStatus.available) {
+              // Local table has active occupation that server hasn't processed yet
+              return local;
+            }
+            if (local.currentOrderItems.isNotEmpty && st.currentOrderItems.isEmpty) {
+              // Server knows occupied but doesn't have order items breakdown yet
+              return st.copyWith(
+                currentOrderItems: local.currentOrderItems,
+                currentBillAmount: st.currentBillAmount > 0 ? st.currentBillAmount : local.currentBillAmount,
+                activeOrderId: st.activeOrderId ?? local.activeOrderId,
+                activeOrderNumber: st.activeOrderNumber ?? local.activeOrderNumber,
+              );
+            }
+          } else if (local.status == TableStatus.reserved && st.status == TableStatus.available) {
+            // Local table has active reservation that server hasn't processed yet
+            return local;
+          }
+        }
+        // If table is occupied on server but order items are empty, check local SQLite ordersDao
+        if (st.status == TableStatus.occupied && st.currentOrderItems.isEmpty && st.activeOrderId != null && localDb != null) {
+          try {
+            final localItems = await localDb.ordersDao.getOrderItems(st.activeOrderId!);
+            if (localItems.isNotEmpty) {
+              final mappedItems = localItems.map((item) => {
+                'id': item.id,
+                'name': item.itemName,
+                'quantity': item.quantity,
+                'price': item.unitPrice,
+                'selected_size': item.sizeName ?? 'Regular',
+                'notes': item.notes,
+                'is_cancelled': item.isCancelled,
+                'cancel_reason': item.cancelReason,
+              }).toList();
+              final localTotal = localItems.where((i) => !i.isCancelled).fold<double>(0.0, (acc, i) => acc + i.subtotal);
+              return st.copyWith(
+                currentOrderItems: mappedItems,
+                currentBillAmount: st.currentBillAmount > 0 ? st.currentBillAmount : localTotal,
+              );
+            }
+          } catch (_) {}
+        }
+        return st;
+      }));
+
+      // Cache tables locally in Drift catalog
+      if (FeatureFlags.offlineFirstEnabled && localDb != null && mergedTables.isNotEmpty) {
+        final companions = mergedTables.map((t) => LocalRestaurantTablesCompanion(
+          id: Value(t.id),
+          tableNumber: Value(t.tableNumber),
+          name: Value(t.name),
+          capacity: Value(t.capacity),
+          status: Value(t.status.name),
+          activeOrderId: Value(t.activeOrderId),
+        )).toList();
+        await localDb.catalogDao.upsertRestaurantTables(companions);
+      }
 
       // Load distinct zones from backend floor_zones table
       List<String> zonesList = [];
@@ -66,12 +136,61 @@ class TableNotifier extends StateNotifier<TableState> {
       } catch (_) {}
 
       if (zonesList.isEmpty) {
-        final dynamicZones = tables.map((t) => t.section).where((s) => s.isNotEmpty).toSet();
+        final dynamicZones = mergedTables.map((t) => t.section).where((s) => s.isNotEmpty).toSet();
         zonesList = {'Hall', 'Family Hall', 'Office', ...dynamicZones}.toList();
       }
 
-      state = state.copyWith(tables: tables, zones: zonesList, isLoading: false);
+      state = state.copyWith(tables: mergedTables, zones: zonesList, isLoading: false);
     } catch (_) {
+      // Offline fallback: load from local SQLite catalog
+      if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+        final localTables = await localDb.catalogDao.getAllTables();
+        if (localTables.isNotEmpty) {
+          final currentMap = {for (final t in state.tables) t.id: t};
+          final mapped = await Future.wait(localTables.map((lt) async {
+            final local = currentMap[lt.id];
+            List<Map<String, dynamic>> items = local?.currentOrderItems ?? const [];
+            double bill = local?.currentBillAmount ?? 0.0;
+            if (items.isEmpty && lt.activeOrderId != null) {
+              try {
+                final dbItems = await localDb.ordersDao.getOrderItems(lt.activeOrderId!);
+                if (dbItems.isNotEmpty) {
+                  items = dbItems.map((i) => {
+                    'id': i.id,
+                    'name': i.itemName,
+                    'quantity': i.quantity,
+                    'price': i.unitPrice,
+                    'selected_size': i.sizeName ?? 'Regular',
+                    'notes': i.notes,
+                    'is_cancelled': i.isCancelled,
+                    'cancel_reason': i.cancelReason,
+                  }).toList();
+                  bill = dbItems.where((i) => !i.isCancelled).fold<double>(0.0, (acc, i) => acc + i.subtotal);
+                }
+              } catch (_) {}
+            }
+            return RestaurantTable(
+              id: lt.id,
+              tableNumber: lt.tableNumber,
+              name: lt.name,
+              capacity: lt.capacity,
+              section: local?.section ?? 'Hall',
+              status: TableStatus.values.firstWhere(
+                (s) => s.name.toLowerCase() == lt.status.toLowerCase(),
+                orElse: () => TableStatus.available,
+              ),
+              activeOrderId: lt.activeOrderId ?? local?.activeOrderId,
+              activeOrderNumber: local?.activeOrderNumber,
+              currentBillAmount: bill,
+              currentOrderItems: items,
+              reservedCustomerName: local?.reservedCustomerName,
+              reservationTime: local?.reservationTime,
+            );
+          }));
+          state = state.copyWith(tables: mapped, isLoading: false);
+          return;
+        }
+      }
       state = state.copyWith(isLoading: false);
     }
   }
@@ -81,6 +200,51 @@ class TableNotifier extends StateNotifier<TableState> {
   }
 
   Future<void> updateTableStatus(String tableId, TableStatus newStatus, {String? activeOrderId}) async {
+    final localDb = db;
+    if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+      final existingLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).getSingleOrNull();
+      final currentVer = existingLocal?.version ?? 1;
+      final nextVer = currentVer + 1;
+
+      await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).write(
+        LocalRestaurantTablesCompanion(
+          status: Value(newStatus.name),
+          activeOrderId: Value(newStatus == TableStatus.occupied ? activeOrderId : null),
+          version: Value(nextVer),
+        ),
+      );
+      final opId = const Uuid().v7();
+      await localDb.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: const Value('POS-P1'),
+          entityType: const Value('table'),
+          entityId: Value(tableId),
+          operationType: const Value('UPDATE'),
+          baseVersion: Value(currentVer),
+          dependencyOrder: const Value(3),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode({
+            'id': tableId,
+            'status': newStatus.name,
+            'active_order_id': newStatus == TableStatus.occupied ? activeOrderId : null,
+          })),
+          createdAt: Value(DateTime.now()),
+        ),
+      );
+    }
+
+    final updated = state.tables.map((table) {
+      if (table.id == tableId) {
+        return table.copyWith(
+          status: newStatus,
+          activeOrderId: newStatus == TableStatus.occupied ? activeOrderId ?? table.activeOrderId : null,
+        );
+      }
+      return table;
+    }).toList();
+    state = state.copyWith(tables: updated);
+
     try {
       await _tablesApiService.updateTableStatus(
         tableId,
@@ -88,18 +252,7 @@ class TableNotifier extends StateNotifier<TableState> {
         activeOrderId: newStatus == TableStatus.occupied ? activeOrderId : null,
       );
       await loadTables();
-    } catch (_) {
-      final updated = state.tables.map((table) {
-        if (table.id == tableId) {
-          return table.copyWith(
-            status: newStatus,
-            activeOrderId: newStatus == TableStatus.occupied ? activeOrderId ?? table.activeOrderId : null,
-          );
-        }
-        return table;
-      }).toList();
-      state = state.copyWith(tables: updated);
-    }
+    } catch (_) {}
   }
 
   Future<void> updateTableBillAndStatus(
@@ -110,14 +263,40 @@ class TableNotifier extends StateNotifier<TableState> {
     String? activeOrderNumber,
     List<Map<String, dynamic>>? orderItems,
   }) async {
-    try {
-      await _tablesApiService.updateTableStatus(
-        tableId,
-        status: newStatus.name,
-        currentBillAmount: billAmount,
-        activeOrderId: activeOrderId,
+    final localDb = db;
+    if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+      final existingLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).getSingleOrNull();
+      final currentVer = existingLocal?.version ?? 1;
+      final nextVer = currentVer + 1;
+
+      await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).write(
+        LocalRestaurantTablesCompanion(
+          status: Value(newStatus.name),
+          activeOrderId: Value(newStatus == TableStatus.occupied ? activeOrderId : null),
+          version: Value(nextVer),
+        ),
       );
-    } catch (_) {}
+      final opId = const Uuid().v7();
+      await localDb.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: const Value('POS-P1'),
+          entityType: const Value('table'),
+          entityId: Value(tableId),
+          operationType: const Value('UPDATE'),
+          baseVersion: Value(currentVer),
+          dependencyOrder: const Value(3),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode({
+            'id': tableId,
+            'status': newStatus.name,
+            'current_bill_amount': billAmount,
+            'active_order_id': activeOrderId,
+          })),
+          createdAt: Value(DateTime.now()),
+        ),
+      );
+    }
 
     final updated = state.tables.map((table) {
       if (table.id == tableId) {
@@ -136,6 +315,15 @@ class TableNotifier extends StateNotifier<TableState> {
       return table;
     }).toList();
     state = state.copyWith(tables: updated);
+
+    try {
+      await _tablesApiService.updateTableStatus(
+        tableId,
+        status: newStatus.name,
+        currentBillAmount: billAmount,
+        activeOrderId: activeOrderId,
+      );
+    } catch (_) {}
   }
 
   void updateTableOrderItems(String tableId, List<Map<String, dynamic>> items, double newBill) {
@@ -157,24 +345,61 @@ class TableNotifier extends StateNotifier<TableState> {
   }
 
   Future<void> releaseTable(String tableId) async {
+    final localDb = db;
+    if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+      try {
+        final existingLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).getSingleOrNull();
+        final currentVer = existingLocal?.version ?? 1;
+        final nextVer = currentVer + 1;
+
+        await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).write(
+          LocalRestaurantTablesCompanion(
+            status: const Value('available'),
+            activeOrderId: const Value(null),
+            version: Value(nextVer),
+          ),
+        );
+        final opId = const Uuid().v7();
+        await localDb.outboxDao.insertEntry(
+          SyncOutboxCompanion(
+            operationId: Value(opId),
+            deviceId: const Value('POS-P1'),
+            entityType: const Value('table'),
+            entityId: Value(tableId),
+            operationType: const Value('UPDATE'),
+            baseVersion: Value(currentVer),
+            dependencyOrder: const Value(3),
+            status: const Value(SyncOutboxStatus.pending),
+            payload: Value(jsonEncode({
+              'id': tableId,
+              'status': TableStatus.available.name,
+              'current_bill_amount': 0.0,
+              'active_order_id': null,
+            })),
+            createdAt: Value(DateTime.now()),
+          ),
+        );
+      } catch (_) {}
+    }
+
+    final updated = state.tables.map((table) {
+      if (table.id == tableId) {
+        return table.copyWith(
+          status: TableStatus.available,
+          activeOrderId: null,
+          currentBillAmount: 0.0,
+          currentCustomerCount: 0,
+          currentOrderItems: [],
+        );
+      }
+      return table;
+    }).toList();
+    state = state.copyWith(tables: updated);
+
     try {
       await _tablesApiService.releaseTable(tableId);
       await loadTables();
-    } catch (_) {
-      final updated = state.tables.map((table) {
-        if (table.id == tableId) {
-          return table.copyWith(
-            status: TableStatus.available,
-            activeOrderId: null,
-            currentBillAmount: 0.0,
-            currentCustomerCount: 0,
-            currentOrderItems: [],
-          );
-        }
-        return table;
-      }).toList();
-      state = state.copyWith(tables: updated);
-    }
+    } catch (_) {}
   }
 
   Future<void> transferTable(String fromTableId, String toTableId) async {
@@ -208,6 +433,55 @@ class TableNotifier extends StateNotifier<TableState> {
   }
 
   Future<void> reserveTable(String tableId, String customerName, DateTime reservationTime, {int partySize = 2}) async {
+    final localDb = db;
+    if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+      try {
+        final existingLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).getSingleOrNull();
+        final currentVer = existingLocal?.version ?? 1;
+        final nextVer = currentVer + 1;
+
+        await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(tableId))).write(
+          LocalRestaurantTablesCompanion(
+            status: const Value('reserved'),
+            version: Value(nextVer),
+          ),
+        );
+        final opId = const Uuid().v7();
+        await localDb.outboxDao.insertEntry(
+          SyncOutboxCompanion(
+            operationId: Value(opId),
+            deviceId: const Value('POS-P1'),
+            entityType: const Value('table'),
+            entityId: Value(tableId),
+            operationType: const Value('UPDATE'),
+            baseVersion: Value(currentVer),
+            dependencyOrder: const Value(3),
+            status: const Value(SyncOutboxStatus.pending),
+            payload: Value(jsonEncode({
+              'id': tableId,
+              'status': 'reserved',
+              'reserved_customer_name': customerName,
+              'reservation_time': reservationTime.toIso8601String(),
+              'party_size': partySize,
+            })),
+            createdAt: Value(DateTime.now()),
+          ),
+        );
+      } catch (_) {}
+    }
+
+    final updated = state.tables.map((table) {
+      if (table.id == tableId) {
+        return table.copyWith(
+          status: TableStatus.reserved,
+          reservedCustomerName: customerName,
+          reservationTime: reservationTime,
+        );
+      }
+      return table;
+    }).toList();
+    state = state.copyWith(tables: updated);
+
     try {
       await _tablesApiService.updateReservation(
         tableId,
@@ -216,19 +490,7 @@ class TableNotifier extends StateNotifier<TableState> {
         partySize: partySize,
       );
       await loadTables();
-    } catch (_) {
-      final updated = state.tables.map((table) {
-        if (table.id == tableId) {
-          return table.copyWith(
-            status: TableStatus.reserved,
-            reservedCustomerName: customerName,
-            reservationTime: reservationTime,
-          );
-        }
-        return table;
-      }).toList();
-      state = state.copyWith(tables: updated);
-    }
+    } catch (_) {}
   }
 
   void addWaitlistEntry(WaitlistEntry entry) {
@@ -299,5 +561,6 @@ class TableNotifier extends StateNotifier<TableState> {
 
 final tableProvider = StateNotifierProvider<TableNotifier, TableState>((ref) {
   final tablesApi = ref.read(tablesApiServiceProvider);
-  return TableNotifier(tablesApiService: tablesApi);
+  final db = FeatureFlags.offlineFirstEnabled ? ref.watch(appDatabaseProvider) : null;
+  return TableNotifier(tablesApiService: tablesApi, db: db);
 });

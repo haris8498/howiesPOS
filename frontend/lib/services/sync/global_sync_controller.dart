@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/sync/sync_providers.dart';
 import '../../data/customer_repository.dart';
 import '../../data/daily_calculation_repository.dart';
 import '../../data/delivery_repository.dart';
@@ -42,12 +43,24 @@ class GlobalSyncController {
     bool syncSuccess = true;
     String? errorMessage;
 
-    // 1. Sync pending offline orders to Cloud
+    // 0. Explicitly probe health so online status is freshly verified
     try {
-      syncedCount = await ref.read(dataSyncProvider.notifier).syncAllPending();
-    } catch (e) {
+      await ref.read(connectivityNotifierProvider.notifier).probeHealth();
+    } catch (_) {}
+
+    final isOnline = ref.read(connectivityNotifierProvider).isOnline;
+
+    // 1. Sync pending offline orders to Cloud if online
+    if (isOnline) {
+      try {
+        syncedCount = await ref.read(dataSyncProvider.notifier).syncAllPending();
+      } catch (e) {
+        syncSuccess = false;
+        errorMessage = e.toString();
+      }
+    } else {
       syncSuccess = false;
-      errorMessage = e.toString();
+      errorMessage = 'Backend server is offline';
     }
 
     // 2. Refresh synchronization ledger overview
@@ -103,7 +116,10 @@ class GlobalSyncController {
     if (showFeedback && context.mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
-      if (!syncSuccess) {
+      final pendingCount = ref.read(dataSyncProvider).summary.pendingCount;
+
+      if (!syncSuccess || !isOnline) {
+        final reason = errorMessage != null ? ' ($errorMessage)' : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -112,7 +128,7 @@ class GlobalSyncController {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Offline Mode: Screen refreshed. Local changes safe (${errorMessage ?? "Connection issue"}).',
+                    'Offline Mode: Backend server is offline$reason. Local orders safely stored in SQLite.',
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -140,6 +156,27 @@ class GlobalSyncController {
               ],
             ),
             backgroundColor: const Color(0xFF16A34A),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      } else if (pendingCount > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.sync_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Offline orders remain pending: $pendingCount waiting for cloud sync worker.',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFFD97706),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

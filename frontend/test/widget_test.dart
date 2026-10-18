@@ -23,5 +23,10 @@ void main() {
         child: HungryHowiesPosApp(),
       ),
     );
+    await tester.pump();
+
+    // Tear down widget tree cleanly and drain drift disposal timers
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(Duration.zero);
   });
 }

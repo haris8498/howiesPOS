@@ -176,8 +176,13 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
           cashierPermissions: _getInitialCashierPermissions(),
         ));
 
-  Future<void> loadPermissions() async {
-    if (!mounted) return;
+  DateTime? _lastFetchTime;
+
+  Future<void> loadPermissions({bool force = false}) async {
+    if (!mounted || state.isLoading) return;
+    if (!force && _lastFetchTime != null && DateTime.now().difference(_lastFetchTime!).inMinutes < 5) {
+      return;
+    }
     state = state.copyWith(isLoading: true);
     try {
       // 1. Manager permissions
@@ -211,6 +216,7 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
       }
 
       if (!mounted) return;
+      _lastFetchTime = DateTime.now();
       state = state.copyWith(
         managerPermissions: mgr,
         cashierPermissions: csh,

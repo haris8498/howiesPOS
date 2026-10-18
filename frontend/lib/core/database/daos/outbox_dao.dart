@@ -122,4 +122,16 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
   Future<List<SyncOutboxEntry>> getAllEntries() {
     return (select(syncOutbox)..orderBy([(t) => OrderingTerm.asc(t.id)])).get();
   }
+
+  Stream<List<SyncOutboxEntry>> watchActiveOutboxEntries() {
+    return (select(syncOutbox)
+      ..where((t) =>
+          t.status.equals(SyncOutboxStatus.pending) |
+          t.status.equals(SyncOutboxStatus.inFlight) |
+          t.status.equals(SyncOutboxStatus.failedRetryable) |
+          t.status.equals(SyncOutboxStatus.failedFatal) |
+          t.status.equals(SyncOutboxStatus.conflict))
+      ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+      .watch();
+  }
 }

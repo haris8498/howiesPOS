@@ -1,3 +1,4 @@
+// ignore_for_file: prefer_initializing_formals
 import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:intl/intl.dart';
@@ -228,6 +229,103 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
     } finally {
       _inFlightOrderIds.remove(order.id);
     }
+  }
+
+  @override
+  Future<OrderModel> updateOrder(OrderModel order) async {
+    return await _db.transaction(() async {
+      await (_db.update(_db.localOrders)..where((t) => t.id.equals(order.id))).write(
+        LocalOrdersCompanion(
+          subtotal: Value(order.subtotal),
+          grandTotal: Value(order.grandTotal),
+          discountPercentage: Value(order.discountPercentage),
+          discountAmount: Value(order.discountAmount),
+          taxAmount: Value(order.taxAmount),
+          status: Value(order.status.name),
+          paymentStatus: Value(order.isPaid ? 'PAID' : 'UNPAID'),
+          isPaid: Value(order.isPaid),
+          syncStatus: const Value('pending_update'),
+          clientUpdatedAt: Value(DateTime.now()),
+        ),
+      );
+
+      // Re-write order items if provided
+      if (order.items.isNotEmpty) {
+        await (_db.delete(_db.localOrderItems)..where((t) => t.orderId.equals(order.id))).go();
+        for (final item in order.items) {
+          final itemId = (item.id != null && item.id!.isNotEmpty && item.id!.length == 36)
+              ? item.id!
+              : _uuid.v7();
+          await _db.into(_db.localOrderItems).insert(
+            LocalOrderItemsCompanion(
+              id: Value(itemId),
+              orderId: Value(order.id),
+              menuItemId: Value(item.item.id.isNotEmpty ? item.item.id : null),
+              itemName: Value(item.item.name),
+              sizeName: Value(item.selectedSize),
+              unitPrice: Value(item.unitPrice),
+              quantity: Value(item.quantity),
+              subtotal: Value(item.totalPrice),
+              notes: Value(item.notes.isNotEmpty ? item.notes : null),
+              isCancelled: Value(item.isCancelled),
+              cancelledAt: Value(item.cancelledAt),
+              cancelReason: Value(item.cancelReason),
+              syncStatus: const Value('pending_update'),
+              serverVersion: const Value(1),
+            ),
+          );
+        }
+      }
+
+      // Record payments if any
+      if (order.payments.isNotEmpty) {
+        await (_db.delete(_db.localOrderPayments)..where((t) => t.orderId.equals(order.id))).go();
+        for (final payment in order.payments) {
+          final paymentId = (payment.id != null && payment.id!.isNotEmpty && payment.id!.length == 36)
+              ? payment.id!
+              : _uuid.v7();
+          await _db.into(_db.localOrderPayments).insert(
+            LocalOrderPaymentsCompanion(
+              id: Value(paymentId),
+              orderId: Value(order.id),
+              paymentMethod: Value(payment.paymentMethod),
+              amount: Value(payment.amount),
+              tenderedAmount: Value(payment.tenderedAmount),
+              changeReturned: Value(payment.changeReturned),
+              transactionReference: Value(payment.transactionReference),
+              cardLastFour: Value(payment.cardLastFour),
+              bankName: Value(payment.bankName),
+              paymentStatus: Value(payment.paymentStatus.isNotEmpty ? payment.paymentStatus : 'COMPLETED'),
+              receivedBy: Value(payment.receivedBy),
+              createdAt: Value(payment.createdAt ?? DateTime.now()),
+              syncStatus: const Value('pending_update'),
+            ),
+          );
+        }
+      }
+
+      // Enqueue UPDATE in outbox
+      final opId = _uuid.v7();
+      final payloadMap = order.toCreateOrderDto();
+      payloadMap['id'] = order.id;
+
+      await _db.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: Value(_deviceId),
+          entityType: const Value('order'),
+          entityId: Value(order.id),
+          operationType: const Value('UPDATE'),
+          baseVersion: const Value(1),
+          payload: Value(jsonEncode(payloadMap)),
+          dependencyOrder: const Value(2),
+          status: const Value(SyncOutboxStatus.pending),
+          createdAt: Value(DateTime.now()),
+        ),
+      );
+
+      return order;
+    });
   }
 
   @override

@@ -35,6 +35,17 @@ class InMemoryOrderRepository implements IOrderRepository {
   }
 
   @override
+  Future<OrderModel> updateOrder(OrderModel order) async {
+    final index = _orders.indexWhere((o) => o.id == order.id);
+    if (index >= 0) {
+      _orders[index] = order;
+    } else {
+      _orders.insert(0, order);
+    }
+    return order;
+  }
+
+  @override
   Future<void> updateOrderStatus(String orderId, OrderStatus status) async {
     final index = _orders.indexWhere((o) => o.id == orderId);
     if (index >= 0) {

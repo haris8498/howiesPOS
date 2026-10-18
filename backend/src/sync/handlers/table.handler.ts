@@ -278,8 +278,7 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
     // Idempotent / Repeated Replay Check: If table already matches the mutation payload
     if (
       existing.status.toLowerCase() === incomingStatus &&
-      existing.active_order_id === incomingActiveOrderId &&
-      (!isStale || clientBaseVersion >= currentVersion)
+      existing.active_order_id === incomingActiveOrderId
     ) {
       this.logger.log(
         `Table ${existing.id} already in desired status '${existing.status}' — returning DUPLICATE`,
@@ -301,7 +300,8 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
       // If client is seating walk-in guests (status -> occupied or has active order)
       // and server was reserved (or available) in the meantime:
       const clientSeatsGuests =
-        incomingStatus === 'occupied' || Boolean(incomingActiveOrderId);
+        incomingStatus === 'occupied' ||
+        (payload.active_order_id !== undefined && Boolean(payload.active_order_id));
 
       if (clientSeatsGuests && !serverHasActiveOrder) {
         this.logger.log(

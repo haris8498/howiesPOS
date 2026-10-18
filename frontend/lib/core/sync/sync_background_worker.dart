@@ -183,6 +183,11 @@ class SyncBackgroundWorker {
 
   SyncWorkerState get state => stateNotifier.currentState;
 
+  bool get isRunning => _isRunning && !_isDisposed;
+  bool get isDraining => _isPushing || _isPulling;
+  DateTime? get lastSuccessAt => state.lastSuccessfulPush ?? state.lastSuccessfulPull;
+  String? get lastError => state.lastError;
+
   String get _baseUrl {
     if (syncUrlOverride != null && syncUrlOverride!.isNotEmpty) {
       return syncUrlOverride!;
@@ -334,6 +339,11 @@ class SyncBackgroundWorker {
   /// Immediate reconnection sync: drains outbox batches then pulls deltas.
   Future<void> reconnect() async {
     if (_isDisposed) return;
+    stateNotifier.updateState(state.copyWith(
+      isCircuitBreakerTripped: false,
+      consecutiveTimeouts: 0,
+      lastError: null,
+    ));
     await triggerPush();
     await triggerPull();
   }
@@ -357,7 +367,14 @@ class SyncBackgroundWorker {
   // ───────────────────────────────────────────────────────────────────────────
 
   /// Triggers a push synchronization cycle.
-  Future<void> triggerPush() async {
+  Future<void> triggerPush({bool force = false}) async {
+    if (force && state.isCircuitBreakerTripped) {
+      stateNotifier.updateState(state.copyWith(
+        isCircuitBreakerTripped: false,
+        consecutiveTimeouts: 0,
+        lastError: null,
+      ));
+    }
     if (_isPushing || _isDisposed || state.isAuthPaused || state.isCircuitBreakerTripped) {
       return;
     }

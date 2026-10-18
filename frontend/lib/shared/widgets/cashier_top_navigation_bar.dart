@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/app_colors.dart';
+import '../../core/widgets/sync_status_indicator_widget.dart';
 import '../../data/auth_repository.dart';
 import '../../data/network_speed_provider.dart';
 import '../../data/online_orders_repository.dart';
@@ -297,6 +298,11 @@ class CashierTopNavigationBar extends ConsumerWidget {
             variant: SyncButtonVariant.cashierTopBar,
             currentRoute: currentRoute,
           ),
+
+          const SizedBox(width: 8),
+
+          // Sync status light (green/red offline-first health indicator)
+          const SyncStatusIndicatorWidget(),
 
           const SizedBox(width: 8),
 

@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'config/app_theme.dart';
 import 'config/router.dart';
 
+import 'config/feature_flags.dart';
+import 'core/sync/sync_providers.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -13,12 +16,28 @@ void main() {
   );
 }
 
-
-class HungryHowiesPosApp extends ConsumerWidget {
+class HungryHowiesPosApp extends ConsumerStatefulWidget {
   const HungryHowiesPosApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HungryHowiesPosApp> createState() => _HungryHowiesPosAppState();
+}
+
+class _HungryHowiesPosAppState extends ConsumerState<HungryHowiesPosApp> {
+  @override
+  void initState() {
+    super.initState();
+    if (FeatureFlags.offlineFirstEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(syncBackgroundWorkerProvider).start();
+        }
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
     final themeMode = ref.watch(themeProvider);
 

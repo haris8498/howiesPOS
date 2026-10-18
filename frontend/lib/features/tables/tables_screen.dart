@@ -13,6 +13,12 @@ import '../../services/printer/escpos_builder.dart';
 import '../../services/receipt_printer_service.dart';
 import '../../shared/widgets/confirm_delete_dialog.dart';
 import '../../shared/widgets/cashier_sidebar_footer.dart';
+import 'package:uuid/uuid.dart';
+import '../../config/feature_flags.dart';
+import '../../core/sync/sync_providers.dart';
+import '../../data/repositories/order_repository_provider.dart';
+import '../../domain/models/menu_item.dart';
+import '../../domain/models/order_model.dart';
 
 class TablesScreen extends ConsumerStatefulWidget {
   const TablesScreen({super.key});
@@ -2061,22 +2067,38 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
           onPrint: (subtotal, discountAmount, taxAmount, grandTotal, taxRate, discountPercentage) async {
             // 1. Update order in database with discount, tax, and grand total
             final activeOrderId = table.activeOrderId;
-            if (activeOrderId != null && activeOrderId.isNotEmpty && activeOrderId.length >= 20) {
+            if (activeOrderId != null && activeOrderId.isNotEmpty) {
               try {
-                final ordersApi = ref.read(ordersApiServiceProvider);
-                await ordersApi.updateOrder(activeOrderId, {
-                  'discount_amount': discountAmount,
-                  'discount_percentage': discountPercentage,
-                  'tax_amount': taxAmount,
-                  'dine_in_tax': taxAmount,
-                  'grand_total': grandTotal,
-                });
+                if (FeatureFlags.offlineFirstEnabled) {
+                  final orderRepo = ref.read(orderRepositoryProvider);
+                  final existing = await orderRepo.getOrderById(activeOrderId);
+                  if (existing != null) {
+                    final updated = existing.copyWith(
+                      discountAmount: discountAmount,
+                      discountPercentage: discountPercentage,
+                      taxAmount: taxAmount,
+                      grandTotalOverride: grandTotal,
+                      dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmount),
+                    );
+                    await orderRepo.updateOrder(updated);
+                  }
+                } else if (activeOrderId.length >= 20) {
+                  final ordersApi = ref.read(ordersApiServiceProvider);
+                  await ordersApi.updateOrder(activeOrderId, {
+                    'discount_amount': discountAmount,
+                    'discount_percentage': discountPercentage,
+                    'tax_amount': taxAmount,
+                    'dine_in_tax': taxAmount,
+                    'grand_total': grandTotal,
+                  });
+                }
                 final notifier = ref.read(tableProvider.notifier);
                 await notifier.updateTableBillAndStatus(
                   table.id,
                   grandTotal,
                   TableStatus.occupied,
                   activeOrderId: activeOrderId,
+                  activeOrderNumber: table.activeOrderNumber,
                   orderItems: table.currentOrderItems,
                 );
                 await notifier.loadTables();
@@ -2998,17 +3020,44 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   Future<void> _loadMenuAndDatabaseOrder() async {
     setState(() => _isLoadingMenu = true);
     try {
-      final menuApi = widget.ref.read(menuApiServiceProvider);
-      // Run category, item, and deal requests concurrently in parallel for minimum latency
-      final results = await Future.wait([
-        menuApi.listCategories(),
-        menuApi.listItems(),
-        menuApi.listDeals(),
-      ]);
+      List<dynamic> dbCategories = [];
+      List<dynamic> dbItems = [];
+      List<dynamic> dbDeals = [];
 
-      final dbCategories = results[0];
-      final dbItems = results[1];
-      final dbDeals = results[2];
+      try {
+        final menuApi = widget.ref.read(menuApiServiceProvider);
+        final results = await Future.wait([
+          menuApi.listCategories(),
+          menuApi.listItems(),
+          menuApi.listDeals(),
+        ]);
+        dbCategories = results[0];
+        dbItems = results[1];
+        dbDeals = results[2];
+      } catch (err) {
+        if (FeatureFlags.offlineFirstEnabled) {
+          final db = widget.ref.read(appDatabaseProvider);
+          final localCats = await db.catalogDao.getAllCategories();
+          final localItems = await db.catalogDao.getAllMenuItems();
+          final localDeals = await db.catalogDao.getAllDeals();
+          dbCategories = localCats.map((c) => {'id': c.id, 'name': c.name}).toList();
+          dbItems = localItems.map((i) => {
+            'id': i.id,
+            'name': i.name,
+            'base_price': i.basePrice,
+            'image_url': 'assets/images/Pizza.png',
+            'category': {'name': i.categoryId},
+          }).toList();
+          dbDeals = localDeals.map((d) => {
+            'id': d.id,
+            'title': d.name,
+            'deal_price': d.dealPrice,
+            'image_path': 'assets/images/image.jpg',
+          }).toList();
+        } else {
+          rethrow;
+        }
+      }
 
       final List<_OrderMenuItem> loadedItems = [];
       final Set<String> loadedCategories = {'All'};
@@ -3112,40 +3161,34 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
       final isOccupied = widget.table.status == TableStatus.occupied;
       if (isOccupied && _activeOrderId != null && _activeOrderId!.isNotEmpty) {
         try {
-          final ordersApi = widget.ref.read(ordersApiServiceProvider);
-          Map<String, dynamic>? activeOrderJson;
-
-          try {
-            activeOrderJson = await ordersApi.getOrderById(_activeOrderId!);
-          } catch (_) {}
-
-          if (activeOrderJson != null) {
-            final isPaid = activeOrderJson['is_paid'] == true;
-            final status = activeOrderJson['status']?.toString().toLowerCase();
-            if (!isPaid && status != 'completed' && status != 'cancelled') {
-              final rawItems = activeOrderJson['order_items'] ?? activeOrderJson['items'];
-              if (rawItems is List && rawItems.isNotEmpty) {
+          if (FeatureFlags.offlineFirstEnabled) {
+            final orderRepo = widget.ref.read(orderRepositoryProvider);
+            final localOrder = await orderRepo.getOrderById(_activeOrderId!);
+            if (localOrder != null) {
+              if (!localOrder.isPaid &&
+                  localOrder.status != OrderStatus.completed &&
+                  localOrder.status != OrderStatus.cancelled) {
                 final List<_OrderItem> fetchedCart = [];
-                for (final raw in rawItems) {
-                  if (raw['is_cancelled'] == true || raw['is_cancelled'] == 1) continue;
-                  final name = raw['item_name']?.toString() ?? '';
-                  final qty = (raw['quantity'] as num?)?.toInt() ?? 1;
-                  final price = double.tryParse(raw['unit_price']?.toString() ?? '0') ?? 0.0;
-                  final menuItemId = raw['menu_item_id']?.toString();
+                for (final orderItem in localOrder.items) {
+                  if (orderItem.isCancelled) continue;
+                  final name = orderItem.item.name;
+                  final qty = orderItem.quantity;
+                  final price = orderItem.unitPrice;
+                  final menuItemId = orderItem.item.id;
 
                   final existingItem = loadedItems.firstWhere(
                     (it) => it.name.toLowerCase() == name.toLowerCase(),
                     orElse: () => _OrderMenuItem(
                       id: menuItemId,
                       name: name,
-                      category: 'General',
+                      category: orderItem.item.category,
                       price: price,
-                      imagePath: 'assets/images/Pizza.png',
+                      imagePath: orderItem.item.imageUrl.isNotEmpty ? orderItem.item.imageUrl : 'assets/images/Pizza.png',
                     ),
                   );
 
                   fetchedCart.add(_OrderItem(
-                    item: existingItem.copyWith(price: price, id: menuItemId ?? existingItem.id),
+                    item: existingItem.copyWith(price: price, id: menuItemId.isNotEmpty ? menuItemId : existingItem.id),
                     quantity: qty,
                     initialOrderedQty: qty,
                   ));
@@ -3157,9 +3200,60 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                   _cartItems.addAll(fetchedCart);
                   _cartItems.addAll(userAdded);
                 }
+              } else {
+                _activeOrderId = null;
               }
-            } else {
-              _activeOrderId = null;
+            }
+          } else {
+            final ordersApi = widget.ref.read(ordersApiServiceProvider);
+            Map<String, dynamic>? activeOrderJson;
+
+            try {
+              activeOrderJson = await ordersApi.getOrderById(_activeOrderId!);
+            } catch (_) {}
+
+            if (activeOrderJson != null) {
+              final isPaid = activeOrderJson['is_paid'] == true;
+              final status = activeOrderJson['status']?.toString().toLowerCase();
+              if (!isPaid && status != 'completed' && status != 'cancelled') {
+                final rawItems = activeOrderJson['order_items'] ?? activeOrderJson['items'];
+                if (rawItems is List && rawItems.isNotEmpty) {
+                  final List<_OrderItem> fetchedCart = [];
+                  for (final raw in rawItems) {
+                    if (raw['is_cancelled'] == true || raw['is_cancelled'] == 1) continue;
+                    final name = raw['item_name']?.toString() ?? '';
+                    final qty = (raw['quantity'] as num?)?.toInt() ?? 1;
+                    final price = double.tryParse(raw['unit_price']?.toString() ?? '0') ?? 0.0;
+                    final menuItemId = raw['menu_item_id']?.toString();
+
+                    final existingItem = loadedItems.firstWhere(
+                      (it) => it.name.toLowerCase() == name.toLowerCase(),
+                      orElse: () => _OrderMenuItem(
+                        id: menuItemId,
+                        name: name,
+                        category: 'General',
+                        price: price,
+                        imagePath: 'assets/images/Pizza.png',
+                      ),
+                    );
+
+                    fetchedCart.add(_OrderItem(
+                      item: existingItem.copyWith(price: price, id: menuItemId ?? existingItem.id),
+                      quantity: qty,
+                      initialOrderedQty: qty,
+                    ));
+                  }
+
+                  if (fetchedCart.isNotEmpty) {
+                    final userAdded = _cartItems.where((c) => !fetchedCart.any((f) => f.item.name.toLowerCase() == c.item.name.toLowerCase())).toList();
+                    _cartItems.clear();
+                    _cartItems.addAll(fetchedCart);
+                    _cartItems.addAll(userAdded);
+                  }
+                }
+              } else {
+                _activeOrderId = null;
+              }
             }
           }
         } catch (e) {
@@ -3705,42 +3799,129 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                     }).toList();
 
                                     try {
-                                      final ordersApi = widget.ref.read(ordersApiServiceProvider);
-                                      if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
-                                        // Update / Modify existing order in database
-                                        final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
-                                          'order_type': 'dineIn',
-                                          if (table.id.isNotEmpty) 'table_id': table.id,
-                                          'status': 'newOrder',
-                                          'items': itemsPayload,
-                                        });
-                                        effectiveOrderId = updatedOrder['id']?.toString() ?? effectiveOrderId;
-                                        effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? effectiveOrderNumber;
+                                      if (FeatureFlags.offlineFirstEnabled) {
+                                        final orderRepo = widget.ref.read(orderRepositoryProvider);
+                                        final orderItems = _cartItems.map((c) {
+                                          final itemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
+                                              ? c.item.id!
+                                              : const Uuid().v7();
+                                          return OrderItem(
+                                            id: const Uuid().v7(),
+                                            item: MenuItem(
+                                              id: itemId,
+                                              name: c.item.name,
+                                              category: c.item.category,
+                                              description: '',
+                                              basePrice: c.item.price,
+                                              imageUrl: c.item.imagePath,
+                                            ),
+                                            quantity: c.quantity,
+                                            backendUnitPrice: c.item.price,
+                                          );
+                                        }).toList();
+
+                                        if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
+                                          final existing = await orderRepo.getOrderById(effectiveOrderId);
+                                          if (existing != null) {
+                                            final updated = existing.copyWith(
+                                              items: orderItems,
+                                              subtotalOverride: _totalBill,
+                                              grandTotalOverride: _totalBill,
+                                              status: OrderStatus.newOrder,
+                                            );
+                                            final saved = await orderRepo.updateOrder(updated);
+                                            effectiveOrderId = saved.id;
+                                            effectiveOrderNumber = saved.orderNumber;
+                                          } else {
+                                            final newOrder = OrderModel(
+                                              id: effectiveOrderId,
+                                              orderNumber: effectiveOrderNumber ?? '',
+                                              type: OrderType.dineIn,
+                                              status: OrderStatus.newOrder,
+                                              items: orderItems,
+                                              createdAt: DateTime.now(),
+                                              subtotalOverride: _totalBill,
+                                              grandTotalOverride: _totalBill,
+                                              dineInDetail: DineInOrderDetail(
+                                                id: const Uuid().v7(),
+                                                orderId: effectiveOrderId,
+                                                tableId: table.id,
+                                                guestCount: table.capacity > 0 ? table.capacity : 1,
+                                                waiterName: 'Cashier',
+                                              ),
+                                            );
+                                            final saved = await orderRepo.saveOrder(newOrder);
+                                            effectiveOrderId = saved.id;
+                                            effectiveOrderNumber = saved.orderNumber;
+                                          }
+                                        } else {
+                                          final orderUuid = const Uuid().v7();
+                                          final newOrder = OrderModel(
+                                            id: orderUuid,
+                                            orderNumber: '',
+                                            type: OrderType.dineIn,
+                                            status: OrderStatus.newOrder,
+                                            items: orderItems,
+                                            createdAt: DateTime.now(),
+                                            subtotalOverride: _totalBill,
+                                            grandTotalOverride: _totalBill,
+                                            dineInDetail: DineInOrderDetail(
+                                              id: const Uuid().v7(),
+                                              orderId: orderUuid,
+                                              tableId: table.id,
+                                              guestCount: table.capacity > 0 ? table.capacity : 1,
+                                              waiterName: 'Cashier',
+                                            ),
+                                          );
+                                          final saved = await orderRepo.saveOrder(newOrder);
+                                          effectiveOrderId = saved.id;
+                                          effectiveOrderNumber = saved.orderNumber;
+                                        }
                                         await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
                                           orderId: effectiveOrderId,
                                           orderNumber: effectiveOrderNumber,
                                           tableNumber: table.tableNumber,
                                         );
-                                        debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
+                                        debugPrint('✅ Offline-first dine-in order persisted: $effectiveOrderId (#$effectiveOrderNumber)');
                                       } else {
-                                        // Insert New Dine-In Order into Database
-                                        final orderDto = {
-                                          'order_type': 'dineIn',
-                                          if (table.id.isNotEmpty) 'table_id': table.id,
-                                          'guest_count': table.capacity > 0 ? table.capacity : 1,
-                                          'status': 'newOrder',
-                                          'subtotal': _totalBill,
-                                          'grand_total': _totalBill,
-                                          'items': itemsPayload,
-                                        };
+                                        final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                                        if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
+                                          // Update / Modify existing order in database
+                                          final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
+                                            'order_type': 'dineIn',
+                                            if (table.id.isNotEmpty) 'table_id': table.id,
+                                            'status': 'newOrder',
+                                            'items': itemsPayload,
+                                          });
+                                          effectiveOrderId = updatedOrder['id']?.toString() ?? effectiveOrderId;
+                                          effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? effectiveOrderNumber;
+                                          await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+                                            orderId: effectiveOrderId,
+                                            orderNumber: effectiveOrderNumber,
+                                            tableNumber: table.tableNumber,
+                                          );
+                                          debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        } else {
+                                          // Insert New Dine-In Order into Database
+                                          final orderDto = {
+                                            'order_type': 'dineIn',
+                                            if (table.id.isNotEmpty) 'table_id': table.id,
+                                            'guest_count': table.capacity > 0 ? table.capacity : 1,
+                                            'status': 'newOrder',
+                                            'subtotal': _totalBill,
+                                            'grand_total': _totalBill,
+                                            'items': itemsPayload,
+                                          };
 
-                                        final createdOrder = await ordersApi.createOrder(orderDto);
-                                        effectiveOrderId = createdOrder['id']?.toString();
-                                        effectiveOrderNumber = createdOrder['order_number']?.toString();
-                                        debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                          final createdOrder = await ordersApi.createOrder(orderDto);
+                                          effectiveOrderId = createdOrder['id']?.toString();
+                                          effectiveOrderNumber = createdOrder['order_number']?.toString();
+                                          debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        }
                                       }
                                     } catch (e) {
-                                      debugPrint('⚠️ Error updating/creating dine-in order in DB: $e');
+                                      debugPrint('⚠️ Error updating/creating dine-in order: $e');
                                     }
 
                                     // 2. Update Table Status & Bill Amount in Database & POS state
@@ -5035,28 +5216,58 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                         final effectiveOrderId = widget.table.activeOrderId ?? (orderId.length >= 20 ? orderId : null);
                         if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
                           try {
-                            final ordersApi = widget.ref.read(ordersApiServiceProvider);
-                            await ordersApi.updateOrder(effectiveOrderId, {
-                              'status': 'completed',
-                              'payment_status': 'PAID',
-                              'is_paid': true,
-                              'payment_method': 'Cash',
-                              'discount_amount': discountAmount,
-                              'discount_percentage': effectiveDiscountPct,
-                              'dine_in_tax': taxAmount,
-                              'tax_amount': taxAmount,
-                              'grand_total': netTotal,
-                              'payments': [
-                                {
-                                  'payment_method': 'cash',
-                                  'amount': netTotal,
-                                  'tendered_amount': _cashGiven > 0 ? _cashGiven : netTotal,
-                                  'change_returned': changeReturn >= 0 ? changeReturn : 0.0,
-                                  'payment_status': 'COMPLETED',
-                                  'received_by': 'Cashier',
-                                }
-                              ],
-                            });
+                            if (FeatureFlags.offlineFirstEnabled) {
+                              final orderRepo = widget.ref.read(orderRepositoryProvider);
+                              final existing = await orderRepo.getOrderById(effectiveOrderId);
+                              if (existing != null) {
+                                final paidOrder = existing.copyWith(
+                                  status: OrderStatus.completed,
+                                  paymentStatus: 'PAID',
+                                  isPaid: true,
+                                  discountAmount: discountAmount,
+                                  discountPercentage: effectiveDiscountPct,
+                                  taxAmount: taxAmount,
+                                  grandTotalOverride: netTotal,
+                                  payments: [
+                                    OrderPaymentModel(
+                                      id: const Uuid().v7(),
+                                      paymentMethod: 'cash',
+                                      amount: netTotal,
+                                      tenderedAmount: _cashGiven > 0 ? _cashGiven : netTotal,
+                                      changeReturned: changeReturn >= 0 ? changeReturn : 0.0,
+                                      paymentStatus: 'COMPLETED',
+                                      receivedBy: 'Cashier',
+                                      createdAt: DateTime.now(),
+                                    ),
+                                  ],
+                                  dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmount),
+                                );
+                                await orderRepo.updateOrder(paidOrder);
+                              }
+                            } else {
+                              final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                              await ordersApi.updateOrder(effectiveOrderId, {
+                                'status': 'completed',
+                                'payment_status': 'PAID',
+                                'is_paid': true,
+                                'payment_method': 'Cash',
+                                'discount_amount': discountAmount,
+                                'discount_percentage': effectiveDiscountPct,
+                                'dine_in_tax': taxAmount,
+                                'tax_amount': taxAmount,
+                                'grand_total': netTotal,
+                                'payments': [
+                                  {
+                                    'payment_method': 'cash',
+                                    'amount': netTotal,
+                                    'tendered_amount': _cashGiven > 0 ? _cashGiven : netTotal,
+                                    'change_returned': changeReturn >= 0 ? changeReturn : 0.0,
+                                    'payment_status': 'COMPLETED',
+                                    'received_by': 'Cashier',
+                                  }
+                                ],
+                              });
+                            }
                           } catch (e) {
                             debugPrint('⚠️ Error completing table payment in DB: $e');
                           }
@@ -5646,19 +5857,49 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
 
     if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
       try {
-        final ordersApi = widget.ref.read(ordersApiServiceProvider);
-        await ordersApi.updateOrder(effectiveOrderId, {
-          'status': 'completed',
-          'payment_status': 'PAID',
-          'is_paid': true,
-          'payment_method': primaryMethod,
-          'discount_amount': widget.discountAmount ?? widget.table.discountAmount,
-          'discount_percentage': widget.discountPercentage ?? widget.table.discountPercentage,
-          'dine_in_tax': widget.dineInTax ?? widget.table.dineInTax,
-          'tax_amount': widget.dineInTax ?? widget.table.dineInTax,
-          'grand_total': widget.billAmount,
-          'payments': paymentsList,
-        });
+        if (FeatureFlags.offlineFirstEnabled) {
+          final orderRepo = widget.ref.read(orderRepositoryProvider);
+          final existing = await orderRepo.getOrderById(effectiveOrderId);
+          if (existing != null) {
+            final mappedPayments = paymentsList.map((p) => OrderPaymentModel(
+              id: const Uuid().v7(),
+              paymentMethod: p['payment_method']?.toString() ?? 'cash',
+              amount: double.tryParse(p['amount']?.toString() ?? '0') ?? 0.0,
+              tenderedAmount: double.tryParse(p['tendered_amount']?.toString() ?? '0'),
+              changeReturned: double.tryParse(p['change_returned']?.toString() ?? '0'),
+              paymentStatus: 'COMPLETED',
+              receivedBy: 'Cashier',
+              createdAt: DateTime.now(),
+            )).toList();
+            final taxAmt = widget.dineInTax ?? widget.table.dineInTax;
+            final updated = existing.copyWith(
+              status: OrderStatus.completed,
+              paymentStatus: 'PAID',
+              isPaid: true,
+              discountAmount: widget.discountAmount ?? widget.table.discountAmount,
+              discountPercentage: widget.discountPercentage ?? widget.table.discountPercentage,
+              taxAmount: taxAmt,
+              grandTotalOverride: widget.billAmount,
+              payments: mappedPayments,
+              dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmt),
+            );
+            await orderRepo.updateOrder(updated);
+          }
+        } else {
+          final ordersApi = widget.ref.read(ordersApiServiceProvider);
+          await ordersApi.updateOrder(effectiveOrderId, {
+            'status': 'completed',
+            'payment_status': 'PAID',
+            'is_paid': true,
+            'payment_method': primaryMethod,
+            'discount_amount': widget.discountAmount ?? widget.table.discountAmount,
+            'discount_percentage': widget.discountPercentage ?? widget.table.discountPercentage,
+            'dine_in_tax': widget.dineInTax ?? widget.table.dineInTax,
+            'tax_amount': widget.dineInTax ?? widget.table.dineInTax,
+            'grand_total': widget.billAmount,
+            'payments': paymentsList,
+          });
+        }
         debugPrint('✅ Payment successfully persisted in DB for order: $effectiveOrderId');
       } catch (e) {
         debugPrint('⚠️ Error settling table payment in DB: $e');

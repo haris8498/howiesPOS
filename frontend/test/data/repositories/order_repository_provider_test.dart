@@ -22,27 +22,10 @@ void main() {
       await testDb.close();
     });
 
-    test('1. Default Flag State (offlineFirstEnabled == false): Resolves to ApiOrderRepository', () {
+    test('1. Active Flag State (offlineFirstEnabled == true): Resolves to DriftOfflineFirstOrderRepository', () {
       final container = ProviderContainer(
         overrides: [
           appDatabaseProvider.overrideWithValue(testDb),
-        ],
-      );
-      addTearDown(container.dispose);
-
-      final repo = container.read(orderRepositoryProvider);
-
-      expect(repo, isA<IOrderRepository>());
-      expect(repo, isA<ApiOrderRepository>(),
-          reason: 'When flag is false, provider must return ApiOrderRepository to preserve 100% legacy behavior');
-    });
-
-    test('2. Offline-First Flag State (offlineFirstEnabled == true): Resolves to DriftOfflineFirstOrderRepository', () {
-      // Override orderRepositoryProvider with the drift implementation directly to verify seam
-      final container = ProviderContainer(
-        overrides: [
-          appDatabaseProvider.overrideWithValue(testDb),
-          orderRepositoryProvider.overrideWith((ref) => ref.watch(driftOfflineFirstOrderRepositoryProvider)),
         ],
       );
       addTearDown(container.dispose);
@@ -51,7 +34,23 @@ void main() {
 
       expect(repo, isA<IOrderRepository>());
       expect(repo, isA<DriftOfflineFirstOrderRepository>(),
-          reason: 'When offline-first is active, provider routes to Drift SQLite WAL repository');
+          reason: 'When offlineFirstEnabled is true, provider routes to Drift SQLite WAL repository');
+    });
+
+    test('2. Legacy Flag State seam: Resolves to ApiOrderRepository', () {
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(testDb),
+          orderRepositoryProvider.overrideWith((ref) => ref.watch(apiOrderRepositoryProvider)),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final repo = container.read(orderRepositoryProvider);
+
+      expect(repo, isA<IOrderRepository>());
+      expect(repo, isA<ApiOrderRepository>(),
+          reason: 'When configured with apiOrderRepositoryProvider, provider returns ApiOrderRepository');
     });
 
     test('3. Stream providers return empty stream when flag is OFF', () async {

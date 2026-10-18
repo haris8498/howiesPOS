@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
 import '../../config/app_theme.dart';
+import '../../core/sync/sync_providers.dart';
 import '../../data/sync_repository.dart';
 import '../../domain/models/data_sync_model.dart';
 
@@ -51,7 +52,40 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Top Header Row
-              _buildHeader(context, ref, summary, isDark, syncNotifier),
+              _buildHeader(context, ref, summary, isDark, syncNotifier, isOffline: syncState.isOffline),
+
+              if (syncState.isOffline) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.cloud_off_rounded, color: Color(0xFFD97706), size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Offline — Showing local SQLite data. Changes will sync automatically when connection restores.',
+                          style: TextStyle(
+                            color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => syncNotifier.loadData(),
+                        icon: const Icon(Icons.refresh, size: 14, color: Color(0xFFD97706)),
+                        label: const Text('Check Connection', style: TextStyle(color: Color(0xFFD97706), fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 16),
 
@@ -90,8 +124,9 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
     WidgetRef ref,
     DataSyncSummary summary,
     bool isDark,
-    DataSyncNotifier syncNotifier,
-  ) {
+    DataSyncNotifier syncNotifier, {
+    bool isOffline = false,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -122,25 +157,25 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF16A34A).withValues(alpha: 0.12),
+                    color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF16A34A).withValues(alpha: 0.3)),
+                    border: Border.all(color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     children: [
                       Container(
                         width: 7,
                         height: 7,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF16A34A),
+                        decoration: BoxDecoration(
+                          color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 6),
-                      const Text(
-                        'Cloud Sync Active',
+                      Text(
+                        isOffline ? 'Offline - Local Mode' : 'Cloud Sync Active',
                         style: TextStyle(
-                          color: Color(0xFF16A34A),
+                          color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                         ),
@@ -168,16 +203,34 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
               onPressed: () async {
                 final count = await syncNotifier.syncAllPending();
                 if (context.mounted) {
+                  final remaining = ref.read(dataSyncProvider).summary.pendingCount;
+                  final isOffline = ref.read(connectivityNotifierProvider).isOffline;
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Row(
                         children: [
-                          const Icon(Icons.cloud_done_rounded, color: Colors.white, size: 18),
+                          Icon(
+                            count > 0 ? Icons.cloud_done_rounded : (isOffline ? Icons.cloud_off_rounded : Icons.check_circle_rounded),
+                            color: Colors.white,
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
-                          Text(count > 0 ? '$count pending order(s) synced to PostgreSQL Cloud.' : 'All local orders are already in sync with Cloud.'),
+                          Expanded(
+                            child: Text(
+                              count > 0
+                                  ? '$count pending order(s) synced to PostgreSQL Cloud.'
+                                  : (isOffline
+                                      ? 'Backend server is offline. $remaining orders safely stored in local database.'
+                                      : (remaining > 0
+                                          ? '$remaining orders remain pending upload.'
+                                          : 'All local orders are already in sync with Cloud.')),
+                            ),
+                          ),
                         ],
                       ),
-                      backgroundColor: const Color(0xFF16A34A),
+                      backgroundColor: count > 0 || remaining == 0
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFFD97706),
                     ),
                   );
                 }
@@ -946,11 +999,38 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
             // 9. ACTIONS
             Expanded(
               flex: 1,
-              child: IconButton(
-                icon: const Icon(Icons.visibility_outlined, size: 18),
-                color: isDark ? Colors.white70 : const Color(0xFF64748B),
-                tooltip: 'View Sync Audit',
-                onPressed: () => _showOrderSyncAuditDialog(context, order, isDark, syncNotifier),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (!order.isSynced)
+                    IconButton(
+                      icon: const Icon(Icons.sync_problem_rounded, size: 18, color: Color(0xFFDC2626)),
+                      tooltip: 'Retry Sync Now',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () async {
+                        await syncNotifier.syncSingleOrder(order.id);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Triggered sync retry for order.'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.visibility_outlined, size: 18),
+                    color: isDark ? Colors.white70 : const Color(0xFF64748B),
+                    tooltip: 'View Sync Audit',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _showOrderSyncAuditDialog(context, order, isDark, syncNotifier),
+                  ),
+                ],
               ),
             ),
           ],

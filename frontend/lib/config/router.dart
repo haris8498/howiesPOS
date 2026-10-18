@@ -31,7 +31,6 @@ import '../data/daily_calculation_repository.dart';
 import '../features/sync/data_sync_screen.dart';
 import '../shared/widgets/navigation_sidebar.dart';
 import '../shared/widgets/cashier_top_navigation_bar.dart';
-import '../data/role_rights_repository.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -80,6 +79,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/unauthorized',
         pageBuilder: (context, state) => _noAnimationPage(const UnauthorizedScreen(), state),
+      ),
+      GoRoute(
+        path: '/sync',
+        redirect: (context, state) {
+          final authState = ref.read(authProvider);
+          return switch (authState.currentUser.role) {
+            UserRole.owner => '/owner/data-sync',
+            UserRole.manager => '/manager/data-sync',
+            UserRole.cashier => '/sales/data-sync',
+          };
+        },
       ),
 
       // =========================================================
@@ -209,17 +219,15 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkStartingCashGate();
-      ref.read(roleRightsProvider.notifier).loadPermissions();
+      if (mounted) {
+        _checkStartingCashGate();
+      }
     });
   }
 
   @override
   void didUpdateWidget(covariant _PortalShellWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentRoute != widget.currentRoute) {
-      ref.read(roleRightsProvider.notifier).loadPermissions();
-    }
   }
 
   Future<void> _checkStartingCashGate() async {

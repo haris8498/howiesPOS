@@ -101,12 +101,7 @@ export class TablesService {
       const orderFromActiveId = isOccupied && t.active_order_id ? fallbackOrdersMap.get(t.active_order_id) : null;
       const activeOrder = isOccupied ? (orderFromActiveId || orderFromDineIn) : null;
 
-      // If marked occupied but no active unpaid order exists, table starts fresh available
-      if (isOccupied && !activeOrder) {
-        status = 'available';
-      }
-
-      const effectiveOccupied = status === 'occupied' && activeOrder != null;
+      const effectiveOccupied = isOccupied;
 
       const activeItems =
         effectiveOccupied
@@ -139,8 +134,8 @@ export class TablesService {
         section: t.section,
         zone_id: t.zone_id,
         status,
-        current_customer_count: effectiveOccupied ? t.current_customer_count : 0,
-        current_bill_amount: effectiveOccupied ? Number(activeOrder.grand_total) : 0,
+        current_customer_count: effectiveOccupied ? (t.current_customer_count || 1) : 0,
+        current_bill_amount: effectiveOccupied ? Number(activeOrder?.grand_total ?? t.current_bill_amount ?? 0) : 0,
         active_order_id: effectiveOccupied ? (t.active_order_id || activeOrder?.id || null) : null,
         active_order_number: effectiveOccupied ? (activeOrder?.order_number || null) : null,
         dine_in_tax: effectiveOccupied ? dineInTax : 0,
@@ -205,11 +200,7 @@ export class TablesService {
       })) as any;
     }
 
-    if (isOccupied && !activeOrder) {
-      status = 'available';
-    }
-
-    const effectiveOccupied = status === 'occupied' && activeOrder != null;
+    const effectiveOccupied = isOccupied;
 
     const activeItems =
       effectiveOccupied
@@ -242,8 +233,8 @@ export class TablesService {
       section: table.section,
       zone_id: table.zone_id,
       status,
-      current_customer_count: effectiveOccupied ? table.current_customer_count : 0,
-      current_bill_amount: effectiveOccupied ? Number(activeOrder?.grand_total ?? 0) : 0,
+      current_customer_count: effectiveOccupied ? (table.current_customer_count || 1) : 0,
+      current_bill_amount: effectiveOccupied ? Number(activeOrder?.grand_total ?? table.current_bill_amount ?? 0) : 0,
       active_order_id: effectiveOccupied ? (table.active_order_id || activeOrder?.id || null) : null,
       active_order_number: effectiveOccupied ? (activeOrder?.order_number || null) : null,
       dine_in_tax: effectiveOccupied ? dineInTax : 0,

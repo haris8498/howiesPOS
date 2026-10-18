@@ -71,6 +71,26 @@ class ApiOrderRepository implements IOrderRepository {
   }
 
   @override
+  Future<OrderModel> updateOrder(OrderModel order) async {
+    try {
+      final dto = order.toCreateOrderDto();
+      final res = await _ordersApiService.updateOrder(order.id, dto);
+      final updated = OrderModel.fromBackendJson(res);
+      final index = _localCache.indexWhere((o) => o.id == order.id);
+      if (index >= 0) {
+        _localCache[index] = updated;
+      }
+      return updated;
+    } catch (_) {
+      final index = _localCache.indexWhere((o) => o.id == order.id);
+      if (index >= 0) {
+        _localCache[index] = order;
+      }
+      return order;
+    }
+  }
+
+  @override
   Future<void> updateOrderStatus(String orderId, OrderStatus status) async {
     try {
       await _ordersApiService.updateOrderStatus(orderId, status: status.name);

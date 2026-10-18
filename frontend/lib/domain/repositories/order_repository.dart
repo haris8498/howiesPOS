@@ -9,6 +9,7 @@ abstract class IOrderRepository {
   Future<List<OrderModel>> getCompletedOrders();
   Future<List<OrderModel>> getHeldOrders();
   Future<OrderModel> saveOrder(OrderModel order);
+  Future<OrderModel> updateOrder(OrderModel order);
   Future<void> updateOrderStatus(String orderId, OrderStatus status);
   Future<void> cancelOrder(String orderId);
   Future<void> deleteHeldOrder(String orderId);

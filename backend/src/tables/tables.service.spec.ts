@@ -21,6 +21,8 @@ describe('TablesService', () => {
     active_order_id: null,
     reserved_customer_name: null,
     reservation_time: null,
+    version: 1,
+    updated_at: new Date(),
   };
 
   const mockOccupiedTable: RestaurantTable = {
@@ -37,6 +39,8 @@ describe('TablesService', () => {
     active_order_id: 'ord-101',
     reserved_customer_name: null,
     reservation_time: null,
+    version: 1,
+    updated_at: new Date(),
   };
 
   beforeEach(async () => {

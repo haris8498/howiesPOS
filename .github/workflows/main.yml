@@ -1,0 +1,51 @@
+name: Release Backend
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  backend:
+    name: Build Backend Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Validate Prisma
+        working-directory: backend
+        run: npx prisma validate
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Create release archive
+        run: |
+          mkdir -p release/backend
+          cp -r backend/dist release/backend/
+          cp -r backend/prisma release/backend/
+          cp backend/package.json backend/package-lock.json release/backend/
+          tar -czf "hungry-howies-backend-${GITHUB_REF_NAME}.tar.gz" -C release backend
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: hungry-howies-backend-${{ github.ref_name }}.tar.gz

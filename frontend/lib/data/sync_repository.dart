@@ -124,7 +124,7 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
         bool isSynced = true;
 
         if (outbox != null) {
-          if (outbox.status == SyncOutboxStatus.failedFatal || outbox.status == SyncOutboxStatus.failedRetryable) {
+          if (outbox.status == SyncOutboxStatus.failedFatal || outbox.status == SyncOutboxStatus.conflict) {
             syncStatus = 'failed';
             isSynced = false;
           } else if (outbox.status == SyncOutboxStatus.synced) {

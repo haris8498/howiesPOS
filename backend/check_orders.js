@@ -3,6 +3,7 @@ const prisma = new PrismaClient();
 
 async function main() {
   console.log('--- ALL ORDERS IN POSTGRESQL (last 20) ---');
+  const orders = await prisma.order.findMany({
     take: 20,
     orderBy: { created_at: 'desc' },
     select: {

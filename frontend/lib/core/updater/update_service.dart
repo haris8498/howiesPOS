@@ -35,8 +35,15 @@ class UpdateService {
   Future<UpdateInfo?> checkForUpdate({bool force = false}) async {
     try {
       // 1. Check cooldown / debouncing
-      if (!force && prefs != null) {
-        final lastCheckMs = prefs!.getInt(_lastCheckKey);
+      SharedPreferences? sp = prefs;
+      try {
+        sp ??= await SharedPreferences.getInstance();
+      } catch (_) {
+        // Fallback for isolated unit tests without SharedPreferences mock
+      }
+
+      if (!force && sp != null) {
+        final lastCheckMs = sp.getInt(_lastCheckKey);
         if (lastCheckMs != null) {
           final lastCheckTime = DateTime.fromMillisecondsSinceEpoch(
             lastCheckMs,
@@ -49,8 +56,8 @@ class UpdateService {
       }
 
       // Record check timestamp
-      if (prefs != null) {
-        await prefs!.setInt(
+      if (sp != null) {
+        await sp.setInt(
           _lastCheckKey,
           DateTime.now().millisecondsSinceEpoch,
         );
@@ -131,8 +138,5 @@ final sharedPreferencesProvider = FutureProvider<SharedPreferences>((
 });
 
 final updateServiceProvider = Provider<UpdateService>((ref) {
-  final prefsAsync = ref.watch(sharedPreferencesProvider);
-  final prefs = prefsAsync.valueOrNull;
-
-  return UpdateService(prefs: prefs);
+  return UpdateService();
 });

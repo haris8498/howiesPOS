@@ -9,6 +9,8 @@ import 'package:hungry_howies_pos/data/repositories/order_repository_provider.da
 import 'package:hungry_howies_pos/domain/models/menu_item.dart';
 import 'package:hungry_howies_pos/domain/models/order_model.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -25,6 +27,7 @@ void main() {
     );
 
     setUp(() {
+      SharedPreferences.setMockInitialValues({});
       testDb = AppDatabase(
         NativeDatabase.memory(
           setup: (rawDb) {

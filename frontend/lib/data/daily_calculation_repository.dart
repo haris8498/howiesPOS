@@ -449,10 +449,12 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
 
   /// Fetch today's live POS metrics
   Future<void> fetchLiveSummary({String? date, String? cashierId}) async {
+    if (!mounted) return;
     state = state.copyWith(isLoading: true, clearMessages: true);
     try {
       final json = await _apiService.getLiveSummary(date: date, cashierId: cashierId);
       final liveSummary = DailyLiveSummaryModel.fromJson(json);
+      if (!mounted) return;
       state = state.copyWith(
         liveSummary: liveSummary,
         totalChangeCash: liveSummary.totalChangeCash > 0 ? liveSummary.totalChangeCash : state.totalChangeCash,
@@ -543,6 +545,7 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
               sessionId: activeShift.id,
             );
 
+            if (!mounted) return;
             state = state.copyWith(
               liveSummary: localSummary,
               totalChangeCash: activeShift.startingCash,
@@ -555,6 +558,7 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
         } catch (_) {}
       }
 
+      if (!mounted) return;
       state = state.copyWith(
         isLoading: false,
         errorMessage: 'Failed to load live summary: $e',
@@ -569,6 +573,7 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
     String? cashierId,
     String? status,
   }) async {
+    if (!mounted) return;
     state = state.copyWith(isLoading: true, clearMessages: true);
     try {
       final jsonList = await _apiService.listDailyCalculations(
@@ -578,11 +583,13 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
         status: status,
       );
       final history = jsonList.map((j) => DailyCalculationRecordModel.fromJson(j)).toList();
+      if (!mounted) return;
       state = state.copyWith(
         historyList: history,
         isLoading: false,
       );
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(
         isLoading: false,
         errorMessage: 'Failed to load history: $e',

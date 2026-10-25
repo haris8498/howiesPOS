@@ -60,10 +60,12 @@ class AutoUpdateController extends StateNotifier<AutoUpdateState> {
       return;
     }
 
+    if (!mounted) return;
     state = state.copyWith(isChecking: true, errorMessage: null);
 
     try {
       final updateInfo = await _updateService.checkForUpdate(force: force);
+      if (!mounted) return;
       state = state.copyWith(isChecking: false, availableUpdate: updateInfo);
 
       if (updateInfo != null && context.mounted) {
@@ -75,15 +77,19 @@ class AutoUpdateController extends StateNotifier<AutoUpdateState> {
       }
     } catch (e) {
       debugPrint('[AutoUpdateController] Background update check error: $e');
-      state = state.copyWith(isChecking: false, errorMessage: e.toString());
+      if (mounted) {
+        state = state.copyWith(isChecking: false, errorMessage: e.toString());
+      }
     }
   }
 
   /// Manually triggers an update check (e.g. from Settings or Diagnostic screens).
   Future<UpdateInfo?> manualCheckForUpdate(BuildContext context) async {
+    if (!mounted) return null;
     state = state.copyWith(isChecking: true, errorMessage: null);
     try {
       final updateInfo = await _updateService.checkForUpdate(force: true);
+      if (!mounted) return updateInfo;
       state = state.copyWith(isChecking: false, availableUpdate: updateInfo);
 
       if (updateInfo != null && context.mounted) {
@@ -95,7 +101,9 @@ class AutoUpdateController extends StateNotifier<AutoUpdateState> {
       }
       return updateInfo;
     } catch (e) {
-      state = state.copyWith(isChecking: false, errorMessage: e.toString());
+      if (mounted) {
+        state = state.copyWith(isChecking: false, errorMessage: e.toString());
+      }
       return null;
     }
   }

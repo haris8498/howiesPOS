@@ -1,3 +1,4 @@
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import {
   Injectable,
   Logger,
@@ -24,6 +25,7 @@ export class SyncPushService {
     private readonly prisma: PrismaService,
     private readonly handlerRegistry: HandlerRegistry,
     @Optional() private readonly kitchenGateway?: KitchenGateway,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
   /**
@@ -35,17 +37,39 @@ export class SyncPushService {
   async pushMutations(dto: SyncPushDto) {
     const { device_id, batch_id, mutations = [] } = dto;
     const results: SyncMutationResult[] = [];
+    const completedInBatch = new Set<string>();
 
-    // Sort mutations in topological dependency_order then created_at
+    // Build dependency graph for batch
+    const mutationMap = new Map(mutations.map((m) => [m.operation_id, m]));
+    const isAncestorOf = (potentialAncestorId: string, targetId: string, visited = new Set<string>()): boolean => {
+      if (visited.has(targetId)) return false;
+      visited.add(targetId);
+      const target = mutationMap.get(targetId);
+      if (!target || !target.depends_on_operation_id) return false;
+      if (target.depends_on_operation_id === potentialAncestorId) return true;
+      return isAncestorOf(potentialAncestorId, target.depends_on_operation_id, visited);
+    };
+
     const sortedMutations = [...mutations].sort((a, b) => {
+      // 1. Explicit direct or transitive dependency
+      if (isAncestorOf(a.operation_id, b.operation_id)) return -1;
+      if (isAncestorOf(b.operation_id, a.operation_id)) return 1;
+
+      // 2. Dependency order level (Level 0..6)
       const orderA = a.dependency_order ?? 1;
       const orderB = b.dependency_order ?? 1;
       if (orderA !== orderB) {
         return orderA - orderB;
       }
+
+      // 3. Chronological timeline ordering within same dependency level
       const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
       const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return timeA - timeB;
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
+
+      return a.operation_id.localeCompare(b.operation_id);
     });
 
     this.logger.log(
@@ -74,13 +98,18 @@ export class SyncPushService {
 
       // 2. Validate dependency graph (§6.3)
       if (mutation.depends_on_operation_id) {
-        const depOp = this.prisma.processedOperation?.findUnique
-          ? await this.prisma.processedOperation.findUnique({
-              where: { operation_id: mutation.depends_on_operation_id },
-            })
-          : null;
+        let isDepSatisfied = completedInBatch.has(mutation.depends_on_operation_id);
 
-        if (!depOp || depOp.status !== 'COMPLETED') {
+        if (!isDepSatisfied && this.prisma.processedOperation?.findUnique) {
+          const depOp = await this.prisma.processedOperation.findUnique({
+            where: { operation_id: mutation.depends_on_operation_id },
+          });
+          if (depOp && depOp.status === 'COMPLETED') {
+            isDepSatisfied = true;
+          }
+        }
+
+        if (!isDepSatisfied) {
           this.logger.warn(
             `Mutation ${mutation.operation_id} has unsynced dependency: ${mutation.depends_on_operation_id}`,
           );
@@ -101,6 +130,7 @@ export class SyncPushService {
         operationId: mutation.operation_id,
         batchId: batch_id,
         receivedAt: new Date(),
+        completedInBatch,
       };
 
       const handler = this.handlerRegistry.get(mutation.entity_type);
@@ -125,6 +155,29 @@ export class SyncPushService {
           return await handler.handle(tx, mutation, context);
         });
         results.push(result);
+        if (result.status === "SYNCED" || result.status === "DUPLICATE") {
+          completedInBatch.add(mutation.operation_id);
+        }
+
+        if (result.status === 'SYNCED') {
+          try {
+            if (mutation.entity_type === 'shift') {
+              if (mutation.operation_type === 'INSERT') {
+                this.realtimeGateway?.emitShiftStarted({ id: mutation.entity_id, ...(mutation.payload || {}) });
+              } else if (mutation.operation_type === 'UPDATE') {
+                this.realtimeGateway?.emitShiftClosed({ id: mutation.entity_id, ...(mutation.payload || {}) });
+              }
+            } else if (mutation.entity_type === 'order') {
+              if (mutation.operation_type === 'INSERT') {
+                this.realtimeGateway?.emitOrderCreated({ id: mutation.entity_id, ...(mutation.payload || {}) });
+              } else if (mutation.operation_type === 'UPDATE') {
+                this.realtimeGateway?.emitOrderUpdated({ id: mutation.entity_id, ...(mutation.payload || {}) });
+              }
+            }
+          } catch (rtErr) {
+            this.logger.warn(`Failed to broadcast realtime event for mutation ${mutation.operation_id}: ${rtErr}`);
+          }
+        }
 
         // Durably record in idempotency ledger (§7.1, §8.2)
         if (this.prisma.processedOperation?.upsert) {

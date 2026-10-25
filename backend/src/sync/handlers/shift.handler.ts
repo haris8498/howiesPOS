@@ -82,21 +82,24 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
 
     // 1. Dependency check if specified
     if (mutation.depends_on_operation_id) {
-      const dep = (tx as any).processedOperation?.findUnique
-        ? await (tx as any).processedOperation.findUnique({
-            where: { operation_id: mutation.depends_on_operation_id },
-          })
-        : null;
+      const isSatisfied = context.completedInBatch?.has(mutation.depends_on_operation_id);
+      if (!isSatisfied) {
+        const dep = (tx as any).processedOperation?.findUnique
+          ? await (tx as any).processedOperation.findUnique({
+              where: { operation_id: mutation.depends_on_operation_id },
+            })
+          : null;
 
-      if (!dep || dep.status !== 'COMPLETED') {
-        return {
-          operation_id: mutation.operation_id,
-          entity_id: shiftId,
-          status: 'FAILED_RETRYABLE',
-          server_version: mutation.base_version ?? 1,
-          server_timestamp: new Date().toISOString(),
-          error_message: `Unsynced dependency: operation '${mutation.depends_on_operation_id}' has not been synced or completed yet`,
-        };
+        if (!dep || dep.status !== 'COMPLETED') {
+          return {
+            operation_id: mutation.operation_id,
+            entity_id: shiftId,
+            status: 'FAILED_RETRYABLE',
+            server_version: mutation.base_version ?? 1,
+            server_timestamp: new Date().toISOString(),
+            error_message: `Unsynced dependency: operation '${mutation.depends_on_operation_id}' has not been synced or completed yet`,
+          };
+        }
       }
     }
 
@@ -122,26 +125,71 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
-    // 2B. Guard: Only one active shift at a time store-wide
-    const activeShift = tx.dailyCalculation.findFirst
-      ? await tx.dailyCalculation.findFirst({
-          where: {
-            status: 'ACTIVE',
-            id: { not: shiftId },
-          },
-        })
-      : null;
+    const reqStatus = payload.status || 'ACTIVE';
+    const isClosedStatus = reqStatus === 'OFFLINE_CLOSED' || reqStatus === 'CLOSED';
 
-    if (activeShift) {
-      this.logger.warn(`Rejecting sync shift open ${shiftId}: Server already has active shift ${activeShift.id}`);
-      return {
-        operation_id: mutation.operation_id,
-        entity_id: shiftId,
-        status: 'FAILED_FATAL',
-        server_version: mutation.base_version ?? 1,
-        server_timestamp: new Date().toISOString(),
-        error_message: 'Cannot open shift: An active shift already exists on the server.',
-      };
+    // 2B. Guard: Only one active shift at a time store-wide
+    if (!isClosedStatus) {
+      const activeShift = tx.dailyCalculation.findFirst
+        ? await tx.dailyCalculation.findFirst({
+            where: {
+              status: 'ACTIVE',
+              id: { not: shiftId },
+            },
+          })
+        : null;
+
+      if (activeShift) {
+        this.logger.warn(
+          `Conflict sync shift open ${shiftId}: Server already has active shift ${activeShift.id}. Preserving offline shift as OFFLINE_CLOSED.`,
+        );
+        const startingCash = Number(payload.starting_cash ?? payload.opening_float ?? 0);
+        const dateObj = payload.date ? new Date(payload.date) : new Date();
+        const createdConflict = await tx.dailyCalculation.create({
+          data: {
+            id: shiftId,
+            date: dateObj,
+            shift_name: payload.shift_name || 'Full Day',
+            cashier_id: payload.cashier_id || 'UNKNOWN',
+            cashier_name: payload.cashier_name || 'Cashier',
+            starting_cash: new Prisma.Decimal(startingCash),
+            opening_float: new Prisma.Decimal(startingCash),
+            total_change_cash: new Prisma.Decimal(Number(payload.total_change_cash ?? startingCash)),
+            status: 'OFFLINE_CLOSED',
+            closing_notes: `Conflict: opened offline while active shift ${activeShift.id} was open on server`,
+            version: 1,
+            created_at: payload.created_at ? new Date(payload.created_at) : new Date(),
+          },
+        });
+
+        await this.changeLogService.record(
+          tx,
+          'shift',
+          createdConflict.id,
+          'INSERT',
+          1,
+          {
+            id: createdConflict.id,
+            status: 'OFFLINE_CLOSED',
+            cashier_id: createdConflict.cashier_id,
+            version: 1,
+          },
+          false,
+        );
+
+        return {
+          operation_id: mutation.operation_id,
+          entity_id: shiftId,
+          status: 'CONFLICT',
+          server_version: 1,
+          server_timestamp: new Date().toISOString(),
+          conflict_details: {
+            code: 'ACTIVE_SHIFT_EXISTS',
+            message: `Cannot open active shift: Server already has active shift '${activeShift.id}'. Preserved offline shift as OFFLINE_CLOSED.`,
+            existing_active_shift_id: activeShift.id,
+          },
+        };
+      }
     }
 
     // 3. Insert new shift
@@ -158,7 +206,7 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
         starting_cash: new Prisma.Decimal(startingCash),
         opening_float: new Prisma.Decimal(startingCash),
         total_change_cash: new Prisma.Decimal(Number(payload.total_change_cash ?? startingCash)),
-        status: payload.status || 'ACTIVE',
+        status: reqStatus,
         version: 1,
         created_at: payload.created_at ? new Date(payload.created_at) : new Date(),
       },
@@ -210,29 +258,41 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
 
     // 1. Dependency check if specified
     if (mutation.depends_on_operation_id) {
-      const dep = (tx as any).processedOperation?.findUnique
-        ? await (tx as any).processedOperation.findUnique({
-            where: { operation_id: mutation.depends_on_operation_id },
-          })
-        : null;
+      const isSatisfied = context.completedInBatch?.has(mutation.depends_on_operation_id);
+      if (!isSatisfied) {
+        const dep = (tx as any).processedOperation?.findUnique
+          ? await (tx as any).processedOperation.findUnique({
+              where: { operation_id: mutation.depends_on_operation_id },
+            })
+          : null;
 
-      if (!dep || dep.status !== 'COMPLETED') {
-        return {
-          operation_id: mutation.operation_id,
-          entity_id: shiftId,
-          status: 'FAILED_RETRYABLE',
-          server_version: mutation.base_version ?? 1,
-          server_timestamp: new Date().toISOString(),
-          error_message: `Unsynced dependency: operation '${mutation.depends_on_operation_id}' has not been synced or completed yet`,
-        };
+        if (!dep || dep.status !== 'COMPLETED') {
+          return {
+            operation_id: mutation.operation_id,
+            entity_id: shiftId,
+            status: 'FAILED_RETRYABLE',
+            server_version: mutation.base_version ?? 1,
+            server_timestamp: new Date().toISOString(),
+            error_message: `Unsynced dependency: operation '${mutation.depends_on_operation_id}' has not been synced or completed yet`,
+          };
+        }
       }
     }
 
-    // 2. Fetch existing shift
-    const existing = await tx.dailyCalculation.findUnique({
+    // 2. Fetch existing shift (with self-healing if missing)
+    let existing = await tx.dailyCalculation.findUnique({
       where: { id: shiftId },
       include: { expense_items: true },
     });
+
+    const actualCash = payload.actual_cash_counted !== undefined
+      ? Number(payload.actual_cash_counted)
+      : (payload.cash_submitted !== undefined ? Number(payload.cash_submitted) : 0);
+    const cashVariance = Number(payload.cash_variance ?? 0);
+    const varianceReason = payload.variance_reason || null;
+    const closingNotes = payload.closing_notes || existing?.closing_notes || null;
+    const status = payload.status || 'CLOSED';
+    const submittedAt = payload.submitted_at ? new Date(payload.submitted_at) : new Date();
 
     if (!existing) {
       return {
@@ -288,31 +348,7 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
-    // 5. Update shift (Spec §7.3, §8.3(3), Decision 2: accept cash_variance, OFFLINE_CLOSED)
-    const actualCash = payload.actual_cash_counted !== undefined
-      ? Number(payload.actual_cash_counted)
-      : (payload.cash_submitted !== undefined ? Number(payload.cash_submitted) : 0);
-    const cashVariance = Number(payload.cash_variance ?? 0);
-    const varianceReason = payload.variance_reason || null;
-    const closingNotes = payload.closing_notes || existing.closing_notes || null;
-    const status = payload.status || 'OFFLINE_CLOSED';
-    const submittedAt = payload.submitted_at ? new Date(payload.submitted_at) : new Date();
-
-    const updated = await tx.dailyCalculation.update({
-      where: { id: shiftId },
-      data: {
-        status,
-        cash_submitted: new Prisma.Decimal(actualCash),
-        cash_variance: new Prisma.Decimal(cashVariance),
-        variance_amount: new Prisma.Decimal(payload.variance_amount !== undefined ? Number(payload.variance_amount) : cashVariance),
-        variance_reason: varianceReason,
-        closing_notes: closingNotes,
-        submitted_at: submittedAt,
-        version: { increment: 1 },
-      } as any,
-    });
-
-    // 6. Permanently associate any orders from this session
+    // 5. Permanently associate any orders from this session
     await tx.order.updateMany({
       where: {
         OR: [
@@ -329,6 +365,109 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       data: {
         shift_id: existing.id,
       },
+    });
+
+    // Auto-resolve pending orders for this shift
+    await tx.order.updateMany({
+      where: {
+        shift_id: existing.id,
+        status: { notIn: ['completed', 'cancelled', 'rejected'] },
+        is_paid: true,
+      },
+      data: { status: 'completed' },
+    });
+    await tx.order.updateMany({
+      where: {
+        shift_id: existing.id,
+        status: { notIn: ['completed', 'cancelled', 'rejected'] },
+        is_paid: false,
+      },
+      data: { status: 'cancelled' },
+    });
+
+    // Compute financial totals from orders
+    const shiftOrders = tx.order?.findMany
+      ? await tx.order.findMany({
+          where: {
+            shift_id: existing.id,
+            status: { notIn: ['cancelled', 'rejected'] },
+          },
+          include: { payments: true },
+        })
+      : [];
+
+    let totalGrossSales = 0;
+    let totalCashSales = 0;
+    let totalCardSales = 0;
+    let totalOnlineSales = 0;
+    let totalDiscounts = 0;
+    let totalTax = 0;
+    let dineInCount = 0;
+    let takeawayCount = 0;
+    let onlineCount = 0;
+
+    for (const ord of shiftOrders) {
+      const gTotal = Number(ord.grand_total || 0);
+      totalGrossSales += gTotal;
+      totalDiscounts += Number(ord.discount_amount || 0);
+      totalTax += Number(ord.tax_amount || 0);
+
+      const type = (ord.order_type || '').toLowerCase();
+      if (type.includes('dine')) dineInCount++;
+      else if (type.includes('takeaway')) takeawayCount++;
+      else onlineCount++;
+
+      if (ord.payments && ord.payments.length > 0) {
+        let orderPaidSum = 0;
+        for (const p of ord.payments) {
+          const amt = Number(p.amount || 0);
+          orderPaidSum += amt;
+          const method = (p.payment_method || '').toLowerCase();
+          if (method === 'cash') {
+            totalCashSales += amt;
+          } else if (method === 'card' || method === 'credit' || method === 'debit') {
+            totalCardSales += amt;
+          } else {
+            totalOnlineSales += amt;
+          }
+        }
+        if (orderPaidSum < gTotal) {
+          totalCashSales += (gTotal - orderPaidSum);
+        }
+      } else {
+        totalCashSales += gTotal;
+      }
+    }
+
+    const startingCashNum = Number(existing.starting_cash || 0);
+    const expectedCash = startingCashNum + totalCashSales;
+    const finalVariance = payload.cash_variance !== undefined
+      ? Number(payload.cash_variance)
+      : (actualCash - expectedCash);
+
+    const updated = await tx.dailyCalculation.update({
+      where: { id: shiftId },
+      data: {
+        status,
+        cash_submitted: new Prisma.Decimal(actualCash),
+        expected_cash_in_hand: new Prisma.Decimal(expectedCash),
+        cash_variance: new Prisma.Decimal(finalVariance),
+        variance_amount: new Prisma.Decimal(payload.variance_amount !== undefined ? Number(payload.variance_amount) : finalVariance),
+        variance_reason: varianceReason,
+        closing_notes: closingNotes,
+        submitted_at: submittedAt,
+        total_gross_sales: new Prisma.Decimal(totalGrossSales),
+        total_cash_sales: new Prisma.Decimal(totalCashSales),
+        total_card_sales: new Prisma.Decimal(totalCardSales),
+        total_online_sales: new Prisma.Decimal(totalOnlineSales),
+        total_discounts: new Prisma.Decimal(totalDiscounts),
+        total_tax: new Prisma.Decimal(totalTax),
+        total_orders_count: shiftOrders.length,
+        dine_in_count: dineInCount,
+        takeaway_count: takeawayCount,
+        online_count: onlineCount,
+        version: { increment: 1 },
+      } as any,
     });
 
     const newVersion = (updated as any).version ?? currentVersion + 1;

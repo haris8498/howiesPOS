@@ -87,6 +87,19 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
         'created_at': now.toIso8601String(),
       };
 
+      String? priorCloseOpId;
+      final priorCloseOp = await (_db.select(_db.syncOutbox)
+        ..where((t) =>
+            t.entityType.equals('shift') &
+            t.operationType.equals('UPDATE') &
+            t.status.isIn([SyncOutboxStatus.pending, SyncOutboxStatus.failedRetryable]))
+        ..orderBy([(t) => OrderingTerm.desc(t.id)])
+        ..limit(1))
+        .getSingleOrNull();
+      if (priorCloseOp != null) {
+        priorCloseOpId = priorCloseOp.operationId;
+      }
+
       final outboxCompanion = SyncOutboxCompanion(
         operationId: Value(operationId),
         deviceId: Value(_deviceId),
@@ -95,6 +108,7 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
         operationType: const Value('INSERT'),
         baseVersion: const Value(1),
         payload: Value(jsonEncode(payload)),
+        dependsOnOperationId: Value(priorCloseOpId),
         dependencyOrder: const Value(0), // Level 0: Shift Session (§6.3)
         status: const Value(SyncOutboxStatus.pending),
         retryCount: const Value(0),
@@ -118,6 +132,7 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
     String? closingNotes,
     String? dependsOnOperationId,
     List<Map<String, dynamic>>? expenseItems,
+    bool forceClose = false,
   }) async {
     return await _db.transaction(() async {
       final existing = await _db.dailyCalculationsDao.getCalculationById(shiftId);
@@ -139,16 +154,81 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
             (t.shiftId.isNull() & t.createdAt.isBiggerOrEqualValue(sessionStart))) &
           t.status.isNotIn(['completed', 'cancelled', 'rejected'])))
         .get();
-      if (pendingOrders.isNotEmpty) {
-        throw StateError(
-          'Cannot close this shift because there are ${pendingOrders.length} pending orders. ' +
-          'Please complete or resolve all pending orders before closing the shift.',
-        );
+            if (pendingOrders.isNotEmpty) {
+        if (forceClose) {
+          for (final ord in pendingOrders) {
+            final isPaid = ord.isPaid == true || ord.paymentStatus == 'paid';
+            final resolvedStatus = isPaid ? 'completed' : 'cancelled';
+            await (_db.update(_db.localOrders)..where((t) => t.id.equals(ord.id))).write(
+              LocalOrdersCompanion(
+                status: Value(resolvedStatus),
+                shiftId: Value(shiftId),
+              ),
+            );
+            final autoOpId = _uuid.v7();
+            await _db.outboxDao.insertEntry(
+              SyncOutboxCompanion(
+                operationId: Value(autoOpId),
+                deviceId: Value(_deviceId),
+                entityType: const Value('order'),
+                entityId: Value(ord.id),
+                operationType: const Value('UPDATE'),
+                baseVersion: Value(ord.serverVersion),
+                payload: Value(jsonEncode({
+                  'id': ord.id,
+                  'status': resolvedStatus,
+                  'shift_id': shiftId,
+                })),
+                dependencyOrder: const Value(2),
+                status: const Value(SyncOutboxStatus.pending),
+                retryCount: const Value(0),
+                createdAt: Value(DateTime.now()),
+              ),
+            );
+          }
+        } else {
+          throw StateError(
+            'Cannot close this shift because there are ' + pendingOrders.length.toString() + ' pending orders. ' +
+            'Please complete or resolve all pending orders before closing the shift.',
+          );
+        }
       }
 
       // Calculate cash variance (negative = shortage, positive = overage) per Spec §21 Decision 2
       final effectiveVariance = cashVariance ?? (actualCashCounted - expectedCashDrawer);
       final submittedAt = DateTime.now();
+
+      // If pending INSERT mutation exists for this shift, mark it OFFLINE_CLOSED
+      final shiftInsertEntry = await (_db.select(_db.syncOutbox)
+        ..where((t) =>
+            t.entityType.equals('shift') &
+            t.entityId.equals(shiftId) &
+            t.operationType.equals('INSERT') &
+            t.status.equals(SyncOutboxStatus.pending)))
+        .getSingleOrNull();
+      if (shiftInsertEntry != null) {
+        try {
+          final decoded = jsonDecode(shiftInsertEntry.payload) as Map<String, dynamic>;
+          decoded['status'] = DailyCalculationStatus.offlineClosed;
+          await (_db.update(_db.syncOutbox)..where((t) => t.id.equals(shiftInsertEntry.id))).write(
+            SyncOutboxCompanion(
+              payload: Value(jsonEncode(decoded)),
+            ),
+          );
+        } catch (_) {}
+      }
+
+      String? effectiveDependsOn = dependsOnOperationId;
+      if (effectiveDependsOn == null) {
+        final lastOp = await (_db.select(_db.syncOutbox)
+          ..where((t) => t.status.isIn([SyncOutboxStatus.pending, SyncOutboxStatus.failedRetryable]))
+          ..orderBy([(t) => OrderingTerm.desc(t.id)])
+          ..limit(1))
+          .getSingleOrNull();
+        if (lastOp != null) {
+          effectiveDependsOn = lastOp.operationId;
+        }
+      }
 
       // 1. Update local_daily_calculations table
       await _db.dailyCalculationsDao.closeShiftOffline(
@@ -189,7 +269,7 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
         operationType: const Value('UPDATE'),
         baseVersion: Value(existing.serverVersion),
         payload: Value(jsonEncode(payload)),
-        dependsOnOperationId: Value(dependsOnOperationId),
+        dependsOnOperationId: Value(effectiveDependsOn),
         dependencyOrder: const Value(5), // Level 5: Shift Close (§6.3)
         status: const Value(SyncOutboxStatus.pending),
         retryCount: const Value(0),

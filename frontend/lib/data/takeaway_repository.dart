@@ -1,3 +1,4 @@
+import 'repositories/order_repository_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/models/menu_item.dart';
@@ -362,18 +363,27 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
   }
 
   Future<void> updateOrderStatus(String orderId, String newStatus) async {
+    String statusStr = 'accepted';
+    OrderStatus parsedStatus = OrderStatus.accepted;
+    if (newStatus == 'Ready for Pickup') {
+      statusStr = 'ready';
+      parsedStatus = OrderStatus.ready;
+    } else if (newStatus == 'Completed') {
+      statusStr = 'completed';
+      parsedStatus = OrderStatus.completed;
+    } else if (newStatus == 'Cancelled') {
+      statusStr = 'cancelled';
+      parsedStatus = OrderStatus.cancelled;
+    }
     try {
-      String statusStr = 'accepted';
-      if (newStatus == 'Ready for Pickup') {
-        statusStr = 'ready';
-      } else if (newStatus == 'Completed') {
-        statusStr = 'completed';
-      } else if (newStatus == 'Cancelled') {
-        statusStr = 'cancelled';
-      }
       await _ordersApiService.updateOrderStatus(orderId, status: statusStr);
     } catch (_) {}
-
+    if (_ref != null) {
+      try {
+        final orderRepo = _ref.read(orderRepositoryProvider);
+        await orderRepo.updateOrderStatus(orderId, parsedStatus);
+      } catch (_) {}
+    }
     final updated = state.orders.map((o) {
       if (o.id == orderId) {
         return o.copyWith(status: newStatus);

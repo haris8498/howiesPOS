@@ -306,6 +306,21 @@ export class OrdersService {
 
       // 5B. Resolve Active Shift Session
       let activeShiftId: string | null = dto.shift_id || null;
+      if (activeShiftId) {
+        try {
+          const shiftExists = await tx.dailyCalculation.findUnique({
+            where: { id: activeShiftId },
+            select: { id: true },
+          });
+          if (!shiftExists) {
+            this.logger.warn(`Shift ID '${activeShiftId}' does not exist yet. Linking order without shift_id.`);
+            activeShiftId = null;
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to verify shift ID '${activeShiftId}': ${err}`);
+          activeShiftId = null;
+        }
+      }
       if (!activeShiftId) {
         try {
           const activeShift = await tx.dailyCalculation.findFirst({

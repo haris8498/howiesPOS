@@ -668,8 +668,8 @@ class CashierSyncCenterNotifier extends StateNotifier<CashierSyncCenterState> {
     final worker = _worker;
     if (worker != null) {
       try {
-        if (currentUsername.isNotEmpty) {
-          await worker.trySilentReauth(currentUsername);
+        if (_currentUsername.isNotEmpty) {
+          await worker.trySilentReauth(_currentUsername);
         }
         await worker.triggerPush(force: true);
         await worker.triggerPull();

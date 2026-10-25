@@ -316,6 +316,9 @@ model Order {
   takeaway_detail      TakeawayOrderDetail?
   dine_in_detail       DineInOrderDetail?
 
+  @@index([shift_id])
+  @@index([status])
+  @@index([created_at])
   @@map("orders")
 }
 
@@ -594,6 +597,9 @@ model DailyCalculation {
   expense_items        DailyExpenseItem[]
   orders               Order[]
 
+  @@index([status])
+  @@index([date])
+  @@index([cashier_id])
   @@map("daily_calculations")
 }
 

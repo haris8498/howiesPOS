@@ -662,6 +662,7 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
               varianceReason: varianceReason,
               closingNotes: closingNotes,
               expenseItems: expenseItems.map((e) => e.toJson()).toList(),
+            forceClose: forceClose,
             );
           }
         } catch (_) {}

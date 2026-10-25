@@ -1,3 +1,4 @@
+import { RealtimeModule } from '../realtime/realtime.module';
 import { Module } from '@nestjs/common';
 import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
@@ -14,7 +15,7 @@ import { KitchenModule } from '../kitchen/kitchen.module';
 import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor';
 
 @Module({
-  imports: [OrdersModule, KitchenModule],
+  imports: [OrdersModule, KitchenModule, RealtimeModule],
   controllers: [SyncController],
   providers: [
     SyncService,

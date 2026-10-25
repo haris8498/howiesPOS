@@ -23,6 +23,7 @@ abstract class IShiftRepository {
     String? closingNotes,
     String? dependsOnOperationId,
     List<Map<String, dynamic>>? expenseItems,
+    bool forceClose = false,
   });
 
   /// Retrieves currently active shift for a cashier, if any.

@@ -6,6 +6,7 @@ export interface SyncMutationContext {
   operationId: string;
   batchId?: string;
   receivedAt: Date;
+  completedInBatch?: Set<string>;
 }
 
 export type SyncResultStatus = 'SYNCED' | 'CONFLICT' | 'FAILED_FATAL' | 'DUPLICATE' | 'FAILED_RETRYABLE';

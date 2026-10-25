@@ -1,3 +1,4 @@
+import 'repositories/order_repository_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/models/order_model.dart';
 import '../services/api/api_providers.dart';
@@ -50,11 +51,14 @@ class KitchenState {
 class KitchenNotifier extends StateNotifier<KitchenState> {
   final KitchenApiService _kitchenApiService;
   final KitchenSocketService? _kitchenSocketService;
+  final Ref? _ref;
 
   KitchenNotifier({
     KitchenApiService? kitchenApiService,
     this._kitchenSocketService,
+    Ref? ref,
   })  : _kitchenApiService = kitchenApiService ?? KitchenApiService(),
+        _ref = ref,
         super(KitchenState(
           kitchenOrders: [
             OrderModel(
@@ -182,7 +186,12 @@ class KitchenNotifier extends StateNotifier<KitchenState> {
     try {
       await _kitchenApiService.updateStatus(orderId, nextStatus.name);
     } catch (_) {}
-
+    if (_ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        await orderRepo.updateOrderStatus(orderId, nextStatus);
+      } catch (_) {}
+    }
     _applyStatusUpdate(orderId, nextStatus);
   }
 
@@ -220,5 +229,6 @@ final kitchenProvider = StateNotifierProvider<KitchenNotifier, KitchenState>((re
   return KitchenNotifier(
     kitchenApiService: kitchenApi,
     kitchenSocketService: socketService,
+    ref: ref,
   );
 });

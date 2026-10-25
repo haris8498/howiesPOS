@@ -12,6 +12,7 @@ import '../../config/api_config.dart';
 import '../database/app_database.dart';
 import '../database/daos/retention_dao.dart';
 import '../database/tables/sync_outbox_table.dart';
+import '../database/tables/local_daily_calculations_table.dart';
 import '../database/tables/sync_conflicts_table.dart';
 import '../network/api_client.dart';
 import '../network/kitchen_socket_service.dart';
@@ -519,6 +520,9 @@ class SyncBackgroundWorker {
               await db.ordersDao.markOrderSynced(entry.entityId, serverVersion, serverTimestamp);
             } else if (entry.entityType == 'shift') {
               await db.dailyCalculationsDao.markCalculationSynced(entry.entityId, serverVersion);
+              if (entry.operationType == 'UPDATE') {
+                await db.dailyCalculationsDao.markShiftClosed(entry.entityId, closedAt: serverTimestamp);
+              }
             }
           } else if (status == 'CONFLICT') {
             Map<String, dynamic>? detailsMap;
@@ -1060,6 +1064,34 @@ class SyncBackgroundWorker {
         if (list.isNotEmpty) await db.catalogDao.upsertFloorZones(list);
       }
 
+      // 10B. Active Shift from Bootstrap
+      if (data['active_shift'] is Map<String, dynamic>) {
+        final shift = data['active_shift'] as Map<String, dynamic>;
+        final shiftId = shift['id']?.toString();
+        if (shiftId != null && shiftId.isNotEmpty) {
+          final startingCash = (shift['starting_cash'] as num?)?.toDouble() ??
+              (shift['opening_float'] as num?)?.toDouble() ?? 0.0;
+          final status = shift['status']?.toString() ?? DailyCalculationStatus.active;
+          final createdAt = shift['created_at'] != null
+              ? DateTime.tryParse(shift['created_at'].toString()) ?? DateTime.now()
+              : DateTime.now();
+
+          await db.dailyCalculationsDao.upsertCalculation(
+            LocalDailyCalculationsCompanion(
+              id: Value(shiftId),
+              cashierId: Value(shift['cashier_id']?.toString() ?? 'UNKNOWN'),
+              cashierName: Value(shift['cashier_name']?.toString() ?? 'Cashier'),
+              startingCash: Value(startingCash),
+              expectedCashDrawer: Value(startingCash),
+              status: Value(status),
+              createdAt: Value(createdAt),
+              syncStatus: const Value('synced'),
+              serverVersion: Value((shift['version'] as num?)?.toInt() ?? 1),
+            ),
+          );
+        }
+      }
+
       // 10. Tables
       if (data['tables'] is List) {
         final list = <LocalRestaurantTablesCompanion>[];
@@ -1146,6 +1178,55 @@ class SyncBackgroundWorker {
               version: Value(recordVersion),
             ),
           ]);
+        }
+        break;
+
+      case 'shift':
+      case 'daily_calculation':
+        final existingShift = await db.dailyCalculationsDao.getCalculationById(entityId);
+        if (existingShift != null && existingShift.serverVersion >= recordVersion) {
+          return;
+        }
+
+        if (isDeleted) {
+          await (db.delete(db.localDailyCalculations)..where((t) => t.id.equals(entityId))).go();
+        } else {
+          final serverStatus = payload['status']?.toString() ?? DailyCalculationStatus.active;
+          final startingCash = (payload['starting_cash'] as num?)?.toDouble() ??
+              (payload['opening_float'] as num?)?.toDouble() ??
+              existingShift?.startingCash ??
+              0.0;
+          final actualCash = (payload['actual_cash_counted'] as num?)?.toDouble() ??
+              (payload['cash_submitted'] as num?)?.toDouble() ??
+              existingShift?.actualCashCounted;
+          final cashVariance = (payload['cash_variance'] as num?)?.toDouble() ??
+              existingShift?.cashVariance ??
+              0.0;
+          final closingNotes = payload['closing_notes']?.toString() ?? existingShift?.closingNotes;
+          final submittedAt = payload['submitted_at'] != null
+              ? DateTime.tryParse(payload['submitted_at'].toString()) ?? existingShift?.submittedAt
+              : existingShift?.submittedAt;
+          final createdAt = payload['created_at'] != null
+              ? DateTime.tryParse(payload['created_at'].toString()) ?? DateTime.now()
+              : (existingShift?.createdAt ?? DateTime.now());
+
+          await db.dailyCalculationsDao.upsertCalculation(
+            LocalDailyCalculationsCompanion(
+              id: Value(entityId),
+              cashierId: Value(payload['cashier_id']?.toString() ?? existingShift?.cashierId ?? 'UNKNOWN'),
+              cashierName: Value(payload['cashier_name']?.toString() ?? existingShift?.cashierName ?? 'Cashier'),
+              startingCash: Value(startingCash),
+              expectedCashDrawer: Value(startingCash),
+              actualCashCounted: actualCash != null ? Value(actualCash) : const Value.absent(),
+              cashVariance: Value(cashVariance),
+              status: Value(serverStatus),
+              closingNotes: Value(closingNotes),
+              submittedAt: Value(submittedAt),
+              createdAt: Value(createdAt),
+              syncStatus: const Value('synced'),
+              serverVersion: Value(recordVersion),
+            ),
+          );
         }
         break;
 

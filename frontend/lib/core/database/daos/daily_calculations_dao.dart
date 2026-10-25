@@ -8,6 +8,10 @@ part 'daily_calculations_dao.g.dart';
 class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCalculationsDaoMixin {
   DailyCalculationsDao(super.db);
 
+  
+  Future<int> upsertCalculation(LocalDailyCalculationsCompanion entry) {
+    return into(localDailyCalculations).insertOnConflictUpdate(entry);
+  }
   Future<int> insertCalculation(LocalDailyCalculationsCompanion entry) {
     return into(localDailyCalculations).insert(entry);
   }

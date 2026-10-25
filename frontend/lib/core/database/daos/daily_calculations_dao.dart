@@ -24,6 +24,15 @@ class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCal
       .getSingleOrNull();
   }
 
+  /// Check if ANY active shift exists store-wide
+  Future<LocalDailyCalculation?> getAnyActiveCalculation() {
+    return (select(localDailyCalculations)
+      ..where((t) => t.status.equals(DailyCalculationStatus.active))
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1))
+      .getSingleOrNull();
+  }
+
   Stream<LocalDailyCalculation?> watchActiveCalculation(String cashierId) {
     return (select(localDailyCalculations)
       ..where((t) => t.cashierId.equals(cashierId) & t.status.equals(DailyCalculationStatus.active))
@@ -59,6 +68,16 @@ class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCal
       LocalDailyCalculationsCompanion(
         syncStatus: const Value('synced'),
         serverVersion: Value(serverVersion),
+      ),
+    );
+  }
+  Future<int> markShiftClosed(String id, {DateTime? closedAt, String? closingNotes}) {
+    return (update(localDailyCalculations)..where((t) => t.id.equals(id))).write(
+      LocalDailyCalculationsCompanion(
+        status: const Value(DailyCalculationStatus.closed),
+        submittedAt: Value(closedAt ?? DateTime.now()),
+        closingNotes: Value(closingNotes),
+        syncStatus: const Value('synced'),
       ),
     );
   }

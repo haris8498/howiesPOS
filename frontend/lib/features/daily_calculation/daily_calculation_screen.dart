@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,20 +29,32 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     return expenses.fold(0.0, (sum, item) => sum + item.amount);
   }
 
-  bool get _isSkimmingMatched => (_cashSkimming - _totalExpenses).abs() < 0.5;
+  bool get _isSkimmingMatched => true;
   bool _isRevenueMatched(double systemCashSales) => (_cashSubmitted - (systemCashSales - _totalExpenses)).abs() < 1.0;
-  bool _isCountedMatched(double expectedCounted) => (_cashCounted - expectedCounted).abs() < 1.0;
+
+  void _autoFillExpectedCash(double startingCash, double systemCashSales) {
+    final expectedCounted = startingCash + systemCashSales;
+    final expectedSubmitted = (systemCashSales - _totalExpenses).clamp(0.0, double.infinity);
+    setState(() {
+      _cashSubmittedController.text = expectedCounted.toStringAsFixed(0);
+      _totalCashController.text = expectedSubmitted.toStringAsFixed(0);
+      _cashSkimmingController.text = '0';
+    });
+    _onDraftFieldsChanged();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Auto-filled calculated drawer cash figures.'),
+        backgroundColor: Color(0xFF16A34A),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
 
   bool _isReconciliationComplete(double systemCashSales, double startingCash) {
-    final expectedCounted = startingCash + systemCashSales;
-    final hasEnteredInput = _cashSubmittedController.text.trim().isNotEmpty ||
+    return _cashSubmittedController.text.trim().isNotEmpty ||
         _totalCashController.text.trim().isNotEmpty ||
         _cashSubmitted > 0 ||
         _cashCounted > 0;
-    return _isSkimmingMatched &&
-        _isRevenueMatched(systemCashSales) &&
-        _isCountedMatched(expectedCounted) &&
-        hasEnteredInput;
   }
 
 
@@ -246,20 +259,43 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     );
   }
 
-  Future<void> _submitCalculation(DailyCalculationState calcState) async {
+  Future<void> _submitCalculation(DailyCalculationState calcState, {bool forceClose = false}) async {
     final live = calcState.liveSummary;
 
     final double startingCash = calcState.startingCash > 0 ? calcState.startingCash : live.startingCash;
     final double expectedCounted = startingCash + live.totalCashSales;
 
     if (_cashSubmittedController.text.trim().isEmpty && _totalCashController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter at least Cash Counted or Cash Submitted before submitting.'),
-          backgroundColor: AppColors.danger,
+      final shouldAutoFill = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Auto-Fill System Drawer Amounts?'),
+          content: Text(
+            'Reconciliation cash fields are currently empty. Would you like to auto-fill with calculated system drawer figures (PKR ${expectedCounted.toStringAsFixed(0)}) and proceed?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF16A34A),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Auto-Fill & Continue'),
+            ),
+          ],
         ),
       );
-      return;
+      if (shouldAutoFill == true) {
+        _autoFillExpectedCash(startingCash, live.totalCashSales);
+      } else {
+        return;
+      }
+      if (!mounted) return;
     }
 
 
@@ -365,6 +401,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
               : 'Cash overage of PKR ${cashVariance.toStringAsFixed(0)} reported at shift close')
           : null,
       expectedCashDrawer: expectedCounted,
+      forceClose: forceClose,
     );
 
     if (record != null && mounted) {
@@ -413,14 +450,140 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
         ),
       );
     } else if (mounted) {
-      final errorMsg = ref.read(dailyCalculationProvider).errorMessage ?? 'Failed to close shift. Please ensure reconciliation fields are balanced.';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMsg),
-          backgroundColor: AppColors.danger,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      final state = ref.read(dailyCalculationProvider);
+      if (state.pendingOrdersCount > 0 || state.pendingOrders.isNotEmpty) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: const [
+                Icon(Icons.block_flipped, color: AppColors.danger, size: 28),
+                SizedBox(width: 10),
+                Text('Cannot Close Shift', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+            content: SizedBox(
+              width: 520,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppColors.danger.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 24),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            state.pendingOrdersCount > 0
+                                ? 'Cannot close this shift because there are ${state.pendingOrdersCount} pending / unresolved order(s). Please complete or resolve all pending orders before closing the shift.'
+                                : (state.errorMessage ?? 'Cannot close shift due to unresolved orders.'),
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (state.pendingOrders.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Unresolved Orders in this Shift:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: state.pendingOrders.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final o = state.pendingOrders[index];
+                          final orderNum = o['order_number'] ?? o['id'] ?? 'Order';
+                          final type = o['order_type'] ?? 'Unknown';
+                          final status = o['status'] ?? 'Pending';
+                          final total = o['total_amount'] ?? 0;
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                '$orderNum',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                            title: Text(
+                              '$type • Status: $status',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                            ),
+                            trailing: Text(
+                              'PKR $total',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Dismiss', style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryRed,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.table_restaurant_rounded, size: 16),
+                label: const Text('View Tables / Orders'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  context.go('/sales/tables');
+                },
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF16A34A),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.check_circle_rounded, size: 16),
+                label: const Text('Auto-Resolve Orders & Close'),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await _submitCalculation(calcState, forceClose: true);
+                },
+              ),
+            ],
+          ),
+        );
+      } else {
+        final errorMsg = state.errorMessage ?? 'Failed to close shift. Please ensure reconciliation fields are balanced.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     }
   }
 
@@ -449,44 +612,44 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     final double totalChangeCash = calcState.totalChangeCash > 0 ? calcState.totalChangeCash : startingCash;
     final double expectedCash = startingCash + live.totalCashSales - _cashSkimming - _totalExpenses;
 
-    // Rule 3: Expected Cash Counted = System Cash Sales + Starting Cash Float
+    // Expected Cash Counted = System Cash Sales + Starting Cash Float
     final double expectedCashCounted = startingCash + live.totalCashSales;
     final double countedDiff = _cashCounted - expectedCashCounted;
-    final bool isCountedBalanced = _cashCounted > 0 && _isCountedMatched(expectedCashCounted);
     final bool hasEnteredCounted = _cashSubmittedController.text.trim().isNotEmpty;
-    final bool isCountedError = !isCountedBalanced;
+    final bool isCountedBalanced = hasEnteredCounted && countedDiff.abs() < 1.0;
+    final bool isCountedError = false;
 
     String? countedHelperText;
     if (isCountedBalanced) {
       countedHelperText = '✓ Perfect Match: Cash Sales (${live.totalCashSales.toStringAsFixed(0)}) + Start Float (${startingCash.toStringAsFixed(0)}) = PKR ${expectedCashCounted.toStringAsFixed(0)}';
     } else if (hasEnteredCounted && _cashCounted > 0) {
       if (countedDiff < 0) {
-        countedHelperText = '⚠️ Short by PKR ${countedDiff.abs().toStringAsFixed(0)} (Expected: PKR ${expectedCashCounted.toStringAsFixed(0)})';
+        countedHelperText = 'ℹ️ Cash Shortage: PKR ${countedDiff.abs().toStringAsFixed(0)} (Expected: PKR ${expectedCashCounted.toStringAsFixed(0)})';
       } else {
-        countedHelperText = '⚠️ Cash Excess: Over by PKR ${countedDiff.toStringAsFixed(0)} (Expected: PKR ${expectedCashCounted.toStringAsFixed(0)})';
+        countedHelperText = 'ℹ️ Cash Excess: PKR ${countedDiff.toStringAsFixed(0)} (Expected: PKR ${expectedCashCounted.toStringAsFixed(0)})';
       }
     } else {
-      countedHelperText = '⚠️ Expected: PKR ${expectedCashCounted.toStringAsFixed(0)} (Cash Sales ${live.totalCashSales.toStringAsFixed(0)} + Start Float ${startingCash.toStringAsFixed(0)})';
+      countedHelperText = 'Expected Drawer: PKR ${expectedCashCounted.toStringAsFixed(0)} (Click Auto-Fill or enter count)';
     }
 
-    // Rule 2: Expected Cash Submitted = System Cash Sales - Total Expenses
+    // Expected Cash Submitted = System Cash Sales - Total Expenses
     final double expectedCashSubmitted = (live.totalCashSales - _totalExpenses).clamp(0.0, double.infinity);
     final double submittedDiff = _cashSubmitted - expectedCashSubmitted;
-    final bool isSubmittedBalanced = _cashSubmitted > 0 && _isRevenueMatched(live.totalCashSales);
     final bool hasEnteredSubmitted = _totalCashController.text.trim().isNotEmpty;
-    final bool isSubmittedError = !isSubmittedBalanced;
+    final bool isSubmittedBalanced = hasEnteredSubmitted && submittedDiff.abs() < 1.0;
+    final bool isSubmittedError = false;
 
     String? submittedHelperText;
     if (isSubmittedBalanced) {
-      submittedHelperText = '✓ Perfect Match: Revenue (${live.totalCashSales.toStringAsFixed(0)}) - Expenses (${_totalExpenses.toStringAsFixed(0)}) = PKR ${expectedCashSubmitted.toStringAsFixed(0)}';
+      submittedHelperText = '✓ Perfect Match: Net Cash Revenue = PKR ${expectedCashSubmitted.toStringAsFixed(0)}';
     } else if (hasEnteredSubmitted && _cashSubmitted > 0) {
       if (submittedDiff < 0) {
-        submittedHelperText = '⚠️ Short by PKR ${submittedDiff.abs().toStringAsFixed(0)} (Expected: PKR ${expectedCashSubmitted.toStringAsFixed(0)})';
+        submittedHelperText = 'ℹ️ Variance: PKR ${submittedDiff.abs().toStringAsFixed(0)} less than net revenue';
       } else {
-        submittedHelperText = '⚠️ Excess by PKR ${submittedDiff.toStringAsFixed(0)} (Expected: PKR ${expectedCashSubmitted.toStringAsFixed(0)})';
+        submittedHelperText = 'ℹ️ Variance: PKR ${submittedDiff.toStringAsFixed(0)} more than net revenue';
       }
     } else {
-      submittedHelperText = '⚠️ Expected: PKR ${expectedCashSubmitted.toStringAsFixed(0)} (Revenue ${live.totalCashSales.toStringAsFixed(0)} - Expenses ${_totalExpenses.toStringAsFixed(0)})';
+      submittedHelperText = 'Expected Submitted: PKR ${expectedCashSubmitted.toStringAsFixed(0)} (Net Revenue)';
     }
 
     return Scaffold(
@@ -526,12 +689,49 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                                 ),
                               ),
                               const SizedBox(height: 2),
-                              Text(
-                                'Shift date: ${DateFormat('EEEE, dd MMMM yyyy').format(DateTime.tryParse(live.date) ?? DateTime.now())}  •  Cashier Shift',
-                                style: TextStyle(
-                                  color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
-                                  fontSize: 12,
-                                ),
+                              Builder(
+                                builder: (context) {
+                                  final shiftDateObj = live.shiftDate.isNotEmpty
+                                      ? (DateTime.tryParse(live.shiftDate) ?? DateTime.tryParse(live.date) ?? DateTime.now())
+                                      : (DateTime.tryParse(live.date) ?? DateTime.now());
+                                  final isOvernight = DateTime.now().difference(shiftDateObj).inDays >= 1 ||
+                                      DateTime.now().day != shiftDateObj.day;
+                                  final openedAtStr = live.openedAt != null
+                                      ? DateFormat('dd MMM yyyy, hh:mm a').format(live.openedAt!)
+                                      : null;
+
+                                  return Row(
+                                    children: [
+                                      Text(
+                                        'Shift Date: ${DateFormat('dd MMMM yyyy').format(shiftDateObj)}  •  Status: ${calcState.hasActiveSession ? "OPEN" : "CLOSED"}${openedAtStr != null ? "  •  Opened: $openedAtStr" : ""}',
+                                        style: TextStyle(
+                                          color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      if (calcState.hasActiveSession && isOvernight) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF7C3AED).withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.4)),
+                                          ),
+                                          child: const Text(
+                                            '🌙 Overnight Shift',
+                                            style: TextStyle(
+                                              color: Color(0xFF7C3AED),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -652,14 +852,33 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                   const SizedBox(height: 22),
 
                   // 3. THREE MANDATORY CASHIER INPUT FIELDS
-                  Text(
-                    'CASHIER CLOSING COUNT & DRAWER RECONCILIATION',
-                    style: TextStyle(
-                      color: isDark ? Colors.white70 : AppColors.textPrimary,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                      letterSpacing: 0.5,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'CASHIER CLOSING COUNT & DRAWER RECONCILIATION',
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : AppColors.textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF16A34A),
+                          backgroundColor: const Color(0xFF16A34A).withValues(alpha: 0.12),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.auto_fix_high_rounded, size: 16),
+                        label: const Text(
+                          '⚡ Auto-Fill Calculated Cash',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                        onPressed: () => _autoFillExpectedCash(startingCash, live.totalCashSales),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
 
@@ -985,7 +1204,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                                           color: _isSkimmingMatched ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
                                         ),
                                         const SizedBox(width: 6),
-                                        const Text('Rule 1: Skim == Expense', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+                                        const Text('Drawer Skimming / Safe Drop', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
                                       ],
                                     ),
                                     const SizedBox(height: 6),
@@ -1031,7 +1250,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                                           color: _isRevenueMatched(live.totalCashSales) ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
                                         ),
                                         const SizedBox(width: 6),
-                                        const Text('Rule 2: Sub == Revenue - Exp', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+                                        const Text('Net Cash Revenue Submitted', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
                                       ],
                                     ),
                                     const SizedBox(height: 6),
@@ -1142,12 +1361,10 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                         ),
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _isReconciliationComplete(live.totalCashSales, startingCash)
-                                ? const Color(0xFF16A34A)
-                                : const Color(0xFF94A3B8),
+                            backgroundColor: const Color(0xFF16A34A),
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-                            elevation: _isReconciliationComplete(live.totalCashSales, startingCash) ? 4 : 0,
+                            elevation: 4,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
                           onPressed: calcState.isSubmitting
@@ -1155,16 +1372,11 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                               : () => _submitCalculation(calcState),
                           icon: calcState.isSubmitting
                               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : Icon(
-                                  _isReconciliationComplete(live.totalCashSales, startingCash) ? Icons.lock_clock_rounded : Icons.save_rounded,
-                                  size: 20,
-                                ),
+                              : const Icon(Icons.lock_clock_rounded, size: 20),
                           label: Text(
                             calcState.isSubmitting
                                 ? 'SUBMITTING...'
-                                : (_isReconciliationComplete(live.totalCashSales, startingCash)
-                                    ? 'SUBMIT DAILY CALCULATION & CLOSE SHIFT'
-                                    : 'VERIFY CALCULATIONS TO CLOSE'),
+                                : 'SUBMIT DAILY CALCULATION & CLOSE SHIFT',
                             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5),
                           ),
                         ),

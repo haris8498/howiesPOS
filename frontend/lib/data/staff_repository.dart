@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/network/realtime_socket_service.dart';
 import '../domain/models/staff_model.dart';
 import '../services/api/api_providers.dart';
 import '../services/api/staff_api_service.dart';
@@ -46,6 +47,7 @@ class StaffState {
 
 class StaffNotifier extends StateNotifier<StaffState> {
   final StaffApiService _staffApiService;
+  SocketEventCallback? _socketStaffCallback;
 
   StaffNotifier({StaffApiService? staffApiService})
       : _staffApiService = staffApiService ?? StaffApiService(),
@@ -53,6 +55,28 @@ class StaffNotifier extends StateNotifier<StaffState> {
           staffMembers: [],
         )) {
     loadStaff();
+    _initRealtimeListeners();
+  }
+
+  void _initRealtimeListeners() {
+    _socketStaffCallback = (payload) {
+      loadStaff();
+    };
+    RealtimeSocketService.instance.on('staff:updated', _socketStaffCallback!);
+    RealtimeSocketService.instance.on('staff:created', _socketStaffCallback!);
+    RealtimeSocketService.instance.on('staff:deleted', _socketStaffCallback!);
+    RealtimeSocketService.instance.on('user:updated', _socketStaffCallback!);
+  }
+
+  @override
+  void dispose() {
+    if (_socketStaffCallback != null) {
+      RealtimeSocketService.instance.off('staff:updated', _socketStaffCallback);
+      RealtimeSocketService.instance.off('staff:created', _socketStaffCallback);
+      RealtimeSocketService.instance.off('staff:deleted', _socketStaffCallback);
+      RealtimeSocketService.instance.off('user:updated', _socketStaffCallback);
+    }
+    super.dispose();
   }
 
   Future<void> loadStaff({DateTime? targetMonth}) async {
@@ -135,6 +159,25 @@ class StaffNotifier extends StateNotifier<StaffState> {
       }
     } catch (_) {}
     await loadStaff();
+  }
+
+  Future<bool> updateStaffMember(String id, Map<String, dynamic> updates) async {
+    try {
+      final res = await _staffApiService.updateStaff(id, updates);
+      if (res.isNotEmpty) {
+        final updatedMember = StaffMember.fromBackendJson(res);
+        final updated = state.staffMembers.map((s) {
+          if (s.id == id) return updatedMember;
+          return s;
+        }).toList();
+        state = state.copyWith(staffMembers: updated);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      await loadStaff();
+      rethrow;
+    }
   }
 
   Future<void> deleteStaffMember(String id) async {

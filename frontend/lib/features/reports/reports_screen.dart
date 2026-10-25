@@ -279,17 +279,34 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         }).toList();
 
         final summary = summaryAsync.value ?? {};
-        final totalSalesRevenue = (summary['totalRevenue'] ?? 0).toDouble();
-        final totalCashSales = (summary['totalCashSales'] ?? 0).toDouble();
+        final computedUnits = reportProducts.fold<int>(0, (sum, p) => sum + p.unitsSold);
+        final computedRev = reportProducts.fold<double>(0.0, (sum, p) => sum + p.totalRevenue);
+
+        final totalSalesRevenue = (summary['totalRevenue'] != null && (summary['totalRevenue'] as num) > 0)
+            ? (summary['totalRevenue'] as num).toDouble()
+            : computedRev;
         final totalCardSales = (summary['totalCardSales'] ?? 0).toDouble();
         final totalOnlineSales = (summary['totalOnlineSales'] ?? 0).toDouble();
-        final totalSubtotal = (summary['totalSubtotal'] ?? (summary['subtotal'] ?? 0)).toDouble();
+        final totalCashSales = (summary['totalCashSales'] != null && (summary['totalCashSales'] as num) > 0)
+            ? (summary['totalCashSales'] as num).toDouble()
+            : (totalCardSales + totalOnlineSales == 0 ? totalSalesRevenue : (summary['totalCashSales'] ?? 0).toDouble());
+        final totalSubtotal = (summary['totalSubtotal'] != null && (summary['totalSubtotal'] as num) > 0)
+            ? (summary['totalSubtotal'] as num).toDouble()
+            : (summary['subtotal'] != null && (summary['subtotal'] as num) > 0
+                ? (summary['subtotal'] as num).toDouble()
+                : totalSalesRevenue);
         final totalDiscount = (summary['totalDiscount'] ?? (summary['discount_amount'] ?? 0)).toDouble();
         final totalTax = (summary['totalTax'] ?? (summary['tax_amount'] ?? 0)).toDouble();
-        final totalUnitsSold = summary['totalUnitsSold'] ?? 0;
-        final avgItemPrice = (summary['avgItemPrice'] ?? 0).toDouble();
+        final totalUnitsSold = (summary['totalUnitsSold'] != null && (summary['totalUnitsSold'] as num) > 0)
+            ? (summary['totalUnitsSold'] as num).toInt()
+            : computedUnits;
+        final avgItemPrice = (summary['avgItemPrice'] != null && (summary['avgItemPrice'] as num) > 0)
+            ? (summary['avgItemPrice'] as num).toDouble()
+            : (totalUnitsSold > 0 ? totalSubtotal / totalUnitsSold : 0.0);
         final totalExpenses = (summary['totalExpenses'] ?? 0).toDouble();
-        final netProfit = (summary['netProfit'] ?? 0).toDouble();
+        final netProfit = (summary['netProfit'] != null && (summary['totalRevenue'] != null && (summary['totalRevenue'] as num) > 0))
+            ? (summary['netProfit'] as num).toDouble()
+            : (totalSalesRevenue - totalExpenses);
 
     return Container(
       color: isDark ? const Color(0xFF090D16) : const Color(0xFFF8FAFC),
@@ -539,7 +556,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['Today', 'Last Year', 'This Month', 'This Year', 'Custom Date'].map((filter) {
+                          children: ['Today', 'This Week', 'This Month', 'This Year', 'Last Year', 'Custom Date'].map((filter) {
                             final isSelected = _selectedDateFilter == filter;
                             return ChoiceChip(
                               label: Text(filter),
@@ -559,9 +576,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                                   setState(() => _selectedDateFilter = filter);
                                   String periodMap = 'thismonth';
                                   if (filter == 'Today') periodMap = 'today';
-                                  if (filter == 'Last Year') periodMap = 'year';
+                                  if (filter == 'This Week') periodMap = 'thisweek';
                                   if (filter == 'This Month') periodMap = 'thismonth';
                                   if (filter == 'This Year') periodMap = 'thisyear';
+                                  if (filter == 'Last Year') periodMap = 'lastyear';
                                   ref.read(reportFiltersProvider.notifier).state = {'period': periodMap};
                                 }
                               },

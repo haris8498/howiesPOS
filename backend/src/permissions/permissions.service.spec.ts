@@ -39,10 +39,10 @@ describe('PermissionsService', () => {
               findFirst: jest.fn().mockImplementation(({ where }) => {
                 const found = mockPermissions.find(
                   (p) =>
-                    p.role === where.role &&
-                    p.module_name === where.module_name &&
-                    p.action_name === where.action_name &&
-                    p.is_granted === where.is_granted,
+                    (where.role === undefined || p.role === where.role) &&
+                    (where.module_name === undefined || (where.module_name?.in ? where.module_name.in.includes(p.module_name) : p.module_name === where.module_name)) &&
+                    (where.action_name === undefined || (where.action_name?.in ? where.action_name.in.includes(p.action_name) : p.action_name === where.action_name)) &&
+                    (where.is_granted === undefined || p.is_granted === where.is_granted),
                 );
                 return Promise.resolve(found || null);
               }),

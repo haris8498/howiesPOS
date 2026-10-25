@@ -40,13 +40,6 @@ class CashierTopNavigationBar extends ConsumerWidget {
           title: 'Tables',
           route: '/sales/tables',
           icon: Icons.table_restaurant_rounded,
-          alternativeRoutes: ['/sales/pos', '/sales/orders'],
-        )
-      else if (can('pos', moduleName: 'POS Billing', defaultIfMissing: true))
-        _TopNavItem(
-          title: 'POS Sales',
-          route: '/sales/pos',
-          icon: Icons.point_of_sale_rounded,
         ),
       if (can('takeaway', moduleName: 'Takeaway Counter', defaultIfMissing: true))
         _TopNavItem(
@@ -104,7 +97,7 @@ class CashierTopNavigationBar extends ConsumerWidget {
           route: '/sales/expenses',
           icon: Icons.account_balance_wallet_rounded,
         ),
-      if (can('reports', moduleName: 'Reports', defaultIfMissing: true))
+      if (can('reports', moduleName: 'Reports', defaultIfMissing: false))
         _TopNavItem(
           title: 'Reports',
           route: '/sales/reports',
@@ -112,7 +105,7 @@ class CashierTopNavigationBar extends ConsumerWidget {
         ),
       if (can('data_sync', moduleName: 'Data Sync', defaultIfMissing: true))
         _TopNavItem(
-          title: 'Data Synced',
+          title: 'My Sync Center',
           route: '/sales/data-sync',
           icon: Icons.cloud_sync_rounded,
         ),
@@ -125,7 +118,6 @@ class CashierTopNavigationBar extends ConsumerWidget {
           title: 'Tables',
           route: '/sales/tables',
           icon: Icons.table_restaurant_rounded,
-          alternativeRoutes: ['/sales/pos', '/sales/orders'],
         ),
       );
     }
@@ -154,8 +146,7 @@ class CashierTopNavigationBar extends ConsumerWidget {
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: navItems.map((item) {
-                  final bool isSelected = currentRoute == item.route ||
-                      (item.alternativeRoutes?.contains(currentRoute) ?? false);
+                  final bool isSelected = currentRoute == item.route;
 
                   if (isSelected) {
                     // Active Pill Style (White background with Red Text)
@@ -547,14 +538,11 @@ class _TopNavItem {
   final IconData icon;
   final int badgeCount;
   final bool isComingSoon;
-  final List<String>? alternativeRoutes;
-
   _TopNavItem({
     required this.title,
     required this.route,
     required this.icon,
     this.badgeCount = 0,
     this.isComingSoon = false,
-    this.alternativeRoutes,
   });
 }

@@ -70,7 +70,7 @@ describe('UsersService', () => {
             $transaction: jest.fn().mockImplementation((cb) =>
               cb({
                 staffMember: { update: jest.fn().mockResolvedValue({}) },
-                staffUser: { delete: jest.fn().mockResolvedValue(mockSafeUser) },
+                staffUser: { update: jest.fn().mockResolvedValue(mockSafeUser), delete: jest.fn().mockResolvedValue(mockSafeUser) },
               }),
             ),
           },
@@ -140,6 +140,6 @@ describe('UsersService', () => {
 
   it('should delete user successfully', async () => {
     const result = await service.deleteUser('u-1');
-    expect(result.message).toContain('deleted successfully');
+    expect(result.message).toContain('deleted');
   });
 });

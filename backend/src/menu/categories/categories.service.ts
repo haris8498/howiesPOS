@@ -1,4 +1,5 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { MenuCategory } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCategoryDto, UpdateCategoryDto } from '../dto/category.dto';
@@ -7,7 +8,10 @@ import { CreateCategoryDto, UpdateCategoryDto } from '../dto/category.dto';
 export class CategoriesService {
   private readonly logger = new Logger(CategoriesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listCategories(): Promise<MenuCategory[]> {
     return this.prisma.menuCategory.findMany({

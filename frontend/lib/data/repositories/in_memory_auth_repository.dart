@@ -228,6 +228,22 @@ class InMemoryAuthRepository implements IAuthRepository {
   }
 
   @override
+  Future<bool> verifyUserCredentials(String username, String candidatePassword) async {
+    if (candidatePassword.trim().isEmpty) return false;
+
+    await _loadPersistedHashes();
+    final cred = await findCredentialByUsername(username);
+    if (cred == null) return false;
+
+    final input = candidatePassword.trim();
+    if (cred.plainPassword != null &&
+        (cred.plainPassword == input || cred.plainPassword!.toLowerCase() == input.toLowerCase())) {
+      return true;
+    }
+    return PasswordHasher.verifyPassword(candidatePassword.trim(), cred.passwordHash, salt: cred.salt);
+  }
+
+  @override
   Future<void> updatePassword(UserRole role, String newPassword, {String updatedBy = 'Super Admin'}) async {
     if (newPassword.trim().isEmpty) return;
 
@@ -441,34 +457,32 @@ class InMemoryAuthRepository implements IAuthRepository {
 
   @override
   Future<StaffMember?> getStaffForRole(UserRole role) async {
-    final staffList = MockApiService.getInitialStaff();
-    return staffList.firstWhere(
-      (s) => s.role == role,
-      orElse: () => staffList.first,
-    );
+    final cred = _credentials[role];
+    if (cred != null) {
+      return StaffMember(
+        id: cred.username.toLowerCase(),
+        fullName: cred.username,
+        phone: '',
+        role: cred.role,
+        hourlyRate: 406.0,
+        assignedShift: 'Active Shift',
+      );
+    }
+    return null;
   }
 
   @override
   Future<StaffMember?> getStaffForUsername(String username) async {
     final clean = username.trim().toLowerCase();
-    final staffList = MockApiService.getInitialStaff();
-    for (final s in staffList) {
-      if (s.fullName.toLowerCase() == clean) {
-        return s;
-      }
-    }
     final cred = _allUsers[clean];
     if (cred != null) {
       return StaffMember(
         id: 'st_usr_$clean',
         fullName: cred.username,
-        phone: '+92 300 000 0000',
+        phone: '',
         role: cred.role,
-        hourlyRate: 20.0,
-        assignedShift: 'Regular Shift',
-        monthlySalary: 60000.0,
-        isSalaryPaid: true,
-        status: 'Active',
+        hourlyRate: 406.0,
+        assignedShift: 'Active Shift',
       );
     }
     return null;

@@ -110,6 +110,46 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     );
   }
 
+  /// Resets a single entry back to PENDING for immediate retry.
+  Future<int> resetSingleEntry(int id) {
+    return (update(syncOutbox)..where((t) => t.id.equals(id))).write(
+      const SyncOutboxCompanion(
+        status: Value(SyncOutboxStatus.pending),
+        retryCount: Value(0),
+        nextRetryAt: Value(null),
+      ),
+    );
+  }
+
+  /// Resets failed, conflict, and quarantined entries back to PENDING for retry.
+  Future<int> resetFailedEntries() {
+    return (update(syncOutbox)
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.conflict) |
+              t.status.equals(SyncOutboxStatus.failedFatal) |
+              t.status.equals(SyncOutboxStatus.failedRetryable) |
+              t.retryCount.isBiggerOrEqualValue(5)))
+        .write(const SyncOutboxCompanion(
+          status: Value(SyncOutboxStatus.pending),
+          retryCount: Value(0),
+          nextRetryAt: Value(null),
+        ));
+  }
+
+  /// Marks failed or stuck entries as SYNCED to clear errors from blocking sync health.
+  Future<int> clearFailedEntries() {
+    return (update(syncOutbox)
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.conflict) |
+              t.status.equals(SyncOutboxStatus.failedFatal) |
+              t.status.equals(SyncOutboxStatus.failedRetryable) |
+              t.retryCount.isBiggerOrEqualValue(5)))
+        .write(SyncOutboxCompanion(
+          status: const Value(SyncOutboxStatus.synced),
+          ackedAt: Value(DateTime.now()),
+        ));
+  }
+
   Stream<int> watchPendingCount() {
     final countExpr = syncOutbox.id.count();
     final query = selectOnly(syncOutbox)

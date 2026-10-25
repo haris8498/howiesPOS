@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma, StoreSetting } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
@@ -7,7 +8,10 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 export class SettingsService {
   private readonly logger = new Logger(SettingsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async getSettings(): Promise<StoreSetting> {
     let settings = await this.prisma.storeSetting.findFirst();

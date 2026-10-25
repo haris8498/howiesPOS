@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { DeliveryRider, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AssignRiderDto, CreateDispatchDto, UpdateDispatchStatusDto } from '../dto/dispatch.dto';
@@ -29,7 +25,10 @@ export type DeliveryDispatchWithRelations = Prisma.DeliveryDispatchGetPayload<{
 
 @Injectable()
 export class DispatchesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listDispatches(query?: QueryDispatchDto): Promise<DeliveryDispatchWithRelations[]> {
     const where: Prisma.DeliveryDispatchWhereInput = {};

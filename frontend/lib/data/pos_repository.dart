@@ -22,6 +22,8 @@ import 'repositories/api_kitchen_repository.dart';
 import 'repositories/api_table_repository.dart';
 import 'repositories/drift_offline_first_order_repository.dart';
 import 'repositories/order_repository_provider.dart';
+import '../features/reports/reports_providers.dart';
+import 'daily_calculation_repository.dart';
 
 export 'repositories/order_repository_provider.dart' show orderRepositoryProvider;
 
@@ -188,6 +190,7 @@ class PosNotifier extends StateNotifier<PosState> {
   final MenuApiService _menuApiService;
   final SettingsApiService _settingsApiService;
   final IOrderRepository? _orderRepository;
+  final Ref? _ref;
   StreamSubscription<List<OrderModel>>? _ordersSubscription;
 
   /// In-flight checkout future lock for Tier 1 duplicate submit defense (§15.2)
@@ -199,10 +202,12 @@ class PosNotifier extends StateNotifier<PosState> {
     MenuApiService? menuApiService,
     SettingsApiService? settingsApiService,
     IOrderRepository? orderRepository,
+    Ref? ref,
   })  : _numberGenerator = numberGenerator ?? OrderNumberGenerator(),
         _menuApiService = menuApiService ?? MenuApiService(),
         _settingsApiService = settingsApiService ?? SettingsApiService(),
         _orderRepository = orderRepository,
+        _ref = ref,
         super(PosState(
           menuItems: MockApiService.getInitialMenuItems(),
         )) {
@@ -225,6 +230,15 @@ class PosNotifier extends StateNotifier<PosState> {
           completedOrders: completed,
           heldOrders: held,
         );
+        final ref = _ref;
+        if (ref != null) {
+          try {
+            ref.invalidate(reportSummaryProvider);
+            ref.invalidate(reportProductsProvider);
+            ref.invalidate(cancelledOrdersProvider);
+            ref.read(dailyCalculationProvider.notifier).fetchLiveSummary();
+          } catch (_) {}
+        }
       });
     }
   }
@@ -235,8 +249,10 @@ class PosNotifier extends StateNotifier<PosState> {
     super.dispose();
   }
 
-  Future<void> _loadMenuAndSettings() async {
-    state = state.copyWith(isLoading: true);
+  Future<void> _loadMenuAndSettings({bool silent = false}) async {
+    if (!silent && state.menuItems.isEmpty) {
+      state = state.copyWith(isLoading: true);
+    }
     try {
       // 1. Load Categories
       final cats = await _menuApiService.listCategories();
@@ -301,8 +317,8 @@ class PosNotifier extends StateNotifier<PosState> {
     }
   }
 
-  Future<void> refreshMenu() async {
-    await _loadMenuAndSettings();
+  Future<void> refreshMenu({bool silent = true}) async {
+    await _loadMenuAndSettings(silent: silent);
   }
 
   void setCategory(String category) {
@@ -634,5 +650,6 @@ final posProvider = StateNotifierProvider<PosNotifier, PosState>((ref) {
     menuApiService: menuApi,
     settingsApiService: settingsApi,
     orderRepository: orderRepo,
+    ref: ref,
   );
 });

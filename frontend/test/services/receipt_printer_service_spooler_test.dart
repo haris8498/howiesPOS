@@ -429,5 +429,137 @@ void main() {
       expect(reportText.contains('1000'), isTrue);
       expect(reportText.contains('Expected In Drawer'), isTrue);
     });
+
+    test('8. Dine-In order modification and unmarking permits printing updated KOT (§15.2)', () async {
+      final dineInTable = 'T-1';
+      final orderNumber = 'DIN-101';
+      final tokenNumber = '001';
+
+      final initialKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: tokenNumber,
+        tokenNumber: tokenNumber,
+        tableNumber: dineInTable,
+        tableName: 'TABLE 1',
+        tableSection: 'Hall',
+        dateTime: DateTime.now(),
+        items: [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Chicken Fajita Pizza',
+            quantity: 1,
+            unitPrice: 1200.0,
+            totalPrice: 1200.0,
+          ),
+        ],
+        subtotal: 1200.0,
+        grandTotal: 1200.0,
+      );
+
+      int printCount = 0;
+      ReceiptPrinterService.testPrinterFn = (printer, bytes, {String? docName}) async {
+        printCount++;
+        return true;
+      };
+
+      // 1. Initial print
+      final success1 = await ReceiptPrinterService.printReceipt(
+        receipt: initialKot,
+        forcePrint: true,
+        db: db,
+      );
+      expect(success1, isTrue);
+      expect(printCount, 2); // Initial dual print
+
+      // Verify it is marked printed
+      final isPrintedInitial = await ReceiptPrinterService.isKitchenReceiptPrinted(
+        orderNumber,
+        tokenNumber: tokenNumber,
+        currentItemsSignature: initialKot.itemsSignature,
+        db: db,
+      );
+      expect(isPrintedInitial, isTrue);
+
+      // 2. Order is modified (new item added)
+      final modifiedKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: tokenNumber,
+        tokenNumber: tokenNumber,
+        tableNumber: dineInTable,
+        tableName: 'TABLE 1',
+        tableSection: 'Hall',
+        dateTime: DateTime.now(),
+        items: [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Chicken Fajita Pizza',
+            quantity: 1,
+            unitPrice: 1200.0,
+            totalPrice: 1200.0,
+          ),
+          ReceiptItemData(
+            id: 'item-2',
+            name: 'Garlic Bread',
+            quantity: 1,
+            unitPrice: 350.0,
+            totalPrice: 350.0,
+          ),
+        ],
+        subtotal: 1550.0,
+        grandTotal: 1550.0,
+        isModified: true,
+      );
+
+      // Signature mismatch unlocks printing!
+      final isPrintedModified = await ReceiptPrinterService.isKitchenReceiptPrinted(
+        orderNumber,
+        tokenNumber: tokenNumber,
+        currentItemsSignature: modifiedKot.itemsSignature,
+        db: db,
+      );
+      expect(isPrintedModified, isFalse, reason: 'Modified items signature must allow updated ticket print');
+
+      // 3. Unmarking resets both SQLite and in-memory locks
+      await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+        orderNumber: orderNumber,
+        tokenNumber: tokenNumber,
+        tableNumber: dineInTable,
+        db: db,
+      );
+
+      final isPrintedAfterUnmark = await ReceiptPrinterService.isKitchenReceiptPrinted(
+        orderNumber,
+        tokenNumber: tokenNumber,
+        currentItemsSignature: modifiedKot.itemsSignature,
+        db: db,
+      );
+      expect(isPrintedAfterUnmark, isFalse, reason: 'Unmarking must allow updated ticket print');
+
+      // 4. Verify hasOrderEverPrintedKot is true
+      final hasEverPrinted = await ReceiptPrinterService.hasOrderEverPrintedKot(
+        orderNumber,
+        tokenNumber: tokenNumber,
+        db: db,
+      );
+      expect(hasEverPrinted, isTrue, reason: 'Order was printed at least once');
+
+      // 5. Print updated KOT
+      final success2 = await ReceiptPrinterService.printReceipt(
+        receipt: modifiedKot,
+        forcePrint: true,
+        db: db,
+      );
+      expect(success2, isTrue);
+      expect(printCount, 4); // Second dual print
+
+      // 6. Verify it is locked again after printing the update
+      final isPrintedAfterUpdate = await ReceiptPrinterService.isKitchenReceiptPrinted(
+        orderNumber,
+        tokenNumber: tokenNumber,
+        currentItemsSignature: modifiedKot.itemsSignature,
+        db: db,
+      );
+      expect(isPrintedAfterUpdate, isTrue, reason: 'Button must remain disabled once updated ticket is printed');
+    });
   });
 }

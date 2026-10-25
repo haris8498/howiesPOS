@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 void main() async {
   try {
-    final response = await http.get(Uri.parse('http://localhost:3000/api/orders'));
+    final response = await http.get(Uri.parse('http://213.199.57.65/api/orders'));
     final jsonList = jsonDecode(response.body)['data'] as List;
     print('Fetched ${jsonList.length} orders');
 

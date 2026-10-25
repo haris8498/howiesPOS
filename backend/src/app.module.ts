@@ -23,6 +23,7 @@ import { ReportsModule } from './reports/reports.module';
 import { DailyCalculationModule } from './daily-calculation/daily-calculation.module';
 import { PrinterModule } from './printer/printer.module';
 import { SyncModule } from './sync/sync.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { SyncModule } from './sync/sync.module';
       load: [configuration],
     }),
     ScheduleModule.forRoot(),
+    RealtimeModule,
     PrismaModule,
     PermissionsModule,
     AuthModule,

@@ -125,14 +125,14 @@ export class ReportsService {
         };
       }
 
-      // If no active session exists (shift has been closed and next shift not started yet):
-      // Cashier shift is closed: report should be clean/empty until new shift starts
-      return {
-        start: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0),
-        end: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999),
-        periodLabel: 'Today (Shift Closed)',
-        isClosedAndEmpty: true,
-      };
+      if (p === 'current_shift' || p === 'shift') {
+        return {
+          start: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0),
+          end: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999),
+          periodLabel: 'Today (Shift Closed)',
+          isClosedAndEmpty: true,
+        };
+      }
     }
 
     return this.resolveDateRange(dto);
@@ -149,7 +149,34 @@ export class ReportsService {
     const conditions: Prisma.OrderWhereInput[] = [];
 
     if (scope.shiftId) {
-      conditions.push({ shift_id: scope.shiftId } as any);
+      const startOfDay = new Date(
+        scope.start.getFullYear(),
+        scope.start.getMonth(),
+        scope.start.getDate(),
+        0,
+        0,
+        0,
+        0,
+      );
+      const effectiveStart = scope.start < startOfDay ? scope.start : startOfDay;
+      conditions.push({
+        OR: [
+          { shift_id: scope.shiftId },
+          {
+            shift_id: null,
+            created_at: {
+              gte: effectiveStart,
+              lte: scope.end,
+            },
+          },
+          {
+            created_at: {
+              gte: effectiveStart,
+              lte: scope.end,
+            },
+          },
+        ],
+      } as any);
     } else {
       const utcStart = new Date(
         Date.UTC(scope.start.getFullYear(), scope.start.getMonth(), scope.start.getDate(), 0, 0, 0, 0),
@@ -424,14 +451,16 @@ export class ReportsService {
       },
     });
 
-    const dailyExpenses = await this.prisma.dailyExpenseItem.findMany({
-      where: {
-        created_at: {
-          gte: start,
-          lte: end,
-        },
-      },
-    });
+    const dailyExpenses = this.prisma.dailyExpenseItem
+      ? await this.prisma.dailyExpenseItem.findMany({
+          where: {
+            created_at: {
+              gte: start,
+              lte: end,
+            },
+          },
+        })
+      : [];
 
     const totalHonorAmt = honorExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
     const totalDailyAmt = dailyExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
@@ -567,11 +596,42 @@ export class ReportsService {
     let orderWhere: Prisma.OrderWhereInput;
 
     if (scope.shiftId) {
+      const startOfDay = new Date(
+        scope.start.getFullYear(),
+        scope.start.getMonth(),
+        scope.start.getDate(),
+        0,
+        0,
+        0,
+        0,
+      );
+      const effectiveStart = scope.start < startOfDay ? scope.start : startOfDay;
       orderWhere = {
-        shift_id: scope.shiftId,
-        OR: [
-          { status: { in: ['cancelled', 'rejected'] } },
-          { order_items: { some: { is_cancelled: true } } },
+        AND: [
+          {
+            OR: [
+              { status: { in: ['cancelled', 'rejected'] } },
+              { order_items: { some: { is_cancelled: true } } },
+            ],
+          },
+          {
+            OR: [
+              { shift_id: scope.shiftId },
+              {
+                shift_id: null,
+                created_at: {
+                  gte: effectiveStart,
+                  lte: scope.end,
+                },
+              },
+              {
+                created_at: {
+                  gte: effectiveStart,
+                  lte: scope.end,
+                },
+              },
+            ],
+          },
         ],
       } as any;
     } else {

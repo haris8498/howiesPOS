@@ -38,3 +38,21 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Lightweight native updater helper executable
+add_executable(updater WIN32
+  "updater.cpp"
+)
+apply_standard_settings(updater)
+set_property(TARGET updater PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+# Automatically copy MSVC runtime DLLs on post-build for self-contained execution
+if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+  add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+    COMMENT "Copying MSVC runtime DLLs to output directory for self-contained execution..."
+  )
+endif()
+

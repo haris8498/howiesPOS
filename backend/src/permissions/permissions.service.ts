@@ -1,4 +1,5 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { RolePermission } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -11,7 +12,10 @@ import { PresetType } from '../common/rbac/types/permission.types';
 export class PermissionsService {
   private readonly logger = new Logger(PermissionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async hasPermission(role: string, moduleName: string, actionName: string): Promise<boolean> {
     const normalizedRole = (role || '').toLowerCase().trim();

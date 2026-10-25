@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+
 
 class ApiConfig {
   ApiConfig._();
@@ -7,16 +7,11 @@ class ApiConfig {
   static const String _definedSocketUrl = String.fromEnvironment('SOCKET_BASE_URL');
 
   /// The base URL for REST API endpoints.
-  /// Automatically resolves http://10.0.2.2:3000/api on Android Emulator,
-  /// http://localhost:3000/api on Web/Desktop, or custom --dart-define.
   static String get baseUrl {
     if (_definedBaseUrl.isNotEmpty) {
       return _definedBaseUrl;
     }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:3000/api';
-    }
-    return 'http://localhost:3000/api';
+    return 'http://213.199.57.65/api';
   }
 
   /// The base URL for WebSocket / Socket.IO connections.
@@ -24,10 +19,7 @@ class ApiConfig {
     if (_definedSocketUrl.isNotEmpty) {
       return _definedSocketUrl;
     }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:3000';
-    }
-    return 'http://localhost:3000';
+    return 'http://213.199.57.65';
   }
 
   /// Default network timeout duration

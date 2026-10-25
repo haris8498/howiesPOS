@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -150,7 +151,47 @@ class _StartingCashDialogState extends ConsumerState<StartingCashDialog> {
           ),
         );
       } else {
-        setState(() => _errorMessage = 'Failed to register starting cash. Please try again.');
+        final calcState = ref.read(dailyCalculationProvider);
+        if (calcState.isShiftConflict) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: const [
+                  Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 28),
+                  SizedBox(width: 10),
+                  Text('Active Shift Exists', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              content: const Text(
+                'You already have an active shift. Please close the current shift before opening a new one.',
+                style: TextStyle(fontSize: 14),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Dismiss', style: TextStyle(color: AppColors.textSecondary)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryRed,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).pop(false);
+                    context.go('/sales/daily-calculation');
+                  },
+                  child: const Text('Go to Shift Closing'),
+                ),
+              ],
+            ),
+          );
+        }
+        setState(() => _errorMessage = calcState.errorMessage ?? 'Failed to register starting cash. Please try again.');
       }
     }
   }

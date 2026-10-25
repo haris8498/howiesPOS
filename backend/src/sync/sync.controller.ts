@@ -1,3 +1,4 @@
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import {
   Body,
   Controller,
@@ -128,6 +129,65 @@ export class SyncController {
   @Get('logs')
   async getSyncLogs() {
     const data = await this.syncService.getSyncLogs();
+    return { success: true, data };
+  }
+
+  @Get('modules')
+  async getSyncModulesStatus() {
+    return this.syncService.getSyncModulesStatus();
+  }
+
+  @Get('history')
+  async getSyncHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('module') moduleName?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.syncService.getSyncHistory({
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 30,
+      module: moduleName,
+      status,
+      search,
+    });
+  }
+
+  @Get('conflicts')
+  async getSyncConflicts() {
+    return this.syncService.getSyncConflicts();
+  }
+  /**
+   * GET /api/sync/cashier-shifts
+   * Cashier's own shift history (RBAC protected)
+   */
+  @Get('cashier-shifts')
+  async getCashierShifts(@CurrentUser() user: any) {
+    const userId = user?.id || user?.userId || '';
+    const username = user?.username;
+    const data = await this.syncService.getCashierShifts(userId, username);
+    return { success: true, data };
+  }
+
+  /**
+   * GET /api/sync/cashier-shift/:shiftId
+   * Shift-First synchronization details for Cashier
+   */
+  @Get('cashier-shift/:shiftId')
+  async getCashierShiftDetails(
+    @Param('shiftId') shiftId: string,
+    @CurrentUser() user: any,
+  ) {
+    const userId = user?.id || user?.userId || '';
+    const username = user?.username;
+    const role = user?.role;
+    const data = await this.syncService.getCashierShiftDetails(
+      shiftId,
+      userId,
+      username,
+      role,
+    );
     return { success: true, data };
   }
 }

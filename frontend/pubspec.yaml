@@ -54,6 +54,8 @@ dependencies:
   sqlite3: 3.5.2
   sqlcipher_flutter_libs: 0.7.0+eol
   sqlite3_flutter_libs: 0.6.0+eol
+  package_info_plus: ^9.0.1
+  archive: ^4.3.0
 
 dev_dependencies:
   flutter_test:

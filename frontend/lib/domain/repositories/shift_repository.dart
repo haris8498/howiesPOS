@@ -33,4 +33,11 @@ abstract class IShiftRepository {
 
   /// Retrieves a specific shift calculation by ID.
   Future<LocalDailyCalculation?> getShiftById(String shiftId);
+
+  /// Marks a shift as closed locally in Drift SQLite cache.
+  Future<void> markShiftClosedLocally({
+    required String shiftId,
+    DateTime? closedAt,
+    String? closingNotes,
+  });
 }

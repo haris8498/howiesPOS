@@ -100,12 +100,7 @@ class _StockScreenState extends ConsumerState<StockScreen> {
               ),
               Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded, color: AppColors.primaryRed),
-                    tooltip: 'Refresh Inventory from Database',
-                    onPressed: () => ref.read(inventoryProvider.notifier).loadInventoryData(),
-                  ),
-                  const SizedBox(width: 8),
+                  
                   Builder(
                     builder: (context) {
                       final role = ref.watch(authProvider).currentUser.role;

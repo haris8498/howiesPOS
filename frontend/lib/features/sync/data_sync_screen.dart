@@ -4,8 +4,11 @@ import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
 import '../../config/app_theme.dart';
 import '../../core/sync/sync_providers.dart';
+import '../../core/sync/sync_health_provider.dart';
 import '../../data/sync_repository.dart';
 import '../../domain/models/data_sync_model.dart';
+import '../../data/auth_repository.dart';
+import '../../domain/models/user_role.dart';
 
 class DataSyncScreen extends ConsumerStatefulWidget {
   const DataSyncScreen({super.key});
@@ -42,6 +45,13 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
     final orders = syncState.orders;
 
     final numberFormat = NumberFormat('#,##0.00', 'en_US');
+
+    final authState = ref.watch(authProvider);
+    final userRole = authState.currentUser.role;
+    final currentRoute = ModalRoute.of(context)?.settings.name ?? '';
+    final isOwner = userRole == UserRole.owner || currentRoute.contains('/owner');
+    final isCashier = userRole == UserRole.cashier || currentRoute.contains('/sales');
+    final isManager = userRole == UserRole.manager || currentRoute.contains('/manager');
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
@@ -95,7 +105,7 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
               const SizedBox(height: 16),
 
               // Search & Filter Toolbar
-              _buildFilterToolbar(syncState, syncNotifier, isDark),
+              _buildFilterToolbar(syncState, syncNotifier, isDark, isOwner: isOwner, isCashier: isCashier, isManager: isManager),
 
               const SizedBox(height: 16),
 
@@ -127,6 +137,9 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
     DataSyncNotifier syncNotifier, {
     bool isOffline = false,
   }) {
+    final health = ref.watch(rawSyncHealthProvider);
+    final failedCount = health.failedCount;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -198,6 +211,32 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
         ),
         Row(
           children: [
+            if (failedCount > 0) ...[
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await syncNotifier.clearFailedErrors();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Failed sync errors cleared. Sync light is now Healthy 🟢'),
+                        backgroundColor: Color(0xFF16A34A),
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.cleaning_services_rounded, size: 18),
+                label: Text('Clear $failedCount Sync Error${failedCount > 1 ? 's' : ''}'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFDC2626),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  elevation: 2,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
             // Manual Trigger Batch Sync Button
             ElevatedButton.icon(
               onPressed: () async {
@@ -445,10 +484,13 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
   Widget _buildFilterToolbar(
     DataSyncState state,
     DataSyncNotifier notifier,
-    bool isDark,
-  ) {
+    bool isDark, {
+    required bool isOwner,
+    required bool isCashier,
+    required bool isManager,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -461,133 +503,371 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Search Input
-          Expanded(
-            flex: 3,
-            child: SizedBox(
-              height: 40,
-              child: TextField(
-                controller: _searchController,
-                onChanged: (val) => notifier.setSearchQuery(val),
-                style: TextStyle(fontSize: 13, color: isDark ? Colors.white : AppColors.textPrimary),
-                decoration: InputDecoration(
-                  hintText: 'Search by Order #, Customer, Phone, Table, or Items...',
-                  hintStyle: TextStyle(fontSize: 12.5, color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
-                  prefixIcon: Icon(Icons.search_rounded, size: 18, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear_rounded, size: 16),
-                          onPressed: () {
-                            _searchController.clear();
-                            notifier.setSearchQuery('');
-                          },
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: AppColors.primaryRed, width: 1.5),
+          // Row 1: Search Input & Status / Type Filters
+          Row(
+            children: [
+              // Search Input
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: 38,
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => notifier.setSearchQuery(val),
+                    style: TextStyle(fontSize: 13, color: isDark ? Colors.white : AppColors.textPrimary),
+                    decoration: InputDecoration(
+                      hintText: 'Search by Order #, Customer, Phone, Table, or Items...',
+                      hintStyle: TextStyle(fontSize: 12.5, color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+                      prefixIcon: Icon(Icons.search_rounded, size: 18, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear_rounded, size: 16),
+                              onPressed: () {
+                                _searchController.clear();
+                                notifier.setSearchQuery('');
+                              },
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: AppColors.primaryRed, width: 1.5),
+                      ),
+                    ),
                   ),
                 ),
               ),
+
+              const SizedBox(width: 14),
+
+              // SYNC Status Filter Group
+              Row(
+                children: [
+                  Text(
+                    'SYNC:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildFilterChip(
+                    label: 'All',
+                    isSelected: state.selectedSyncFilter == 'all',
+                    onTap: () => notifier.setSyncFilter('all'),
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildFilterChip(
+                    label: 'Synced',
+                    dotColor: const Color(0xFF16A34A),
+                    isSelected: state.selectedSyncFilter == 'synced',
+                    onTap: () => notifier.setSyncFilter('synced'),
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildFilterChip(
+                    label: 'Pending',
+                    dotColor: const Color(0xFFDC2626),
+                    isSelected: state.selectedSyncFilter == 'pending',
+                    onTap: () => notifier.setSyncFilter('pending'),
+                    isDark: isDark,
+                  ),
+                ],
+              ),
+
+              const SizedBox(width: 14),
+
+              // TYPE Filter Group
+              Row(
+                children: [
+                  Text(
+                    'TYPE:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildFilterChip(
+                    label: 'All',
+                    isSelected: state.selectedTypeFilter == 'all',
+                    onTap: () => notifier.setTypeFilter('all'),
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildFilterChip(
+                    label: 'Dine-In',
+                    isSelected: state.selectedTypeFilter == 'dineIn',
+                    onTap: () => notifier.setTypeFilter('dineIn'),
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildFilterChip(
+                    label: 'Takeaway',
+                    isSelected: state.selectedTypeFilter == 'takeaway',
+                    onTap: () => notifier.setTypeFilter('takeaway'),
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildFilterChip(
+                    label: 'Delivery',
+                    isSelected: state.selectedTypeFilter == 'delivery',
+                    onTap: () => notifier.setTypeFilter('delivery'),
+                    isDark: isDark,
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Row 2: Date-wise (Owner) or Shift-wise (Cashier) or Both (Manager)
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
             ),
-          ),
+            child: Row(
+              children: [
+                // Owner / Manager Date Filter
+                if (isOwner || isManager) ...[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.calendar_today_rounded, size: 14, color: AppColors.primaryRed),
+                      const SizedBox(width: 6),
+                      Text(
+                        'DATE FILTER (OWNER):',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                          color: isDark ? const Color(0xFFF87171) : AppColors.primaryRed,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildFilterChip(
+                        label: 'All Dates',
+                        isSelected: state.selectedDatePreset == 'all',
+                        onTap: () => notifier.setDatePreset('all'),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: 'Today',
+                        isSelected: state.selectedDatePreset == 'today',
+                        onTap: () => notifier.setDatePreset('today'),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: 'Yesterday',
+                        isSelected: state.selectedDatePreset == 'yesterday',
+                        onTap: () => notifier.setDatePreset('yesterday'),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: 'Last 7 Days',
+                        isSelected: state.selectedDatePreset == 'this_week',
+                        onTap: () => notifier.setDatePreset('this_week'),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(width: 6),
+                      // Custom Date Picker Chip
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: state.selectedDate ?? DateTime.now(),
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime.now().add(const Duration(days: 365)),
+                            builder: (context, child) {
+                              return Theme(
+                                data: isDark ? ThemeData.dark() : ThemeData.light(),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (picked != null) {
+                            notifier.setDatePreset('custom', customDate: picked);
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: state.selectedDatePreset == 'custom'
+                                ? AppColors.primaryRed.withValues(alpha: 0.15)
+                                : (isDark ? const Color(0xFF1E293B) : Colors.white),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: state.selectedDatePreset == 'custom'
+                                  ? AppColors.primaryRed
+                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                              width: state.selectedDatePreset == 'custom' ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.date_range_rounded,
+                                size: 13,
+                                color: state.selectedDatePreset == 'custom'
+                                    ? AppColors.primaryRed
+                                    : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                state.selectedDatePreset == 'custom' && state.selectedDate != null
+                                    ? DateFormat('yyyy-MM-dd').format(state.selectedDate!)
+                                    : 'Custom Date...',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: state.selectedDatePreset == 'custom' ? FontWeight.bold : FontWeight.w500,
+                                  color: state.selectedDatePreset == 'custom'
+                                      ? (isDark ? Colors.white : AppColors.primaryRed)
+                                      : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                ),
+                              ),
+                              if (state.selectedDatePreset == 'custom' && state.selectedDate != null) ...[
+                                const SizedBox(width: 4),
+                                GestureDetector(
+                                  onTap: () => notifier.setDatePreset('all'),
+                                  child: const Icon(Icons.close_rounded, size: 14, color: AppColors.primaryRed),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
 
-          const SizedBox(width: 18),
+                // Divider if both are shown
+                if ((isOwner || isManager) && (isCashier || isManager)) ...[
+                  const SizedBox(width: 14),
+                  Container(height: 20, width: 1, color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                  const SizedBox(width: 14),
+                ],
 
-          // SYNC Status Filter Group
-          Row(
-            children: [
-              Text(
-                'SYNC:',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _buildFilterChip(
-                label: 'All',
-                isSelected: state.selectedSyncFilter == 'all',
-                onTap: () => notifier.setSyncFilter('all'),
-                isDark: isDark,
-              ),
-              const SizedBox(width: 6),
-              _buildFilterChip(
-                label: 'Synced',
-                dotColor: const Color(0xFF16A34A),
-                isSelected: state.selectedSyncFilter == 'synced',
-                onTap: () => notifier.setSyncFilter('synced'),
-                isDark: isDark,
-              ),
-              const SizedBox(width: 6),
-              _buildFilterChip(
-                label: 'Pending',
-                dotColor: const Color(0xFFDC2626),
-                isSelected: state.selectedSyncFilter == 'pending',
-                onTap: () => notifier.setSyncFilter('pending'),
-                isDark: isDark,
-              ),
-            ],
-          ),
-
-          const SizedBox(width: 18),
-
-          // TYPE Filter Group
-          Row(
-            children: [
-              Text(
-                'TYPE:',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _buildFilterChip(
-                label: 'All',
-                isSelected: state.selectedTypeFilter == 'all',
-                onTap: () => notifier.setTypeFilter('all'),
-                isDark: isDark,
-              ),
-              const SizedBox(width: 6),
-              _buildFilterChip(
-                label: 'Dine-In',
-                isSelected: state.selectedTypeFilter == 'dineIn',
-                onTap: () => notifier.setTypeFilter('dineIn'),
-                isDark: isDark,
-              ),
-              const SizedBox(width: 6),
-              _buildFilterChip(
-                label: 'Takeaway',
-                isSelected: state.selectedTypeFilter == 'takeaway',
-                onTap: () => notifier.setTypeFilter('takeaway'),
-                isDark: isDark,
-              ),
-              const SizedBox(width: 6),
-              _buildFilterChip(
-                label: 'Delivery',
-                isSelected: state.selectedTypeFilter == 'delivery',
-                onTap: () => notifier.setTypeFilter('delivery'),
-                isDark: isDark,
-              ),
-            ],
+                // Cashier / Manager Shift Filter
+                if (isCashier || isManager) ...[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.schedule_rounded, size: 14, color: Color(0xFF2563EB)),
+                      const SizedBox(width: 6),
+                      Text(
+                        'SHIFT FILTER (CASHIER):',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                          color: isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildFilterChip(
+                        label: 'All Shifts',
+                        isSelected: state.selectedShift == 'all',
+                        onTap: () => notifier.setShiftFilter('all'),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: 'Active Shift',
+                        dotColor: const Color(0xFF16A34A),
+                        isSelected: state.selectedShift == 'active',
+                        onTap: () => notifier.setShiftFilter('active'),
+                        isDark: isDark,
+                      ),
+                      if (state.availableShifts.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          height: 30,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: state.selectedShift != 'all' && state.selectedShift != 'active'
+                                ? const Color(0xFF2563EB).withValues(alpha: 0.12)
+                                : (isDark ? const Color(0xFF1E293B) : Colors.white),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: state.selectedShift != 'all' && state.selectedShift != 'active'
+                                  ? const Color(0xFF2563EB)
+                                  : (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                              width: state.selectedShift != 'all' && state.selectedShift != 'active' ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: (state.selectedShift != 'all' && state.selectedShift != 'active' &&
+                                      state.availableShifts.any((s) => s['id'] == state.selectedShift))
+                                  ? state.selectedShift
+                                  : null,
+                              hint: Text(
+                                'Select Shift Session...',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                ),
+                              ),
+                              icon: const Icon(Icons.arrow_drop_down_rounded, size: 18),
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: isDark ? Colors.white : AppColors.textPrimary,
+                              ),
+                              dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                              items: state.availableShifts.map((shift) {
+                                final isAct = shift['status'] == 'ACTIVE';
+                                return DropdownMenuItem<String>(
+                                  value: shift['id'],
+                                  child: Text(
+                                    '${shift['name']}',
+                                    style: TextStyle(
+                                      fontWeight: isAct ? FontWeight.bold : FontWeight.normal,
+                                      color: isAct ? const Color(0xFF16A34A) : null,
+                                      fontSize: 11.5,
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  notifier.setShiftFilter(val);
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ),

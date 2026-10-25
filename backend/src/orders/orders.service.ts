@@ -287,7 +287,20 @@ export class OrdersService {
         orderNumber = orderNumber.trim();
         const existingOrderNum = await tx.order.findUnique({ where: { order_number: orderNumber } });
         if (existingOrderNum && (!explicitOrderId || existingOrderNum.id !== explicitOrderId)) {
-          throw new ConflictException(`Order number '${orderNumber}' already exists`);
+          if (explicitOrderId) {
+            let suffix = 1;
+            let candidate = `${orderNumber}-${suffix}`;
+            while (await tx.order.findUnique({ where: { order_number: candidate } })) {
+              suffix++;
+              candidate = `${orderNumber}-${suffix}`;
+            }
+            this.logger.warn(
+              `Order number collision for offline order ${explicitOrderId}. Reassigned from '${orderNumber}' to '${candidate}'`,
+            );
+            orderNumber = candidate;
+          } else {
+            throw new ConflictException(`Order number '${orderNumber}' already exists`);
+          }
         }
       }
 
@@ -924,6 +937,7 @@ export class OrdersService {
     }
 
     await this.prisma.order.delete({ where: { id } });
+    this.kitchenGateway?.emitOrderCancelled(existing as any);
 
     this.logger.log(`Deleted order '${existing.order_number}' (${id})`);
     return { message: `Order '${existing.order_number}' deleted successfully` };

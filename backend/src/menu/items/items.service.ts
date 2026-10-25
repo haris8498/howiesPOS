@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { MenuItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateMenuItemDto, UpdateAvailabilityDto, UpdateMenuItemDto } from '../dto/menu-item.dto';
@@ -27,7 +28,10 @@ export interface FullMenuItem extends MenuItem {
 export class ItemsService {
   private readonly logger = new Logger(ItemsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listItems(query?: QueryMenuItemDto): Promise<FullMenuItem[]> {
     const where: Prisma.MenuItemWhereInput = {};

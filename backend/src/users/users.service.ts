@@ -1,4 +1,5 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -25,7 +26,10 @@ export interface SafeUser {
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listUsers(): Promise<SafeUser[]> {
     return this.prisma.staffUser.findMany({
@@ -174,6 +178,10 @@ export class UsersService {
       if (usernameExists) {
         throw new ConflictException(`Username '${dto.username}' is already taken`);
       }
+    }
+
+    if (existing.role === 'owner' && dto.role && dto.role !== 'owner') {
+      throw new BadRequestException('Cannot change the role of an owner account');
     }
 
     let passwordHash: string | undefined;

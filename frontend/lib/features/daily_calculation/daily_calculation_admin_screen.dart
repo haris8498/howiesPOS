@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -708,6 +709,19 @@ class _DailyCalculationAdminScreenState extends ConsumerState<DailyCalculationAd
       ),
     );
 
+    final closeShiftButton = ElevatedButton.icon(
+      icon: const Icon(Icons.lock_clock_rounded, size: 18),
+      label: const Text('Active Shift / Close', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF16A34A),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        elevation: 1,
+      ),
+      onPressed: () => context.go('/sales/daily-calculation'),
+    );
+
     final addExpenseButton = ElevatedButton.icon(
       icon: const Icon(Icons.add_rounded, size: 18),
       label: const Text('Add Expense', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
@@ -797,6 +811,8 @@ class _DailyCalculationAdminScreenState extends ConsumerState<DailyCalculationAd
                       const SizedBox(width: 16),
                       _buildFilterBar(isDark, dateFormatter),
                       const SizedBox(width: 8),
+                      closeShiftButton,
+                      const SizedBox(width: 8),
                       addExpenseButton,
                       const SizedBox(width: 8),
                       refreshButton,
@@ -845,6 +861,8 @@ class _DailyCalculationAdminScreenState extends ConsumerState<DailyCalculationAd
                               ],
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          closeShiftButton,
                           const SizedBox(width: 8),
                           addExpenseButton,
                           const SizedBox(width: 8),

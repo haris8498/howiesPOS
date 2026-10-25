@@ -82,7 +82,15 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
             ? order.id
             : _uuid.v7();
 
+        String? resolvedShiftId = order.shiftId;
+        if (resolvedShiftId == null || resolvedShiftId.isEmpty) {
+          final activeShift = await _db.dailyCalculationsDao.getAnyActiveCalculation();
+          if (activeShift != null) {
+            resolvedShiftId = activeShift.id;
+          }
+        }
         final finalOrder = order.copyWith(
+          shiftId: resolvedShiftId,
           id: effectiveOrderId,
           orderNumber: receiptNumber,
         );
@@ -316,7 +324,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           entityType: const Value('order'),
           entityId: Value(order.id),
           operationType: const Value('UPDATE'),
-          baseVersion: const Value(1),
+          baseVersion: Value((await (_db.select(_db.localOrders)..where((t) => t.id.equals(order.id))).getSingleOrNull())?.serverVersion ?? 1),
           payload: Value(jsonEncode(payloadMap)),
           dependencyOrder: const Value(2),
           status: const Value(SyncOutboxStatus.pending),

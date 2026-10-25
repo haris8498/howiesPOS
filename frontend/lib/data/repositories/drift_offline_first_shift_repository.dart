@@ -50,6 +50,12 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
         }
       }
 
+      // Rule 1: Only ONE active shift at a time store-wide
+      final activeShift = await _db.dailyCalculationsDao.getAnyActiveCalculation();
+      if (activeShift != null) {
+        throw StateError('You already have an active shift. Please close the current shift before opening a new one.');
+      }
+
       final effectiveShiftId = (shiftId != null && shiftId.length == 36) ? shiftId : _uuid.v7();
       final now = DateTime.now();
 
@@ -125,6 +131,21 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
         return existing;
       }
 
+      // Rule 2: Cannot close shift if pending orders exist
+      final sessionStart = existing.createdAt;
+      final pendingOrders = await (_db.select(_db.localOrders)
+        ..where((t) =>
+          (t.shiftId.equals(shiftId) |
+            (t.shiftId.isNull() & t.createdAt.isBiggerOrEqualValue(sessionStart))) &
+          t.status.isNotIn(['completed', 'cancelled', 'rejected'])))
+        .get();
+      if (pendingOrders.isNotEmpty) {
+        throw StateError(
+          'Cannot close this shift because there are ${pendingOrders.length} pending orders. ' +
+          'Please complete or resolve all pending orders before closing the shift.',
+        );
+      }
+
       // Calculate cash variance (negative = shortage, positive = overage) per Spec §21 Decision 2
       final effectiveVariance = cashVariance ?? (actualCashCounted - expectedCashDrawer);
       final submittedAt = DateTime.now();
@@ -181,8 +202,12 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
   }
 
   @override
-  Future<LocalDailyCalculation?> getActiveShift(String cashierId) {
-    return _db.dailyCalculationsDao.getActiveCalculation(cashierId);
+  Future<LocalDailyCalculation?> getActiveShift(String cashierId) async {
+    if (cashierId.isNotEmpty) {
+      final byCashier = await _db.dailyCalculationsDao.getActiveCalculation(cashierId);
+      if (byCashier != null) return byCashier;
+    }
+    return await _db.dailyCalculationsDao.getAnyActiveCalculation();
   }
 
   @override
@@ -193,5 +218,18 @@ class DriftOfflineFirstShiftRepository implements IShiftRepository {
   @override
   Future<LocalDailyCalculation?> getShiftById(String shiftId) {
     return _db.dailyCalculationsDao.getCalculationById(shiftId);
+  }
+
+  @override
+  Future<void> markShiftClosedLocally({
+    required String shiftId,
+    DateTime? closedAt,
+    String? closingNotes,
+  }) async {
+    await _db.dailyCalculationsDao.markShiftClosed(
+      shiftId,
+      closedAt: closedAt,
+      closingNotes: closingNotes,
+    );
   }
 }

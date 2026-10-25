@@ -1096,7 +1096,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                       const SizedBox(width: 10),
                       ElevatedButton.icon(
                         onPressed: () => _openAddDealDialog(context, isDark),
-                        icon: const Icon(Icons.local_offer_rounded, size: 18),
+                        icon: const Icon(Icons.add_rounded, size: 18),
                         label: const Text('Add Deal'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFE11D48),
@@ -2246,22 +2246,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                         ),
                         const SizedBox(width: 8),
                       ],
-                      if (canAddMenu) ...[
-                        ElevatedButton.icon(
-                          onPressed: () => _openAddDealDialog(context, isDark),
-                          icon: const Icon(Icons.add_rounded, size: 15),
-                          label: const Text('New Deal'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.brandYellow,
-                            foregroundColor: AppColors.deepRed,
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
+
                       if (canEditMenu) ...[
                         ElevatedButton.icon(
                           onPressed: () => _openAddDealDialog(context, isDark, existingDeal: deal),
@@ -2955,6 +2940,552 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
     );
   }
 
+  IconData _getCategoryIcon(String category) {
+    final cat = category.toLowerCase().trim();
+    if (cat.contains('pizza')) return Icons.local_pizza_rounded;
+    if (cat.contains('burger')) return Icons.lunch_dining_rounded;
+    if (cat.contains('broast') || cat.contains('brost') || cat.contains('chicken')) return Icons.restaurant_rounded;
+    if (cat.contains('steak')) return Icons.dinner_dining_rounded;
+    if (cat.contains('pasta')) return Icons.ramen_dining_rounded;
+    if (cat.contains('panini') || cat.contains('sandwich')) return Icons.bakery_dining_rounded;
+    if (cat.contains('appetizer') || cat.contains('wing') || cat.contains('nugget')) return Icons.tapas_rounded;
+    if (cat.contains('fries')) return Icons.fastfood_rounded;
+    if (cat.contains('drink') || cat.contains('beverage') || cat.contains('juice') || cat.contains('coke') || cat.contains('soda')) return Icons.local_drink_rounded;
+    if (cat.contains('coffee') || cat.contains('tea')) return Icons.coffee_rounded;
+    if (cat.contains('ice cream') || cat.contains('dessert') || cat.contains('shake')) return Icons.icecream_rounded;
+    if (cat.contains('topping') || cat.contains('sauce')) return Icons.category_rounded;
+    return Icons.fastfood_rounded;
+  }
+
+  void _openDealMenuSelectorDialog(
+    BuildContext context,
+    bool isDark,
+    List<Map<String, dynamic>> components,
+    void Function(void Function()) setDealDialogState,
+  ) {
+    final searchController = TextEditingController();
+    String selectedCategory = 'All';
+    String searchQuery = '';
+
+    // Collect all available dishes across backend database items and POS items
+    final List<Map<String, dynamic>> allDishes = [];
+    final Set<String> seenNames = {};
+
+    // 1. Backend loaded custom items
+    for (final item in _customMenuItems) {
+      final name = item['name']?.toString().trim() ?? '';
+      final cat = item['category']?.toString().trim() ?? 'General';
+      if (name.isNotEmpty && !seenNames.contains(name.toLowerCase()) && cat.toLowerCase() != 'deals' && cat.toLowerCase() != 'exclusive deals') {
+        seenNames.add(name.toLowerCase());
+        final priceVal = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+        allDishes.add({
+          'name': name,
+          'category': cat,
+          'price': priceVal,
+          'imagePath': item['imagePath']?.toString() ?? '',
+          'imageBytes': item['imageBytes'] as Uint8List?,
+        });
+      }
+    }
+
+    // 2. POS provider menu items (if not already added)
+    try {
+      final posItems = ref.read(posProvider).menuItems;
+      for (final item in posItems) {
+        final name = item.name.trim();
+        final cat = item.category.trim();
+        if (name.isNotEmpty && !seenNames.contains(name.toLowerCase()) && cat.toLowerCase() != 'deals' && cat.toLowerCase() != 'exclusive deals') {
+          seenNames.add(name.toLowerCase());
+          allDishes.add({
+            'name': name,
+            'category': cat,
+            'price': item.basePrice,
+            'imagePath': item.imageUrl,
+            'imageBytes': null,
+          });
+        }
+      }
+    } catch (_) {}
+
+    // 3. Fallback catalogue of core Hungry Howie's dishes if database is still initializing
+    if (allDishes.isEmpty) {
+      final defaultCatalogue = [
+        {'name': 'Classic Fajita Pizza (Small)', 'category': 'Pizza', 'price': 849.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': 'Classic Fajita Pizza (Medium)', 'category': 'Pizza', 'price': 1449.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': 'Classic Fajita Pizza (Large)', 'category': 'Pizza', 'price': 1749.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': 'Classic Fajita Pizza (Family)', 'category': 'Pizza', 'price': 2349.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': 'Modern Crown Crust (Medium)', 'category': 'Pizza', 'price': 1549.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': 'Modern Crown Crust (Large)', 'category': 'Pizza', 'price': 1999.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': 'Special Arabic Crispy (Medium)', 'category': 'Pizza', 'price': 1699.0, 'imagePath': 'assets/images/Special.png'},
+        {'name': 'Tarragon Chicken Steak', 'category': 'Steak', 'price': 1499.0, 'imagePath': 'assets/images/chicken_steak.png'},
+        {'name': 'Mushroom Chicken Steak', 'category': 'Steak', 'price': 1499.0, 'imagePath': 'assets/images/chicken_steak.png'},
+        {'name': 'Beef Cheese Stuff Burger', 'category': 'Burger', 'price': 1349.0, 'imagePath': 'assets/images/beef_burger_hero.jpg'},
+        {'name': 'Hungry Stacker Beef Burger', 'category': 'Burger', 'price': 1349.0, 'imagePath': 'assets/images/beef_burger_hero.jpg'},
+        {'name': 'Zinger Burger', 'category': 'Burger', 'price': 499.0, 'imagePath': 'assets/images/chicken_burger_hero.jpg'},
+        {'name': 'Crispy BBQ Chicken Burger', 'category': 'Burger', 'price': 999.0, 'imagePath': 'assets/images/chicken_burger_hero.jpg'},
+        {'name': 'Half Dajjaj Broast (with Fries)', 'category': 'Brost', 'price': 1250.0, 'imagePath': 'assets/images/broast_hero.jpg'},
+        {'name': 'Family Dajjaj Broast (with Fries)', 'category': 'Brost', 'price': 2400.0, 'imagePath': 'assets/images/broast_hero.jpg'},
+        {'name': 'Chicken Alfredo Pasta', 'category': 'Pasta', 'price': 999.0, 'imagePath': 'assets/images/pasta_hero.jpg'},
+        {'name': 'Penne Arrabiata Pasta', 'category': 'Pasta', 'price': 999.0, 'imagePath': 'assets/images/penne.png'},
+        {'name': 'Cheesy Panini Sandwich', 'category': 'Panini', 'price': 1099.0, 'imagePath': 'assets/images/panini_hero.jpg'},
+        {'name': 'Hungry Club Panini', 'category': 'Panini', 'price': 849.0, 'imagePath': 'assets/images/panini_hero.jpg'},
+        {'name': 'Chicken Nuggets (6pcs with Fries)', 'category': 'Appetizer', 'price': 399.0, 'imagePath': 'assets/images/Nuggets.png'},
+        {'name': 'Crispy Chicken Wings (6pcs)', 'category': 'Appetizer', 'price': 399.0, 'imagePath': 'assets/images/Wings.png'},
+        {'name': 'Hungry Loaded Fries', 'category': 'Fries', 'price': 749.0, 'imagePath': 'assets/images/Loaded.png'},
+        {'name': 'Masala Fries', 'category': 'Fries', 'price': 299.0, 'imagePath': 'assets/images/Masala.png'},
+        {'name': 'NR Coke', 'category': 'Drinks', 'price': 100.0, 'imagePath': 'assets/images/Coke.png'},
+        {'name': 'NR Sprite', 'category': 'Drinks', 'price': 100.0, 'imagePath': 'assets/images/Sprite.png'},
+        {'name': 'Coke Tin Pack', 'category': 'Drinks', 'price': 160.0, 'imagePath': 'assets/images/CokeTin.png'},
+        {'name': 'Mint Margarita', 'category': 'Drinks', 'price': 300.0, 'imagePath': 'assets/images/Mint.png'},
+        {'name': 'Cappuccino Coffee', 'category': 'Hot Coffee', 'price': 599.0, 'imagePath': 'assets/images/Capachino.png'},
+        {'name': 'Strawberry Iced Latte', 'category': 'Cold Coffee', 'price': 599.0, 'imagePath': 'assets/images/Strawberry.png'},
+      ];
+      for (final d in defaultCatalogue) {
+        if (!seenNames.contains((d['name'] as String).toLowerCase())) {
+          seenNames.add((d['name'] as String).toLowerCase());
+          allDishes.add({
+            'name': d['name'] as String,
+            'category': d['category'] as String,
+            'price': d['price'] as double,
+            'imagePath': d['imagePath'] as String,
+            'imageBytes': null,
+          });
+        }
+      }
+    }
+
+    // Build categories list for horizontal filter chips
+    final List<String> categories = ['All'];
+    for (final c in _allCategories) {
+      if (c.categoryKey.toLowerCase() != 'deals' && c.name.toLowerCase() != 'exclusive deals') {
+        if (!categories.contains(c.name)) categories.add(c.name);
+      }
+    }
+    for (final dish in allDishes) {
+      final cat = dish['category'] as String;
+      if (!categories.contains(cat)) categories.add(cat);
+    }
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.8),
+      builder: (selectorCtx) => StatefulBuilder(
+        builder: (ctx, setSelectorState) {
+          final filtered = allDishes.where((dish) {
+            final cat = dish['category'] as String;
+            final matchesCategory = selectedCategory == 'All' || cat.toLowerCase() == selectedCategory.toLowerCase();
+            final name = dish['name'] as String;
+            final matchesQuery = searchQuery.isEmpty || name.toLowerCase().contains(searchQuery.toLowerCase());
+            return matchesCategory && matchesQuery;
+          }).toList();
+
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            clipBehavior: Clip.antiAlias,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 1000, maxHeight: 760),
+              child: Column(
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFDC2626), Color(0xFF991B1B)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.restaurant_menu_rounded, color: Colors.white, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'SELECT DISHES FOR DEAL PACKAGE',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.6),
+                              ),
+                              Text(
+                                'Tap "+ ADD" to include any dish from the menu • ${components.length} item(s) selected so far',
+                                style: const TextStyle(color: AppColors.brandYellow, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white, size: 22),
+                          onPressed: () => Navigator.pop(selectorCtx),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Search & Category Filters
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          height: 40,
+                          child: TextField(
+                            controller: searchController,
+                            onChanged: (val) => setSelectorState(() => searchQuery = val.trim()),
+                            style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontSize: 12.5),
+                            decoration: InputDecoration(
+                              hintText: 'Search menu dishes by name (e.g. Fajita, Burger, Panini, Broast)...',
+                              hintStyle: TextStyle(color: isDark ? const Color(0xFF64748B) : AppColors.textSecondary, fontSize: 12),
+                              prefixIcon: const Icon(Icons.search_rounded, size: 18, color: AppColors.primaryRed),
+                              suffixIcon: searchQuery.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear_rounded, size: 16),
+                                      onPressed: () {
+                                        searchController.clear();
+                                        setSelectorState(() => searchQuery = '');
+                                      },
+                                    )
+                                  : null,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+                              filled: true,
+                              fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: categories.map((cat) {
+                              final isSelected = selectedCategory.toLowerCase() == cat.toLowerCase();
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                  label: Text(cat),
+                                  selected: isSelected,
+                                  selectedColor: AppColors.primaryRed,
+                                  labelStyle: TextStyle(
+                                    color: isSelected ? Colors.white : (isDark ? Colors.white : AppColors.textPrimary),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11.5,
+                                  ),
+                                  onSelected: (_) => setSelectorState(() => selectedCategory = cat),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const Divider(height: 1),
+
+                  // Menu Items Grid
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.search_off_rounded, size: 48, color: isDark ? Colors.white24 : AppColors.textSecondary),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No dishes found matching "$searchQuery"',
+                                  style: TextStyle(
+                                    color: isDark ? Colors.white70 : AppColors.textPrimary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : GridView.builder(
+                            padding: const EdgeInsets.all(14),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 10,
+                              mainAxisSpacing: 10,
+                              childAspectRatio: 2.7,
+                            ),
+                            itemCount: filtered.length,
+                            itemBuilder: (context, idx) {
+                              final dish = filtered[idx];
+                              final dishName = dish['name'] as String;
+                              final dishCat = dish['category'] as String;
+                              final dishPrice = dish['price'] as double;
+                              final dishImg = dish['imagePath'] as String;
+                              final dishBytes = dish['imageBytes'] as Uint8List?;
+
+                              // Count how many times this item is already in components
+                              final addedCount = components.where((c) {
+                                final cName = (c['nameController'] as TextEditingController).text.trim().toLowerCase();
+                                return cName == dishName.toLowerCase();
+                              }).length;
+
+                              return Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: addedCount > 0
+                                        ? AppColors.primaryRed
+                                        : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                    width: addedCount > 0 ? 1.5 : 1.0,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: SizedBox(
+                                        width: 44,
+                                        height: 44,
+                                        child: _buildItemThumbnailForSelector(dishImg, dishBytes),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            dishName,
+                                            style: TextStyle(
+                                              color: isDark ? Colors.white : AppColors.textPrimary,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 11,
+                                              height: 1.15,
+                                            ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                                decoration: BoxDecoration(
+                                                  color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  dishCat,
+                                                  style: TextStyle(
+                                                    color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
+                                                    fontSize: 9.5,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Text(
+                                                'PKR ${dishPrice.toStringAsFixed(0)}',
+                                                style: const TextStyle(
+                                                  color: AppColors.primaryRed,
+                                                  fontWeight: FontWeight.w900,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    // Add / Quantity button
+                                    if (addedCount > 0)
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          InkWell(
+                                            onTap: () {
+                                              final existingIdx = components.lastIndexWhere((c) =>
+                                                  (c['nameController'] as TextEditingController).text.trim().toLowerCase() ==
+                                                  dishName.toLowerCase());
+                                              if (existingIdx != -1) {
+                                                components.removeAt(existingIdx);
+                                                setSelectorState(() {});
+                                                setDealDialogState(() {});
+                                              }
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(4),
+                                              decoration: BoxDecoration(
+                                                color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: const Icon(Icons.remove_rounded, size: 14),
+                                            ),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                                            child: Text(
+                                              '$addedCount',
+                                              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.primaryRed),
+                                            ),
+                                          ),
+                                          InkWell(
+                                            onTap: () {
+                                              components.add({
+                                                'category': dishCat,
+                                                'nameController': TextEditingController(text: dishName),
+                                                'quantity': '1x',
+                                                'icon': _getCategoryIcon(dishCat),
+                                              });
+                                              setSelectorState(() {});
+                                              setDealDialogState(() {});
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(4),
+                                              decoration: BoxDecoration(
+                                                color: AppColors.primaryRed,
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: const Icon(Icons.add_rounded, size: 14, color: Colors.white),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    else
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          components.add({
+                                            'category': dishCat,
+                                            'nameController': TextEditingController(text: dishName),
+                                            'quantity': '1x',
+                                            'icon': _getCategoryIcon(dishCat),
+                                          });
+                                          setSelectorState(() {});
+                                          setDealDialogState(() {});
+                                        },
+                                        icon: const Icon(Icons.add_rounded, size: 14),
+                                        label: const Text('ADD'),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppColors.primaryRed,
+                                          foregroundColor: Colors.white,
+                                          elevation: 0,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+
+                  // Bottom Action Bar
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                      border: Border(top: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle_outline_rounded, color: Color(0xFF10B981), size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${components.length} item(s) included in this deal',
+                              style: TextStyle(
+                                color: isDark ? Colors.white : AppColors.textPrimary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: () => Navigator.pop(selectorCtx),
+                          icon: const Icon(Icons.done_all_rounded, size: 16),
+                          label: const Text('DONE / CONFIRM SELECTION'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10B981),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                            textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildItemThumbnailForSelector(String path, Uint8List? bytes) {
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(bytes, width: 44, height: 44, fit: BoxFit.cover);
+    }
+    if (path.startsWith('data:image') || path.contains(';base64,')) {
+      try {
+        final b = base64Decode(path.split(',').last);
+        return Image.memory(b, width: 44, height: 44, fit: BoxFit.cover);
+      } catch (_) {}
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return Image.network(
+        path,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (c, e, s) => _fallbackThumb(),
+      );
+    }
+    if (path.isNotEmpty && !path.startsWith('http')) {
+      return Image.asset(
+        path,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (c, e, s) => _fallbackThumb(),
+      );
+    }
+    return _fallbackThumb();
+  }
+
+  Widget _fallbackThumb() {
+    return Container(
+      width: 44,
+      height: 44,
+      color: AppColors.primaryRed.withValues(alpha: 0.1),
+      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+    );
+  }
+
   // Add / Edit Deal Dialog
   void _openAddDealDialog(BuildContext context, bool isDark, {DealItem? existingDeal}) {
     final titleController = TextEditingController(text: existingDeal?.title ?? '');
@@ -3181,48 +3712,37 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
                           const SizedBox(height: 18),
 
-                          // Included Items Builder
+                          // Included Items Header & Select From Menu Button
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              _buildFieldLabel('INCLUDED DEAL ITEMS & CATEGORIES *', isDark),
-                              Text(
-                                '${components.length} Items Included',
-                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryRed),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _buildFieldLabel('INCLUDED DEAL ITEMS & DISHES *', isDark),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${components.length} dishes included in this package',
+                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryRed),
+                                  ),
+                                ],
+                              ),
+                              ElevatedButton.icon(
+                                onPressed: () => _openDealMenuSelectorDialog(context, isDark, components, setDialogState),
+                                icon: const Icon(Icons.restaurant_menu_rounded, size: 16),
+                                label: const Text('SELECT FROM MENU'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primaryRed,
+                                  foregroundColor: Colors.white,
+                                  elevation: 2,
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
-
-                          // Quick Add Category Chips (Dynamically fetched from Database)
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: [
-                              ..._allCategories
-                                  .where((c) => c.categoryKey.toLowerCase() != 'deals' && c.name.toLowerCase() != 'exclusive deals')
-                                  .map((cat) => _buildQuickAddChip('+ ${cat.name}', cat.icon, () {
-                                        setDialogState(() {
-                                          components.add({
-                                            'category': cat.name,
-                                            'nameController': TextEditingController(text: ''),
-                                            'icon': cat.icon,
-                                          });
-                                        });
-                                      }, isDark)),
-                              _buildQuickAddChip('+ Custom', Icons.stars_rounded, () {
-                                setDialogState(() {
-                                  components.add({
-                                    'category': 'Special',
-                                    'nameController': TextEditingController(text: ''),
-                                    'icon': Icons.stars_rounded,
-                                  });
-                                });
-                              }, isDark),
-                            ],
-                          ),
-
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 10),
 
                           // Empty State if no items added yet
                           if (components.isEmpty)
@@ -3251,7 +3771,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      'Click the category chips above to add items from database categories into this deal.',
+                                      'Click "SELECT FROM MENU" above to browse real dishes and add them to this deal.',
                                       textAlign: TextAlign.center,
                                       style: TextStyle(
                                         color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
@@ -3268,6 +3788,8 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                             final idx = entry.key;
                             final comp = entry.value;
                             final compNameController = comp['nameController'] as TextEditingController;
+                            final compCategory = comp['category'] as String? ?? 'General';
+                            final compIcon = (comp['icon'] as IconData?) ?? _getCategoryIcon(compCategory);
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 8),
@@ -3285,7 +3807,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                                       color: const Color(0xFFDC2626).withValues(alpha: 0.15),
                                       shape: BoxShape.circle,
                                     ),
-                                    child: Icon(comp['icon'] as IconData, size: 16, color: const Color(0xFFDC2626)),
+                                    child: Icon(compIcon, size: 16, color: const Color(0xFFDC2626)),
                                   ),
                                   const SizedBox(width: 8),
                                   Container(
@@ -3295,7 +3817,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
-                                      comp['category'] as String,
+                                      compCategory,
                                       style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                                     ),
                                   ),
@@ -3402,16 +3924,19 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                               ElevatedButton(
                                 onPressed: () async {
                                   final picker = ImagePicker();
-                                  final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
+                                  final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
                                   if (picked != null) {
                                     final bytes = await picked.readAsBytes();
+                                    final base64String = base64Encode(bytes);
+                                    final dataUrl = 'data:image/jpeg;base64,$base64String';
                                     setState(() {
+                                      _deviceImageCache[dataUrl] = bytes;
                                       _deviceImageCache[picked.path] = bytes;
                                     });
                                     setDialogState(() {
-                                      customDeviceImagePath = picked.path;
-                                      selectedImage = picked.path;
-                                      imagePathNotifier.value = picked.path;
+                                      customDeviceImagePath = dataUrl;
+                                      selectedImage = dataUrl;
+                                      imagePathNotifier.value = dataUrl;
                                     });
                                   }
                                 },
@@ -3433,7 +3958,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                             width: double.infinity,
                             height: 48,
                             child: ElevatedButton.icon(
-                              onPressed: () {
+                              onPressed: () async {
                                 final title = titleController.text.trim();
                                 final subtitle = subtitleController.text.trim();
                                 final dealPrice = double.tryParse(dealPriceController.text.trim()) ?? 0;
@@ -3459,16 +3984,25 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
                                 final finalItems = components.map((comp) {
                                   final nameC = comp['nameController'] as TextEditingController;
+                                  final cat = comp['category'] as String;
+                                  final icon = (comp['icon'] as IconData?) ?? _getCategoryIcon(cat);
                                   return DealComponent(
-                                    name: nameC.text.trim().isEmpty ? (comp['category'] as String) : nameC.text.trim(),
-                                    category: comp['category'] as String,
-                                    icon: comp['icon'] as IconData,
+                                    name: nameC.text.trim().isEmpty ? cat : nameC.text.trim(),
+                                    category: cat,
+                                    icon: icon,
                                   );
                                 }).toList();
 
-                                final imagePathToSave = imagePathNotifier.value.isNotEmpty
+                                String imagePathToSave = imagePathNotifier.value.isNotEmpty
                                     ? imagePathNotifier.value
                                     : (customDeviceImagePath ?? selectedImage);
+
+                                if (_deviceImageCache.containsKey(imagePathToSave)) {
+                                  final deviceImageBytes = _deviceImageCache[imagePathToSave];
+                                  if (deviceImageBytes != null && !imagePathToSave.startsWith('data:image')) {
+                                    imagePathToSave = 'data:image/jpeg;base64,${base64Encode(deviceImageBytes)}';
+                                  }
+                                }
 
                                 final newDeal = DealItem(
                                   id: existingDeal?.id ?? 'deal_${DateTime.now().millisecondsSinceEpoch}',
@@ -3525,12 +4059,16 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                                 try {
                                   final menuApi = ref.read(menuApiServiceProvider);
                                   if (existingDeal != null) {
-                                    menuApi.updateDeal(existingDeal.id, dealDto);
+                                    await menuApi.updateDeal(existingDeal.id, dealDto);
                                   } else {
-                                    menuApi.createDeal(dealDto);
+                                    await menuApi.createDeal(dealDto);
                                   }
-                                } catch (_) {}
+                                  await _loadCategoriesAndItemsFromBackend();
+                                } catch (e) {
+                                  debugPrint('Error saving deal to backend: $e');
+                                }
 
+                                if (!context.mounted) return;
                                 Navigator.pop(dialogCtx);
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
@@ -3562,36 +4100,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildQuickAddChip(String label, IconData icon, VoidCallback onTap, bool isDark) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: const Color(0xFFDC2626)),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : AppColors.textPrimary,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

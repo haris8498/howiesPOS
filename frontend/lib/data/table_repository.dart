@@ -58,8 +58,10 @@ class TableNotifier extends StateNotifier<TableState> {
     loadTables();
   }
 
-  Future<void> loadTables() async {
-    state = state.copyWith(isLoading: true);
+  Future<void> loadTables({bool silent = false}) async {
+    if (!silent && state.tables.isEmpty) {
+      state = state.copyWith(isLoading: true);
+    }
     final localDb = db;
     try {
       final jsonList = await _tablesApiService.listTables();
@@ -502,14 +504,37 @@ class TableNotifier extends StateNotifier<TableState> {
   }
 
   Future<void> addTable(RestaurantTable newTable) async {
+    // 1. Immediately insert into in-memory state so frontend UI shows the table instantly
+    final existingTables = state.tables.where((t) => t.id != newTable.id && t.name.toLowerCase() != newTable.name.toLowerCase()).toList();
+    state = state.copyWith(tables: [...existingTables, newTable]);
+
+    final localDb = db;
+    if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+      try {
+        await localDb.catalogDao.upsertRestaurantTables([
+          LocalRestaurantTablesCompanion(
+            id: Value(newTable.id),
+            tableNumber: Value(newTable.tableNumber),
+            name: Value(newTable.name),
+            capacity: Value(newTable.capacity),
+            status: Value(newTable.status.name),
+          ),
+        ]);
+      } catch (_) {}
+    }
+
     try {
-      await _tablesApiService.createTable({
+      final res = await _tablesApiService.createTable({
         'table_number': newTable.tableNumber,
         'name': newTable.name,
         'capacity': newTable.capacity,
         'section': newTable.section,
         'status': newTable.status.name,
       });
+      final created = RestaurantTable.fromBackendJson(res);
+      // Replace with confirmed backend database record
+      final updatedList = state.tables.map((t) => (t.id == newTable.id || t.name.toLowerCase() == created.name.toLowerCase()) ? created : t).toList();
+      state = state.copyWith(tables: updatedList);
       await loadTables();
     } catch (e) {
       await loadTables();

@@ -1,4 +1,5 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDealDto, UpdateDealDto } from '../dto/deal.dto';
@@ -8,7 +9,10 @@ import { QueryDealDto } from '../dto/query-menu.dto';
 export class DealsService {
   private readonly logger = new Logger(DealsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listDeals(query: QueryDealDto = {}) {
     const where: Prisma.DealWhereInput = {};
@@ -82,6 +86,16 @@ export class DealsService {
     });
 
     this.logger.log(`Created deal '${created?.title}' (${created?.id})`);
+    if (created) {
+      this.realtimeGateway?.broadcastEvent({
+        eventName: 'deal:created',
+        alternateEventName: 'menu:updated',
+        entity: 'deals',
+        entityId: created.id,
+        action: 'CREATED',
+        payload: created,
+      });
+    }
     return created;
   }
 
@@ -135,6 +149,16 @@ export class DealsService {
     });
 
     this.logger.log(`Updated deal '${updated?.title}' (${id})`);
+    if (updated) {
+      this.realtimeGateway?.broadcastEvent({
+        eventName: 'deal:updated',
+        alternateEventName: 'menu:updated',
+        entity: 'deals',
+        entityId: id,
+        action: 'UPDATED',
+        payload: updated,
+      });
+    }
     return updated;
   }
 
@@ -162,6 +186,14 @@ export class DealsService {
     });
 
     this.logger.log(`Deleted deal '${existing.title}' (${existing.id})`);
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'deal:deleted',
+      alternateEventName: 'menu:updated',
+      entity: 'deals',
+      entityId: existing.id,
+      action: 'DELETED',
+      payload: { id: existing.id, title: existing.title },
+    });
     return { message: `Deal '${existing.title}' deleted successfully` };
   }
 }

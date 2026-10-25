@@ -40,6 +40,9 @@ class DailyExpenseItemModel {
 
 class DailyLiveSummaryModel {
   final String date;
+  final String shiftDate;
+  final DateTime? openedAt;
+  final String status;
   final double startingCash;
   final double totalChangeCash;
   final bool hasActiveSession;
@@ -53,9 +56,14 @@ class DailyLiveSummaryModel {
   final int dineInCount;
   final int takeawayCount;
   final int onlineCount;
+  final String? shiftId;
+  final String? sessionId;
 
   const DailyLiveSummaryModel({
     required this.date,
+    String? shiftDate,
+    this.openedAt,
+    this.status = 'OPEN',
     this.startingCash = 0.0,
     this.totalChangeCash = 0.0,
     this.hasActiveSession = false,
@@ -69,11 +77,20 @@ class DailyLiveSummaryModel {
     required this.dineInCount,
     required this.takeawayCount,
     required this.onlineCount,
-  });
+    this.shiftId,
+    this.sessionId,
+  }) : shiftDate = shiftDate ?? date;
 
   factory DailyLiveSummaryModel.fromJson(Map<String, dynamic> json) {
+    final rawDate = json['shift_date']?.toString() ?? json['date']?.toString() ?? '';
+    final rawStatus = json['status']?.toString() ?? (json['has_active_session'] == true ? 'OPEN' : 'CLOSED');
+    final openedAt = json['opened_at'] != null ? DateTime.tryParse(json['opened_at'].toString()) : null;
+
     return DailyLiveSummaryModel(
-      date: json['date']?.toString() ?? '',
+      date: rawDate,
+      shiftDate: rawDate,
+      openedAt: openedAt,
+      status: rawStatus,
       startingCash: double.tryParse(json['starting_cash']?.toString() ?? '0') ?? 0.0,
       totalChangeCash: double.tryParse(json['total_change_cash']?.toString() ?? '0') ?? 0.0,
       hasActiveSession: json['has_active_session'] == true,
@@ -87,12 +104,16 @@ class DailyLiveSummaryModel {
       dineInCount: int.tryParse(json['dine_in_count']?.toString() ?? '0') ?? 0,
       takeawayCount: int.tryParse(json['takeaway_count']?.toString() ?? '0') ?? 0,
       onlineCount: int.tryParse(json['online_count']?.toString() ?? '0') ?? 0,
+      shiftId: json['shift_id']?.toString() ?? json['session_id']?.toString(),
+      sessionId: json['session_id']?.toString() ?? json['shift_id']?.toString(),
     );
   }
 
   factory DailyLiveSummaryModel.empty() {
     return DailyLiveSummaryModel(
       date: DateTime.now().toIso8601String().split('T')[0],
+      shiftDate: DateTime.now().toIso8601String().split('T')[0],
+      status: 'CLOSED',
       startingCash: 0.0,
       totalChangeCash: 0.0,
       hasActiveSession: false,
@@ -106,6 +127,8 @@ class DailyLiveSummaryModel {
       dineInCount: 0,
       takeawayCount: 0,
       onlineCount: 0,
+      shiftId: null,
+      sessionId: null,
     );
   }
 }

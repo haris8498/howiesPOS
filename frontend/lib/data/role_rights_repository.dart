@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/models/role_rights_model.dart';
 import '../domain/models/user_role.dart';
 import '../services/api/api_providers.dart';
@@ -174,9 +176,46 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
           selectedRole: UserRole.manager,
           managerPermissions: _getInitialManagerPermissions(),
           cashierPermissions: _getInitialCashierPermissions(),
-        ));
+        )) {
+    _loadFromLocalCache();
+  }
 
   DateTime? _lastFetchTime;
+
+  Future<void> _loadFromLocalCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final mgrStr = prefs.getString('cached_permissions_manager');
+      final cshStr = prefs.getString('cached_permissions_cashier');
+
+      List<ModulePermission>? mgr;
+      List<ModulePermission>? csh;
+
+      if (mgrStr != null && mgrStr.isNotEmpty) {
+        final list = jsonDecode(mgrStr) as List<dynamic>;
+        mgr = list.whereType<Map<String, dynamic>>().map(ModulePermission.fromBackendJson).toList();
+      }
+      if (cshStr != null && cshStr.isNotEmpty) {
+        final list = jsonDecode(cshStr) as List<dynamic>;
+        csh = list.whereType<Map<String, dynamic>>().map(ModulePermission.fromBackendJson).toList();
+      }
+
+      if (mgr != null || csh != null) {
+        state = state.copyWith(
+          managerPermissions: mgr ?? state.managerPermissions,
+          cashierPermissions: csh ?? state.cashierPermissions,
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveToLocalCache(List<ModulePermission> mgr, List<ModulePermission> csh) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_permissions_manager', jsonEncode(mgr.map((p) => p.toJson()).toList()));
+      await prefs.setString('cached_permissions_cashier', jsonEncode(csh.map((p) => p.toJson()).toList()));
+    } catch (_) {}
+  }
 
   Future<void> loadPermissions({bool force = false}) async {
     if (!mounted || state.isLoading) return;
@@ -222,6 +261,7 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
         cashierPermissions: csh,
         isLoading: false,
       );
+      _saveToLocalCache(mgr, csh);
     } catch (_) {
       if (!mounted) return;
       state = state.copyWith(isLoading: false);
@@ -262,6 +302,7 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
       managerPermissions: updatedMgr,
       cashierPermissions: updatedCsh,
     );
+    _saveToLocalCache(updatedMgr, updatedCsh);
   }
 
   Future<void> applyPreset(String presetType) async {
@@ -273,6 +314,7 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
       if (result.isNotEmpty) {
         final perms = result.map((j) => ModulePermission.fromBackendJson(j)).toList();
         _setUpdated(perms);
+        _saveToLocalCache(state.managerPermissions, state.cashierPermissions);
         return;
       }
     } catch (_) {}
@@ -294,6 +336,7 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
         state = state.copyWith(cashierPermissions: _getInitialCashierPermissions());
       }
     }
+    _saveToLocalCache(state.managerPermissions, state.cashierPermissions);
   }
 
   void _setUpdated(List<ModulePermission> updated) {
@@ -307,7 +350,6 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
 
   static List<ModulePermission> _getInitialManagerPermissions() {
     return const [
-      ModulePermission(id: 'mgr_mod_pos', moduleName: 'POS Billing', actionName: 'Allow Access to POS Sales', description: 'Access POS terminal and billing', isGranted: true, isSensitive: false),
       ModulePermission(id: 'mgr_mod_online_orders', moduleName: 'Online Orders', actionName: 'Allow Access to Online Orders', description: 'View online orders', isGranted: true, isSensitive: false),
       ModulePermission(id: 'mgr_online_orders_accept', moduleName: 'Online Orders', actionName: 'Accept/Reject Orders', description: 'Accept or reject customer orders', isGranted: true, isSensitive: false),
       ModulePermission(id: 'mgr_mod_takeaway', moduleName: 'Takeaway Counter', actionName: 'Allow Access to Takeaway', description: 'View takeaway orders', isGranted: true, isSensitive: false),
@@ -349,36 +391,35 @@ class RoleRightsNotifier extends StateNotifier<RoleRightsState> {
     return const [
       ModulePermission(id: 'csh_mod_daily_calculation', moduleName: 'Daily Calculation', actionName: 'Allow Access to Daily Calculation', description: 'Submit Day Settlement & Reset Portal', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_mod_data_sync', moduleName: 'Data Sync', actionName: 'Allow Access to Data Sync', description: 'View & Manage SQLite/Cloud Data Synchronization', isGranted: true, isSensitive: false),
-      ModulePermission(id: 'csh_mod_pos', moduleName: 'POS Billing', actionName: 'Allow Access to POS Sales', description: 'Access POS terminal and billing', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_mod_online_orders', moduleName: 'Online Orders', actionName: 'Allow Access to Online Orders', description: 'View online orders', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_online_orders_accept', moduleName: 'Online Orders', actionName: 'Accept/Reject Orders', description: 'Accept or reject customer orders', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_mod_takeaway', moduleName: 'Takeaway Counter', actionName: 'Allow Access to Takeaway', description: 'View takeaway orders', isGranted: true, isSensitive: false),
-      ModulePermission(id: 'csh_takeaway_create', moduleName: 'Takeaway Counter', actionName: 'Create Takeaway Orders', description: 'Punch new takeaway orders', isGranted: false, isSensitive: false),
+      ModulePermission(id: 'csh_takeaway_create', moduleName: 'Takeaway Counter', actionName: 'Create Takeaway Orders', description: 'Punch new takeaway orders', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_mod_delivery', moduleName: 'Delivery Tracking', actionName: 'Allow Access to Delivery', description: 'View delivery tracking', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_del_assign', moduleName: 'Delivery Tracking', actionName: 'Assign Riders', description: 'Assign riders to orders', isGranted: false, isSensitive: false),
-      ModulePermission(id: 'csh_mod_stock_in_out', moduleName: 'Stock In / Out', actionName: 'Allow Access to Stock In / Out', description: 'View stock transactions', isGranted: true, isSensitive: false),
+      ModulePermission(id: 'csh_mod_stock_in_out', moduleName: 'Stock In / Out', actionName: 'Allow Access to Stock In / Out', description: 'View stock transactions', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_stock_in_action', moduleName: 'Stock In / Out', actionName: 'Perform Stock In', description: 'Add inward stock', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_stock_out_action', moduleName: 'Stock In / Out', actionName: 'Perform Stock Out', description: 'Record wastage or out', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_mod_reports', moduleName: 'Reports', actionName: 'Allow Access to Reports', description: 'View reports', isGranted: true, isSensitive: true),
       ModulePermission(id: 'csh_rep_export', moduleName: 'Reports', actionName: 'Export Reports', description: 'Export PDF & Excel', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_mod_tables', moduleName: 'Tables', actionName: 'Allow Access to Tables', description: 'View operations for Tables', isGranted: true, isSensitive: false),
-      ModulePermission(id: 'csh_tables_add', moduleName: 'Tables', actionName: 'Add Tables', description: 'Add operations for Tables', isGranted: false, isSensitive: false),
+      ModulePermission(id: 'csh_tables_add', moduleName: 'Tables', actionName: 'Add Tables', description: 'Add operations for Tables', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_tables_edit', moduleName: 'Tables', actionName: 'Edit Tables', description: 'Edit operations for Tables', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_tables_delete', moduleName: 'Tables', actionName: 'Delete Tables', description: 'Delete operations for Tables', isGranted: false, isSensitive: true),
       ModulePermission(id: 'csh_mod_menu', moduleName: 'Menu Catalog', actionName: 'Allow Access to Menu Catalog', description: 'View operations for Menu Catalog', isGranted: true, isSensitive: false),
       ModulePermission(id: 'csh_menu_add', moduleName: 'Menu Catalog', actionName: 'Add Menu Catalog', description: 'Add operations for Menu Catalog', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_menu_edit', moduleName: 'Menu Catalog', actionName: 'Edit Menu Catalog', description: 'Edit operations for Menu Catalog', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_menu_delete', moduleName: 'Menu Catalog', actionName: 'Delete Menu Catalog', description: 'Delete operations for Menu Catalog', isGranted: false, isSensitive: true),
-      ModulePermission(id: 'csh_mod_stock', moduleName: 'Stock Catalog', actionName: 'Allow Access to Stock Catalog', description: 'View operations for Stock Catalog', isGranted: true, isSensitive: false),
+      ModulePermission(id: 'csh_mod_stock', moduleName: 'Stock Catalog', actionName: 'Allow Access to Stock Catalog', description: 'View operations for Stock Catalog', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_stock_add', moduleName: 'Stock Catalog', actionName: 'Add Stock Catalog', description: 'Add operations for Stock Catalog', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_stock_edit', moduleName: 'Stock Catalog', actionName: 'Edit Stock Catalog', description: 'Edit operations for Stock Catalog', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_stock_delete', moduleName: 'Stock Catalog', actionName: 'Delete Stock Catalog', description: 'Delete operations for Stock Catalog', isGranted: false, isSensitive: true),
-      ModulePermission(id: 'csh_mod_users', moduleName: 'Users', actionName: 'Allow Access to Users', description: 'View operations for Users', isGranted: true, isSensitive: false),
+      ModulePermission(id: 'csh_mod_users', moduleName: 'Users', actionName: 'Allow Access to Users', description: 'View operations for Users', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_users_add', moduleName: 'Users', actionName: 'Add Users', description: 'Add operations for Users', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_users_edit', moduleName: 'Users', actionName: 'Edit Users', description: 'Edit operations for Users', isGranted: false, isSensitive: true),
       ModulePermission(id: 'csh_users_delete', moduleName: 'Users', actionName: 'Delete Users', description: 'Delete operations for Users', isGranted: false, isSensitive: true),
       ModulePermission(id: 'csh_users_salary_disburse', moduleName: 'Users', actionName: 'Mark Salary Paid', description: 'Disburse payroll', isGranted: false, isSensitive: true),
-      ModulePermission(id: 'csh_mod_expenses', moduleName: 'Expenses', actionName: 'Allow Access to Expenses', description: 'View operations for Expenses', isGranted: true, isSensitive: false),
+      ModulePermission(id: 'csh_mod_expenses', moduleName: 'Expenses', actionName: 'Allow Access to Expenses', description: 'View operations for Expenses', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_expenses_add', moduleName: 'Expenses', actionName: 'Add Expenses', description: 'Add operations for Expenses', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_expenses_edit', moduleName: 'Expenses', actionName: 'Edit Expenses', description: 'Edit operations for Expenses', isGranted: false, isSensitive: false),
       ModulePermission(id: 'csh_expenses_delete', moduleName: 'Expenses', actionName: 'Delete Expenses', description: 'Delete operations for Expenses', isGranted: false, isSensitive: true),

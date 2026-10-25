@@ -58,7 +58,6 @@ export class CreateDealDto {
 
   @IsString()
   @IsOptional()
-  @MaxLength(255)
   image_path?: string;
 
   @IsString()
@@ -105,7 +104,6 @@ export class UpdateDealDto {
 
   @IsString()
   @IsOptional()
-  @MaxLength(255)
   image_path?: string;
 
   @IsString()

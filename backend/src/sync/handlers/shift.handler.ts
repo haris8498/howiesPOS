@@ -122,6 +122,28 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
+    // 2B. Guard: Only one active shift at a time store-wide
+    const activeShift = tx.dailyCalculation.findFirst
+      ? await tx.dailyCalculation.findFirst({
+          where: {
+            status: 'ACTIVE',
+            id: { not: shiftId },
+          },
+        })
+      : null;
+
+    if (activeShift) {
+      this.logger.warn(`Rejecting sync shift open ${shiftId}: Server already has active shift ${activeShift.id}`);
+      return {
+        operation_id: mutation.operation_id,
+        entity_id: shiftId,
+        status: 'FAILED_FATAL',
+        server_version: mutation.base_version ?? 1,
+        server_timestamp: new Date().toISOString(),
+        error_message: 'Cannot open shift: An active shift already exists on the server.',
+      };
+    }
+
     // 3. Insert new shift
     const startingCash = Number(payload.starting_cash ?? payload.opening_float ?? 0);
     const dateObj = payload.date ? new Date(payload.date) : new Date();

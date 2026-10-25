@@ -43,4 +43,15 @@ class ModulePermission {
       isSensitive: json['is_sensitive'] == true,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'module_name': moduleName,
+      'action_name': actionName,
+      'description': description,
+      'is_granted': isGranted,
+      'is_sensitive': isSensitive,
+    };
+  }
 }

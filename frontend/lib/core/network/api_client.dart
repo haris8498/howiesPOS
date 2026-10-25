@@ -66,7 +66,7 @@ class NotFoundException extends ApiException {
 }
 
 class ConflictException extends ApiException {
-  const ConflictException(super.message, {super.statusCode = 409});
+  const ConflictException(super.message, {super.statusCode = 409, super.details});
 }
 
 class ValidationException extends ApiException {
@@ -197,7 +197,7 @@ class ApiClient {
     } else if (statusCode == 404) {
       throw NotFoundException(errorMessage.isNotEmpty ? errorMessage : 'Requested resource not found.');
     } else if (statusCode == 409) {
-      throw ConflictException(errorMessage.isNotEmpty ? errorMessage : 'Resource conflict detected.');
+      throw ConflictException(errorMessage.isNotEmpty ? errorMessage : 'Resource conflict detected.', details: jsonBody);
     } else if (statusCode == 400 || statusCode == 422) {
       throw ValidationException(
         errorMessage.isNotEmpty ? errorMessage : 'Invalid request parameters.',
@@ -234,7 +234,7 @@ class ApiClient {
       rethrow;
     } catch (e) {
       if (kDebugMode) debugPrint('⚠️ [HTTP GET Error] -> $uri: $e');
-      throw ApiException('Network error: $e');
+      throw NetworkException('Network error: $e');
     }
   }
 
@@ -261,7 +261,7 @@ class ApiClient {
       rethrow;
     } catch (e) {
       if (kDebugMode) debugPrint('⚠️ [HTTP POST Error] -> $uri: $e');
-      throw ApiException('Network error: $e');
+      throw NetworkException('Network error: $e');
     }
   }
 
@@ -288,7 +288,7 @@ class ApiClient {
       rethrow;
     } catch (e) {
       if (kDebugMode) debugPrint('⚠️ [HTTP PATCH Error] -> $uri: $e');
-      throw ApiException('Network error: $e');
+      throw NetworkException('Network error: $e');
     }
   }
 
@@ -315,7 +315,7 @@ class ApiClient {
       rethrow;
     } catch (e) {
       if (kDebugMode) debugPrint('⚠️ [HTTP PUT Error] -> $uri: $e');
-      throw ApiException('Network error: $e');
+      throw NetworkException('Network error: $e');
     }
   }
 
@@ -338,7 +338,7 @@ class ApiClient {
       rethrow;
     } catch (e) {
       if (kDebugMode) debugPrint('⚠️ [HTTP DELETE Error] -> $uri: $e');
-      throw ApiException('Network error: $e');
+      throw NetworkException('Network error: $e');
     }
   }
 }

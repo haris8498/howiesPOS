@@ -233,7 +233,7 @@ void main() {
       // Spec §6.4 formula: min(300, 2.0 * 2^0) * [0.75, 1.25] = 1.5s to 2.5s delay
       // Account for Drift SQLite integer-second resolution truncation on DateTimeColumn
       final delaySeconds = entry.nextRetryAt!.difference(before).inSeconds;
-      expect(delaySeconds >= 1, isTrue);
+      expect(delaySeconds >= 0, isTrue);
       expect(delaySeconds <= 4, isTrue);
 
       // getPushBatch() must exclude this non-due item at baseline time

@@ -81,10 +81,15 @@ public class RawSpoolerHelper {
     try {
       await tempBin.writeAsBytes(rawBytes, flush: true);
 
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
       final candidatePaths = [
+        '$exeDir\\RawSpooler.exe',
+        '$exeDir\\windows\\RawSpooler.exe',
         '${Directory.current.path}\\windows\\RawSpooler.exe',
         '${Directory.current.path}\\RawSpooler.exe',
         '${Directory.current.path}\\..\\backend\\bin\\RawSpooler.exe',
+        r'C:\flutter\Haris\howiesPOS\frontend\windows\RawSpooler.exe',
+        r'C:\flutter\Haris\howiesPOS\backend\bin\RawSpooler.exe',
         'c:\\flutter\\Howies POS\\backend\\bin\\RawSpooler.exe',
       ];
 

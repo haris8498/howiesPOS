@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Expense, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
@@ -13,7 +14,10 @@ export interface ExpenseSummary {
 
 @Injectable()
 export class ExpensesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listExpenses(query?: QueryExpenseDto): Promise<Expense[]> {
     const where = this.buildWhereClause(query);

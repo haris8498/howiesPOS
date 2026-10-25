@@ -50,8 +50,10 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     loadDeliveryData();
   }
 
-  Future<void> loadDeliveryData() async {
-    state = state.copyWith(isLoading: true);
+  Future<void> loadDeliveryData({bool silent = false}) async {
+    if (!silent && state.deliveries.isEmpty) {
+      state = state.copyWith(isLoading: true);
+    }
     try {
       // 1. Riders
       final ridersJson = await _deliveryApiService.listRiders();

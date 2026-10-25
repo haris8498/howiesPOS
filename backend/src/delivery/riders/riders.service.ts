@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { DeliveryRider, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateRiderDto, ToggleRiderDutyDto, UpdateRiderDto } from '../dto/rider.dto';
@@ -11,7 +7,10 @@ import { QueryRiderDto } from '../dto/query-delivery.dto';
 
 @Injectable()
 export class RidersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listRiders(query?: QueryRiderDto): Promise<DeliveryRider[]> {
     const where: Prisma.DeliveryRiderWhereInput = {};

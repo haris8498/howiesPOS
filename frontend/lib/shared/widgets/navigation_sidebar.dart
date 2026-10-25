@@ -29,6 +29,7 @@ class NavigationSidebar extends ConsumerWidget {
     final role = authState.currentUser.role;
     final pendingOnlineOrders = ref.watch(onlineOrdersProvider).pendingCount;
     final isCollapsed = ref.watch(sidebarCollapsedProvider);
+    final isOwnerPortal = role == UserRole.owner || currentRoute.startsWith('/owner');
 
     List<_NavItem> navItems = [];
 
@@ -47,8 +48,8 @@ class NavigationSidebar extends ConsumerWidget {
         _NavItem('Expenses', '/owner/expenses', Icons.account_balance_wallet_rounded),
         _NavItem('Daily Calculation', '/owner/daily-calculation', Icons.calculate_rounded),
         _NavItem('Reports', '/owner/reports', Icons.analytics_rounded),
-        _NavItem('Data Synced', '/owner/data-sync', Icons.cloud_sync_rounded),
-      ];
+        _NavItem('Sync Center', '/owner/sync-center', Icons.cloud_sync_rounded),
+        ];
     } else if (role == UserRole.manager) {
       final roleRights = ref.watch(roleRightsProvider);
 
@@ -61,7 +62,6 @@ class NavigationSidebar extends ConsumerWidget {
       }
 
       navItems = [];
-      if (can('pos', moduleName: 'POS Billing', defaultIfMissing: true)) navItems.add(_NavItem('POS Sales', '/manager/pos', Icons.point_of_sale_rounded));
       if (can('tables', moduleName: 'Tables', defaultIfMissing: true)) navItems.add(_NavItem('Tables', '/manager/tables', Icons.table_restaurant_rounded));
       if (can('online_orders', moduleName: 'Online Orders')) navItems.add(_NavItem('Online Orders', '/manager/online-orders', Icons.cloud_download_rounded, badgeCount: pendingOnlineOrders, isComingSoon: true));
       if (can('takeaway', moduleName: 'Takeaway Counter', defaultIfMissing: true)) navItems.add(_NavItem('Takeaway', '/manager/takeaway', Icons.shopping_bag_rounded));
@@ -75,7 +75,7 @@ class NavigationSidebar extends ConsumerWidget {
       if (can('expenses', moduleName: 'Expenses')) navItems.add(_NavItem('Expenses', '/manager/expenses', Icons.account_balance_wallet_rounded));
       if (can('daily_calculation', moduleName: 'Daily Calculation', defaultIfMissing: true)) navItems.add(_NavItem('Daily Calculation', '/manager/daily-calculation', Icons.calculate_rounded));
       if (can('reports', moduleName: 'Reports')) navItems.add(_NavItem('Reports', '/manager/reports', Icons.analytics_rounded));
-      if (can('data_sync', moduleName: 'Data Sync', defaultIfMissing: true)) navItems.add(_NavItem('Data Synced', '/manager/data-sync', Icons.cloud_sync_rounded));
+      if (can('data_sync', moduleName: 'Sync Center', defaultIfMissing: true)) navItems.add(_NavItem('Sync Center', '/manager/sync-center', Icons.cloud_sync_rounded));
 
       // Fallback if no modules granted
       if (navItems.isEmpty) {
@@ -93,7 +93,6 @@ class NavigationSidebar extends ConsumerWidget {
       }
 
       navItems = [];
-      if (can('pos', moduleName: 'POS Billing', defaultIfMissing: true)) navItems.add(_NavItem('Sales', '/sales/pos', Icons.point_of_sale_rounded));
       if (can('tables', moduleName: 'Tables', defaultIfMissing: true)) navItems.add(_NavItem('Tables', '/sales/tables', Icons.table_restaurant_rounded));
       if (can('online_orders', moduleName: 'Online Orders')) navItems.add(_NavItem('Online Orders', '/sales/online-orders', Icons.cloud_download_rounded, badgeCount: pendingOnlineOrders, isComingSoon: true));
       if (can('takeaway', moduleName: 'Takeaway Counter', defaultIfMissing: true)) navItems.add(_NavItem('Takeaway', '/sales/takeaway', Icons.shopping_bag_rounded));
@@ -105,11 +104,11 @@ class NavigationSidebar extends ConsumerWidget {
       if (can('expenses', moduleName: 'Expenses')) navItems.add(_NavItem('Expenses', '/sales/expenses', Icons.account_balance_wallet_rounded));
       if (can('daily_calculation', moduleName: 'Daily Calculation', defaultIfMissing: true)) navItems.add(_NavItem('Daily Calculation', '/sales/daily-calculation', Icons.calculate_rounded));
       if (can('reports', moduleName: 'Reports')) navItems.add(_NavItem('Reports', '/sales/reports', Icons.analytics_rounded));
-      if (can('data_sync', moduleName: 'Data Sync', defaultIfMissing: true)) navItems.add(_NavItem('Data Synced', '/sales/data-sync', Icons.cloud_sync_rounded));
+      if (can('data_sync', moduleName: 'Sync Center', defaultIfMissing: true)) navItems.add(_NavItem('Sync Center', '/sales/sync-center', Icons.cloud_sync_rounded));
       
       // Fallback if no modules granted
       if (navItems.isEmpty) {
-        navItems.add(_NavItem('Sales', '/sales/pos', Icons.point_of_sale_rounded));
+        navItems.add(_NavItem('Tables', '/sales/tables', Icons.table_restaurant_rounded));
       }
     }
 
@@ -186,13 +185,15 @@ class NavigationSidebar extends ConsumerWidget {
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 8),
-                            SyncButton(
-                              variant: SyncButtonVariant.sidebarHeader,
-                              currentRoute: currentRoute,
-                              isCollapsed: true,
-                              isDark: isDark,
-                            ),
+                            if (!isOwnerPortal) ...[
+                              const SizedBox(height: 8),
+                              SyncButton(
+                                variant: SyncButtonVariant.sidebarHeader,
+                                currentRoute: currentRoute,
+                                isCollapsed: true,
+                                isDark: isDark,
+                              ),
+                            ],
                             const SizedBox(height: 6),
                             Tooltip(
                               message: 'Expand Sidebar',
@@ -278,13 +279,15 @@ class NavigationSidebar extends ConsumerWidget {
                                 ],
                               ),
                             ),
-                            SyncButton(
-                              variant: SyncButtonVariant.sidebarHeader,
-                              currentRoute: currentRoute,
-                              isCollapsed: false,
-                              isDark: isDark,
-                            ),
-                            const SizedBox(width: 6),
+                            if (!isOwnerPortal) ...[
+                              SyncButton(
+                                variant: SyncButtonVariant.sidebarHeader,
+                                currentRoute: currentRoute,
+                                isCollapsed: false,
+                                isDark: isDark,
+                              ),
+                              const SizedBox(width: 6),
+                            ],
                             Tooltip(
                               message: 'Collapse Sidebar',
                               child: InkWell(
@@ -536,13 +539,15 @@ class NavigationSidebar extends ConsumerWidget {
                             _buildVerticalNetworkSpeedIndicators(context, ref, isDark),
                             const SizedBox(height: 8),
                             // Collapsed Sync Action
-                            SyncButton(
-                              variant: SyncButtonVariant.sidebarFooter,
-                              currentRoute: currentRoute,
-                              isCollapsed: true,
-                              isDark: isDark,
-                            ),
-                            const SizedBox(height: 8),
+                            if (!isOwnerPortal) ...[
+                              SyncButton(
+                                variant: SyncButtonVariant.sidebarFooter,
+                                currentRoute: currentRoute,
+                                isCollapsed: true,
+                                isDark: isDark,
+                              ),
+                              const SizedBox(height: 8),
+                            ],
                             // Collapsed Logout Action
                             Tooltip(
                               message: 'Log Out',
@@ -576,13 +581,15 @@ class NavigationSidebar extends ConsumerWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             // Full-width Sync Data Action Button
-                            SyncButton(
-                              variant: SyncButtonVariant.sidebarFooter,
-                              currentRoute: currentRoute,
-                              isCollapsed: false,
-                              isDark: isDark,
-                            ),
-                            const SizedBox(height: 8),
+                            if (!isOwnerPortal) ...[
+                              SyncButton(
+                                variant: SyncButtonVariant.sidebarFooter,
+                                currentRoute: currentRoute,
+                                isCollapsed: false,
+                                isDark: isDark,
+                              ),
+                              const SizedBox(height: 8),
+                            ],
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [

@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InventoryItem, Prisma, StockMovement } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
@@ -23,7 +19,10 @@ export type InventoryItemWithMovements = Prisma.InventoryItemGetPayload<{
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listItems(query?: QueryInventoryDto): Promise<InventoryItem[]> {
     const where: Prisma.InventoryItemWhereInput = {};
@@ -94,7 +93,7 @@ export class InventoryService {
         where: { sku_code: sku },
       });
       if (existingSku) {
-        sku = `${sku}-${Date.now().toString().slice(-4)}`;
+        throw new ConflictException(`An inventory item with SKU '${sku}' already exists`);
       }
     }
 

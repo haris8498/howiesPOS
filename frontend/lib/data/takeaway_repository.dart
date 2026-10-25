@@ -42,7 +42,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
 
   TakeawayNotifier({OrdersApiService? ordersApiService, Ref? ref})
       : _ordersApiService = ordersApiService ?? OrdersApiService(),
-        _ref = ref ?? null,
+        // ignore: prefer_initializing_formals
+        _ref = ref,
         super(const TakeawayState(
           orders: [],
           tokenCounter: 1,
@@ -50,8 +51,10 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     loadTakeawayOrders();
   }
 
-  Future<void> loadTakeawayOrders() async {
-    state = state.copyWith(isLoading: true);
+  Future<void> loadTakeawayOrders({bool silent = false}) async {
+    if (!silent && state.orders.isEmpty) {
+      state = state.copyWith(isLoading: true);
+    }
     try {
       final jsonList = await _ordersApiService.listOrders(orderType: 'takeaway');
       if (jsonList.isNotEmpty) {
@@ -294,6 +297,48 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             }
           ];
 
+    final updatedItems = orderItemsPayload.map((it) {
+      final itemName = it['item_name']?.toString() ?? 'Takeaway Meal';
+      final qty = (it['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = double.tryParse(it['unit_price']?.toString() ?? '0') ?? (qty > 0 ? subtotal / qty : subtotal);
+      final itemId = it['id']?.toString() ?? const Uuid().v4();
+      final menuItemId = it['menu_item_id']?.toString() ?? itemId;
+      return OrderItem(
+        id: itemId,
+        item: MenuItem(
+          id: menuItemId,
+          name: itemName,
+          category: 'General',
+          description: '',
+          basePrice: unitPrice,
+          imageUrl: '',
+        ),
+        quantity: qty,
+        selectedSize: it['selected_size']?.toString() ?? 'Regular',
+        selectedCrust: it['selected_crust']?.toString() ?? 'Original',
+        backendUnitPrice: unitPrice,
+      );
+    }).toList();
+
+    // Immediately update local state in-memory so UI instantly reflects changes
+    final updatedList = state.orders.map((o) {
+      if (o.id == orderId) {
+        return o.copyWith(
+          customerName: customerName.isEmpty ? o.customerName : customerName,
+          customerPhone: customerPhone.isEmpty ? o.customerPhone : customerPhone,
+          itemsSummary: itemsSummary,
+          subtotal: subtotal,
+          discountPercentage: discountPercentage,
+          discountAmount: effectiveDiscount,
+          grandTotal: grandTotal,
+          items: updatedItems,
+          isBillPrinted: false, // reset so updated bill can be printed
+        );
+      }
+      return o;
+    }).toList();
+    state = state.copyWith(orders: updatedList);
+
     try {
       await _ordersApiService.updateOrder(orderId, {
         'order_type': 'takeaway',
@@ -314,23 +359,6 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       print('Error updating takeaway order in DB: $e');
       await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(orderId: orderId);
     }
-
-    final updated = state.orders.map((o) {
-      if (o.id == orderId) {
-        return o.copyWith(
-          customerName: customerName.isEmpty ? o.customerName : customerName,
-          customerPhone: customerPhone.isEmpty ? o.customerPhone : customerPhone,
-          itemsSummary: itemsSummary,
-          subtotal: subtotal,
-          discountPercentage: discountPercentage,
-          discountAmount: effectiveDiscount,
-          grandTotal: grandTotal,
-        );
-      }
-      return o;
-    }).toList();
-
-    state = state.copyWith(orders: updated);
   }
 
   Future<void> updateOrderStatus(String orderId, String newStatus) async {

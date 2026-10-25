@@ -1,10 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, StaffMember } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
@@ -35,7 +30,10 @@ export interface StaffStats {
 export class StaffService {
   private readonly logger = new Logger(StaffService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   async listStaff(query?: QueryStaffDto): Promise<StaffMemberWithUser[]> {
     const where: Prisma.StaffMemberWhereInput = {};
@@ -259,6 +257,7 @@ export class StaffService {
         this.logger.log(
           `Created staff member '${staff.full_name}' with linked user '${user.username}'`,
         );
+        this.realtimeGateway?.emitStaffCreated(staff as any);
         return staff;
       });
     }
@@ -310,6 +309,7 @@ export class StaffService {
     });
 
     this.logger.log(`Created staff member '${created.full_name}'`);
+    this.realtimeGateway?.emitStaffCreated(created as any);
     return created;
   }
 
@@ -367,7 +367,29 @@ export class StaffService {
       },
     });
 
+    // Synchronize linked login user role and status if present
+    if (existing.user_id) {
+      const userUpdates: Prisma.StaffUserUpdateInput = {};
+      if (dto.role) {
+        userUpdates.role = dto.role;
+      }
+      if (dto.status) {
+        userUpdates.is_active = dto.status.toLowerCase() === 'active';
+      }
+      if (Object.keys(userUpdates).length > 0) {
+        try {
+          await this.prisma.staffUser.update({
+            where: { id: existing.user_id },
+            data: userUpdates,
+          });
+        } catch (err) {
+          this.logger.warn(`Failed to synchronize linked login user for staff ${id}: ${err}`);
+        }
+      }
+    }
+
     this.logger.log(`Updated staff member '${updated.full_name}'`);
+    this.realtimeGateway?.emitStaffUpdated(updated as any);
     return updated;
   }
 
@@ -405,6 +427,7 @@ export class StaffService {
     });
 
     this.logger.log(`Deactivated staff member '${existing.full_name}' effective from ${now.toISOString()}`);
+    this.realtimeGateway?.emitStaffDeleted(id);
     return { message: `Staff member '${existing.full_name}' deleted effective from current month onward` };
   }
 

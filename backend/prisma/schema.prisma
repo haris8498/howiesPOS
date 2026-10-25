@@ -583,6 +583,8 @@ model DailyCalculation {
   
   status               String             @default("ACTIVE") @db.VarChar(20) // 'ACTIVE' | 'OFFLINE_CLOSED' | 'CLOSED'
   closing_notes        String?            @map("closing_notes") @db.Text
+  closed_by_id         String?            @map("closed_by_id") @db.VarChar(36)
+  closed_by_name       String?            @map("closed_by_name") @db.VarChar(100)
   version              Int                @default(1) @map("version")
   created_at           DateTime           @default(now()) @map("created_at") @db.Timestamp()
   updated_at           DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamp()

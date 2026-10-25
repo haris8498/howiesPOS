@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Installer and distribution archives
+dist/
+*.zip
+*.exe
+

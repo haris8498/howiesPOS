@@ -19,6 +19,8 @@ describe('CustomersService', () => {
     total_orders_count: 18,
     total_spent: new Prisma.Decimal(412.5),
     special_notes: 'VIP customer, prefers extra cheese',
+    is_deleted: false,
+    deleted_at: null,
   };
 
   beforeEach(async () => {

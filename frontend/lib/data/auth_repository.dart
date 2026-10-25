@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/network/api_client.dart';
+import '../core/network/realtime_socket_service.dart';
 import '../core/security/permission_checker.dart';
 import '../core/security/token_storage.dart';
 import '../domain/models/staff_model.dart';
@@ -232,12 +233,32 @@ class AuthNotifier extends StateNotifier<AuthState> {
         }
 
         if (!mounted) return;
+        _persistLoadedUsers(list);
         state = state.copyWith(staffUsers: list, credentials: updatedCreds);
       }
     } catch (_) {
       // Offline fallback
       if (mounted) {
         await _loadFallbackCredentials();
+      }
+    }
+  }
+
+  Future<void> _persistLoadedUsers(List<UserCredential> users) async {
+    for (final cred in users) {
+      if (cred.username.isNotEmpty) {
+        final defaultPwd = cred.username.toLowerCase() == 'noman'
+            ? 'Noman123'
+            : (cred.role == UserRole.owner
+                ? 'owner123'
+                : (cred.role == UserRole.manager ? 'manager123' : 'cashier123'));
+        final pwd = cred.password.isNotEmpty ? cred.password : defaultPwd;
+        await _fallbackRepository.addStaffUser(
+          username: cred.username,
+          role: cred.role,
+          password: pwd,
+          email: cred.email,
+        );
       }
     }
   }
@@ -260,7 +281,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
         );
       }
       if (!mounted) return;
-      state = state.copyWith(credentials: updated);
+      final allStaff = await _fallbackRepository.getStaffUsers();
+      final loadedStaff = allStaff.map((f) => UserCredential(
+        role: f.role,
+        username: f.username,
+        email: f.email,
+        password: '••••••••',
+        lastUpdated: f.lastUpdated,
+        updatedBy: f.updatedBy,
+        isDefault: f.username.toLowerCase() == 'noman' || f.username.toLowerCase() == 'storemanager' || f.username.toLowerCase() == 'poscashier',
+      )).toList();
+      state = state.copyWith(credentials: updated, staffUsers: loadedStaff.isNotEmpty ? loadedStaff : state.staffUsers);
     } catch (_) {}
   }
 
@@ -395,7 +426,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
 
       // Load users list now that a valid auth token is saved
+      _saveLoginOffline(trimmedUsername, trimmedPassword, parsedRole, user['email']?.toString());
       loadUsersFromBackend();
+
+      final token = loginData['token']?.toString() ?? loginData['accessToken']?.toString();
+      RealtimeSocketService.instance.connect(explicitToken: token);
 
       return true;
     } on UnauthorizedException catch (e) {
@@ -407,7 +442,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
       return false;
     } on ApiException catch (e) {
-      if (e is NetworkException) {
+      if (e is NetworkException || e.message.toLowerCase().contains('network') || e.message.toLowerCase().contains('socket') || e.message.toLowerCase().contains('clientexception') || e.message.toLowerCase().contains('connection') || e.message.toLowerCase().contains('disallowed')) {
         return _loginFallback(trimmedUsername, trimmedPassword);
       }
       if (mounted) {
@@ -417,6 +452,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {
       return _loginFallback(trimmedUsername, trimmedPassword);
     }
+  }
+
+  Future<void> _saveLoginOffline(String username, String password, UserRole role, String? email) async {
+    try {
+      await _fallbackRepository.addStaffUser(
+        username: username,
+        role: role,
+        password: password,
+        email: email ?? '$username@hungryhowies.com',
+        fullName: username,
+      );
+      await _fallbackRepository.updateUserPassword(username, password);
+    } catch (_) {}
   }
 
   /// Offline local fallback verification if backend is completely unreachable
@@ -432,7 +480,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return false;
       }
 
-      final isValid = await _fallbackRepository.verifyCredentials(cred.role, password);
+      final isValid = await _fallbackRepository.verifyUserCredentials(username, password) ||
+                      await _fallbackRepository.verifyCredentials(cred.role, password);
       if (!mounted) return false;
       if (!isValid) {
         state = state.copyWith(
@@ -442,8 +491,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return false;
       }
 
-      final staff = await _fallbackRepository.getStaffForRole(cred.role);
-      final activeStaff = staff ?? StaffMember(
+
+      final activeStaff = StaffMember(
         id: 'local_${cred.role.name}',
         fullName: cred.username,
         phone: '',
@@ -487,6 +536,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {
       await TokenStorage.clearSession();
     }
+    RealtimeSocketService.instance.disconnect();
     if (!mounted) return;
     state = state.copyWith(
       isAuthenticated: false,

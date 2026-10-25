@@ -64,7 +64,102 @@ class SyncApiService {
   /// POST /api/sync/toggle/:id
   Future<void> toggleSyncStatus(String orderId, {String? status}) async {
     await _apiClient.post('sync/toggle/$orderId', body: {
-      'status': ?status,
+      if (status != null) 'status': status,
     });
+  }
+
+  /// GET /api/sync/modules
+  Future<List<Map<String, dynamic>>> getSyncModules() async {
+    try {
+      final response = await _apiClient.get('sync/modules');
+      if (response is Map<String, dynamic> && response['data'] is List) {
+        return (response['data'] as List)
+            .whereType<Map<String, dynamic>>()
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/sync/history
+  Future<Map<String, dynamic>> getSyncHistory({
+    int page = 1,
+    int limit = 30,
+    String? module,
+    String? status,
+    String? search,
+  }) async {
+    try {
+      final query = <String, String>{
+        'page': page.toString(),
+        'limit': limit.toString(),
+      };
+      if (module != null && module.isNotEmpty && module != 'all') {
+        query['module'] = module;
+      }
+      if (status != null && status.isNotEmpty && status != 'all') {
+        query['status'] = status;
+      }
+      if (search != null && search.isNotEmpty) {
+        query['search'] = search;
+      }
+
+      final response = await _apiClient.get('sync/history', queryParameters: query);
+      if (response is Map<String, dynamic>) {
+        return response;
+      }
+      return {
+        'data': <dynamic>[],
+        'meta': {'total': 0, 'page': page, 'limit': limit, 'totalPages': 0}
+      };
+    } catch (_) {
+      return {
+        'data': <dynamic>[],
+        'meta': {'total': 0, 'page': page, 'limit': limit, 'totalPages': 0}
+      };
+    }
+  }
+
+  /// GET /api/sync/conflicts
+  Future<List<Map<String, dynamic>>> getSyncConflicts() async {
+    try {
+      final response = await _apiClient.get('sync/conflicts');
+      if (response is Map<String, dynamic> && response['data'] is List) {
+        return (response['data'] as List)
+            .whereType<Map<String, dynamic>>()
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/sync/cashier-shifts
+  Future<List<Map<String, dynamic>>> getCashierShifts() async {
+    try {
+      final response = await _apiClient.get('sync/cashier-shifts');
+      if (response is Map<String, dynamic> && response['data'] is List) {
+        return (response['data'] as List).whereType<Map<String, dynamic>>().toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/sync/cashier-shift/:shiftId
+  Future<Map<String, dynamic>> getCashierShiftDetails(String shiftId) async {
+    try {
+      final response = await _apiClient.get('sync/cashier-shift/$shiftId');
+      if (response is Map<String, dynamic> && response['data'] is Map<String, dynamic>) {
+        return response['data'] as Map<String, dynamic>;
+      }
+      return {};
+    } catch (e) {
+      rethrow;
+    }
   }
 }

@@ -42,7 +42,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           context.go('/owner/tables');
           break;
         case UserRole.manager:
-          context.go('/manager/dashboard');
+          context.go('/manager/tables');
           break;
         case UserRole.cashier:
           context.go('/sales/tables');

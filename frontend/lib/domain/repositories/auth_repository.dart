@@ -51,6 +51,7 @@ abstract class IAuthRepository {
   Future<Map<UserRole, HashedUserCredential>> getStoredCredentials();
   Future<List<HashedUserCredential>> getStaffUsers();
   Future<bool> verifyCredentials(UserRole role, String candidatePassword);
+  Future<bool> verifyUserCredentials(String username, String candidatePassword);
   Future<HashedUserCredential?> findCredentialByUsername(String identifier);
   Future<void> updatePassword(UserRole role, String newPassword, {String updatedBy = 'Super Admin'});
   Future<void> updateUserPassword(String username, String newPassword, {String updatedBy = 'Super Admin'});

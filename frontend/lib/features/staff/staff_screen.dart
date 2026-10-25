@@ -914,6 +914,23 @@ class _StaffScreenState extends ConsumerState<StaffScreen> {
                             const SizedBox(width: 8),
                           ],
 
+                          // Edit User Button
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryRed,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: () => _showEditUserDialog(context, ref, staff, isDark),
+                            icon: const Icon(Icons.edit_rounded, size: 14),
+                            label: const Text('EDIT USER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(width: 8),
+
                           // Full Payslip Modal Button
                           ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
@@ -1518,6 +1535,523 @@ class _StaffScreenState extends ConsumerState<StaffScreen> {
                                 label: const Text(
                                   'REGISTER & ONBOARD USER',
                                   style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 13,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.transparent,
+                                  shadowColor: Colors.transparent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showEditUserDialog(BuildContext context, WidgetRef ref, StaffMember staff, bool isDark) {
+    final nameController = TextEditingController(text: staff.fullName);
+    final phoneController = TextEditingController(text: staff.phone);
+    final salaryController = TextEditingController(text: staff.monthlySalary.toStringAsFixed(0));
+    final hourlyController = TextEditingController(text: staff.hourlyRate.toStringAsFixed(0));
+
+    final isOwner = staff.role == UserRole.owner;
+    UserRole selectedRole = staff.role;
+    String selectedStatus = staff.status.isNotEmpty ? staff.status : 'Active';
+    String selectedShift = staff.assignedShift.isNotEmpty ? staff.assignedShift : 'Morning Shift';
+    bool isSaving = false;
+
+    final shiftOptions = ['Morning Shift', 'Evening Shift', 'Night Shift', 'Standard Shift'];
+    if (!shiftOptions.contains(selectedShift)) {
+      shiftOptions.add(selectedShift);
+    }
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final baseSalary = double.tryParse(salaryController.text.trim()) ?? 0.0;
+            final hourlyEst = (baseSalary > 0 ? (baseSalary / 160) : 0).toStringAsFixed(0);
+
+            return Dialog(
+              backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                width: 580,
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.90,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+                      decoration: const BoxDecoration(
+                        gradient: AppColors.brandGradient,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                            ),
+                            child: const Icon(Icons.manage_accounts_rounded, color: Colors.white, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Text(
+                                      'EDIT USER DETAILS',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 16,
+                                        letterSpacing: 0.8,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.brandYellow,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        staff.role.displayName.toUpperCase(),
+                                        style: const TextStyle(
+                                          color: AppColors.deepRed,
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  'Modify compensation, profile, shift and permissions',
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.9),
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, color: Colors.white, size: 22),
+                            onPressed: () => Navigator.pop(dialogContext),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Content Body
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(22),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildSectionHeader('1. PERSONAL & CONTACT DETAILS', Icons.badge_outlined, isDark),
+                            const SizedBox(height: 10),
+
+                            _inputField('Full Legal Name', nameController, Icons.person_rounded, isDark, hintText: 'e.g. Farhan Tariq'),
+                            const SizedBox(height: 10),
+
+                            _inputField('Phone Number', phoneController, Icons.phone_rounded, isDark, hintText: 'e.g. +92 300 1234567'),
+                            const SizedBox(height: 14),
+
+                            // User Role Selection
+                            _buildSectionHeader('2. ROLE & PERMISSIONS', Icons.admin_panel_settings_outlined, isDark),
+                            const SizedBox(height: 8),
+
+                            if (isOwner)
+                              // Owner role is permanently disabled and locked
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.5) : const Color(0xFFF1F5F9),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.lock_rounded, size: 20, color: Color(0xFF64748B)),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: const [
+                                              Text(
+                                                'Role: Chain Owner',
+                                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF64748B)),
+                                              ),
+                                              SizedBox(width: 6),
+                                              Icon(Icons.shield_rounded, size: 14, color: AppColors.primaryRed),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            'Owner role cannot be changed. Field is locked.',
+                                            style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text('LOCKED', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              // Dropdown for non-owner roles
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<UserRole>(
+                                    value: selectedRole,
+                                    isExpanded: true,
+                                    dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                    items: [UserRole.manager, UserRole.cashier].map((r) {
+                                      return DropdownMenuItem<UserRole>(
+                                        value: r,
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              r == UserRole.manager ? Icons.security_rounded : Icons.point_of_sale_rounded,
+                                              size: 18,
+                                              color: AppColors.primaryRed,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Text(
+                                              r.displayName,
+                                              style: TextStyle(
+                                                color: isDark ? Colors.white : AppColors.textPrimary,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: (newRole) {
+                                      if (newRole != null) {
+                                        setDialogState(() => selectedRole = newRole);
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
+
+                            const SizedBox(height: 14),
+
+                            // Shift and Status
+                            Row(
+                              children: [
+                                // Shift Dropdown
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Assigned Shift', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary)),
+                                      const SizedBox(height: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                        ),
+                                        child: DropdownButtonHideUnderline(
+                                          child: DropdownButton<String>(
+                                            value: selectedShift,
+                                            isExpanded: true,
+                                            dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                            items: shiftOptions.map((s) {
+                                              return DropdownMenuItem<String>(
+                                                value: s,
+                                                child: Text(s, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isDark ? Colors.white : AppColors.textPrimary)),
+                                              );
+                                            }).toList(),
+                                            onChanged: (val) {
+                                              if (val != null) setDialogState(() => selectedShift = val);
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // Status Dropdown
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Account Status', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary)),
+                                      const SizedBox(height: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                        ),
+                                        child: DropdownButtonHideUnderline(
+                                          child: DropdownButton<String>(
+                                            value: selectedStatus,
+                                            isExpanded: true,
+                                            dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                            items: ['Active', 'Inactive'].map((st) {
+                                              return DropdownMenuItem<String>(
+                                                value: st,
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      st == 'Active' ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                                                      size: 16,
+                                                      color: st == 'Active' ? const Color(0xFF16A34A) : AppColors.danger,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Text(st, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isDark ? Colors.white : AppColors.textPrimary)),
+                                                  ],
+                                                ),
+                                              );
+                                            }).toList(),
+                                            onChanged: (val) {
+                                              if (val != null) setDialogState(() => selectedStatus = val);
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+
+                            const SizedBox(height: 18),
+
+                            // Compensation & Salary
+                            _buildSectionHeader('3. COMPENSATION & SALARY', Icons.payments_outlined, isDark),
+                            const SizedBox(height: 10),
+
+                            _inputField(
+                              'Monthly Base Salary (PKR)',
+                              salaryController,
+                              Icons.payments_rounded,
+                              isDark,
+                              isNumber: true,
+                              hintText: 'e.g. 65000',
+                              onChanged: (val) {
+                                final s = double.tryParse(val.trim()) ?? 0.0;
+                                hourlyController.text = (s > 0 ? (s / 160) : 0).toStringAsFixed(0);
+                                setDialogState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 10),
+
+                            _inputField(
+                              'Hourly Rate (PKR / hr)',
+                              hourlyController,
+                              Icons.access_time_filled_rounded,
+                              isDark,
+                              isNumber: true,
+                              hintText: 'e.g. 406',
+                              onChanged: (_) => setDialogState(() {}),
+                            ),
+
+                            const SizedBox(height: 12),
+
+                            // Net preview
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF142E18) : const Color(0xFFEBF7ED),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: const Color(0xFF86EFAC)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.calculate_rounded, color: Color(0xFF16A34A), size: 22),
+                                      const SizedBox(width: 10),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'CONFIRMED MONTHLY SALARY',
+                                            style: TextStyle(
+                                              color: Color(0xFF15803D),
+                                              fontSize: 10.5,
+                                              fontWeight: FontWeight.w900,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            'PKR ${baseSalary.toStringAsFixed(0)} / month',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF166534)),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        '~PKR $hourlyEst / hr',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 14,
+                                          color: Color(0xFF15803D),
+                                        ),
+                                      ),
+                                      const Text(
+                                        'Standard 160 hrs / mo',
+                                        style: TextStyle(fontSize: 10, color: Color(0xFF166534)),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // Action Footer
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF0B1120) : const Color(0xFFF8FAFC),
+                        border: Border(top: BorderSide(color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0))),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                            child: const Text('CANCEL', style: TextStyle(color: AppColors.textMuted, fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(width: 12),
+                          SizedBox(
+                            height: 44,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: AppColors.brandGradient,
+                                borderRadius: BorderRadius.circular(10),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.primaryRed.withValues(alpha: 0.35),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: ElevatedButton.icon(
+                                onPressed: isSaving ? null : () async {
+                                  final name = nameController.text.trim();
+                                  if (name.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Please enter employee full name!'), backgroundColor: AppColors.danger),
+                                    );
+                                    return;
+                                  }
+
+                                  final finalSalary = double.tryParse(salaryController.text.trim()) ?? staff.monthlySalary;
+                                  final finalHourly = double.tryParse(hourlyController.text.trim()) ?? (finalSalary / 160);
+
+                                  setDialogState(() => isSaving = true);
+
+                                  final updates = <String, dynamic>{
+                                    'full_name': name,
+                                    'phone': phoneController.text.trim().isEmpty ? staff.phone : phoneController.text.trim(),
+                                    'monthly_salary': finalSalary,
+                                    'hourly_rate': finalHourly,
+                                    'assigned_shift': selectedShift,
+                                    'status': selectedStatus,
+                                  };
+
+                                  if (!isOwner) {
+                                    updates['role'] = selectedRole.name;
+                                  }
+
+                                  try {
+                                    await ref.read(staffProvider.notifier).updateStaffMember(staff.id, updates);
+                                    if (context.mounted) {
+                                      Navigator.pop(dialogContext);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('User "$name" details updated successfully!'),
+                                          backgroundColor: const Color(0xFF16A34A),
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    setDialogState(() => isSaving = false);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Failed to update user: $e'),
+                                          backgroundColor: AppColors.danger,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                                icon: isSaving
+                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                    : const Icon(Icons.check_circle_rounded, size: 18, color: Colors.white),
+                                label: Text(
+                                  isSaving ? 'SAVING...' : 'SAVE & UPDATE USER',
+                                  style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.w900,
                                     fontSize: 13,

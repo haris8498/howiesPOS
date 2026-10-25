@@ -17,22 +17,32 @@ import '../services/api/sync_api_service.dart';
 class DataSyncState {
   final DataSyncSummary summary;
   final List<DataSyncOrder> orders;
+  final List<DataSyncOrder> allOrders;
   final bool isLoading;
   final bool isSyncing;
   final bool isOffline;
   final String selectedSyncFilter; // 'all', 'synced', 'pending', 'failed'
   final String selectedTypeFilter; // 'all', 'dineIn', 'takeaway', 'delivery'
+  final String selectedDatePreset; // 'all', 'today', 'yesterday', 'this_week', 'custom'
+  final DateTime? selectedDate;
+  final String selectedShift; // 'all', 'active', or specific shift id
+  final List<Map<String, String>> availableShifts;
   final String searchQuery;
   final String? errorMessage;
 
   const DataSyncState({
     this.summary = const DataSyncSummary(),
     this.orders = const [],
+    this.allOrders = const [],
     this.isLoading = false,
     this.isSyncing = false,
     this.isOffline = false,
     this.selectedSyncFilter = 'all',
     this.selectedTypeFilter = 'all',
+    this.selectedDatePreset = 'all',
+    this.selectedDate,
+    this.selectedShift = 'all',
+    this.availableShifts = const [],
     this.searchQuery = '',
     this.errorMessage,
   });
@@ -40,22 +50,32 @@ class DataSyncState {
   DataSyncState copyWith({
     DataSyncSummary? summary,
     List<DataSyncOrder>? orders,
+    List<DataSyncOrder>? allOrders,
     bool? isLoading,
     bool? isSyncing,
     bool? isOffline,
     String? selectedSyncFilter,
     String? selectedTypeFilter,
+    String? selectedDatePreset,
+    DateTime? selectedDate,
+    String? selectedShift,
+    List<Map<String, String>>? availableShifts,
     String? searchQuery,
     String? errorMessage,
   }) {
     return DataSyncState(
       summary: summary ?? this.summary,
       orders: orders ?? this.orders,
+      allOrders: allOrders ?? this.allOrders,
       isLoading: isLoading ?? this.isLoading,
       isSyncing: isSyncing ?? this.isSyncing,
       isOffline: isOffline ?? this.isOffline,
       selectedSyncFilter: selectedSyncFilter ?? this.selectedSyncFilter,
       selectedTypeFilter: selectedTypeFilter ?? this.selectedTypeFilter,
+      selectedDatePreset: selectedDatePreset ?? this.selectedDatePreset,
+      selectedDate: selectedDate ?? this.selectedDate,
+      selectedShift: selectedShift ?? this.selectedShift,
+      availableShifts: availableShifts ?? this.availableShifts,
       searchQuery: searchQuery ?? this.searchQuery,
       errorMessage: errorMessage,
     );
@@ -149,7 +169,28 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
           deviceId: o.deviceId,
           sourceStorage: 'SQLite Local',
           targetStorage: 'PostgreSQL Cloud',
+          shiftId: o.shiftId,
         );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<List<Map<String, String>>> _loadAvailableShifts() async {
+    final db = _db;
+    if (db == null) return [];
+    try {
+      final shifts = await (db.select(db.localDailyCalculations)
+            ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+          .get();
+      return shifts.map((s) => {
+        'id': s.id,
+        'name': '${s.cashierName} (${s.status}) - ${DateFormat('MM/dd HH:mm').format(s.createdAt)}',
+        'status': s.status,
+        'cashierName': s.cashierName,
+        'createdAt': s.createdAt.toIso8601String(),
+        'submittedAt': s.submittedAt?.toIso8601String() ?? '',
       }).toList();
     } catch (_) {
       return [];
@@ -159,6 +200,7 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
   List<DataSyncOrder> _filterOrders(List<DataSyncOrder> orders) {
     var filtered = orders;
 
+    // 1. Sync Status Filter
     if (state.selectedSyncFilter != 'all') {
       if (state.selectedSyncFilter == 'synced') {
         filtered = filtered.where((o) => o.isSynced).toList();
@@ -169,12 +211,78 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
       }
     }
 
+    // 2. Order Type Filter
     if (state.selectedTypeFilter != 'all') {
       filtered = filtered.where((o) =>
           o.rawOrderType.toLowerCase() == state.selectedTypeFilter.toLowerCase() ||
           o.orderType.toLowerCase() == state.selectedTypeFilter.toLowerCase()).toList();
     }
 
+    // 3. Date Filter (Owner Portal Feature)
+    if (state.selectedDatePreset != 'all') {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      if (state.selectedDatePreset == 'today') {
+        filtered = filtered.where((o) {
+          final od = DateTime(o.createdAt.year, o.createdAt.month, o.createdAt.day);
+          return od.isAtSameMomentAs(today);
+        }).toList();
+      } else if (state.selectedDatePreset == 'yesterday') {
+        final yesterday = today.subtract(const Duration(days: 1));
+        filtered = filtered.where((o) {
+          final od = DateTime(o.createdAt.year, o.createdAt.month, o.createdAt.day);
+          return od.isAtSameMomentAs(yesterday);
+        }).toList();
+      } else if (state.selectedDatePreset == 'this_week') {
+        final weekAgo = today.subtract(const Duration(days: 7));
+        filtered = filtered.where((o) => o.createdAt.isAfter(weekAgo)).toList();
+      } else if (state.selectedDatePreset == 'custom' && state.selectedDate != null) {
+        final custom = DateTime(state.selectedDate!.year, state.selectedDate!.month, state.selectedDate!.day);
+        filtered = filtered.where((o) {
+          final od = DateTime(o.createdAt.year, o.createdAt.month, o.createdAt.day);
+          return od.isAtSameMomentAs(custom);
+        }).toList();
+      }
+    }
+
+    // 4. Shift Filter (Cashier Portal Feature)
+    if (state.selectedShift != 'all') {
+      if (state.selectedShift == 'active') {
+        final activeShift = state.availableShifts.firstWhere((s) => s['status'] == 'ACTIVE', orElse: () => {});
+        final activeId = activeShift['id'];
+        final createdAtStr = activeShift['createdAt'];
+        final activeStart = createdAtStr != null ? DateTime.tryParse(createdAtStr) : null;
+        filtered = filtered.where((o) {
+          if (activeId != null && activeId.isNotEmpty && o.shiftId == activeId) {
+            return true;
+          }
+          if (activeStart != null && (o.shiftId == null || o.shiftId!.isEmpty)) {
+            return o.createdAt.isAfter(activeStart) || o.createdAt.isAtSameMomentAs(activeStart);
+          }
+          return false;
+        }).toList();
+      } else {
+        final selectedShift = state.availableShifts.firstWhere((s) => s['id'] == state.selectedShift, orElse: () => {});
+        final sId = selectedShift['id'];
+        final startStr = selectedShift['createdAt'];
+        final endStr = selectedShift['submittedAt'];
+        final startTime = startStr != null ? DateTime.tryParse(startStr) : null;
+        final endTime = (endStr != null && endStr.isNotEmpty) ? DateTime.tryParse(endStr) : null;
+        filtered = filtered.where((o) {
+          if (sId != null && sId.isNotEmpty && o.shiftId == sId) {
+            return true;
+          }
+          if (startTime != null && (o.shiftId == null || o.shiftId!.isEmpty)) {
+            final afterStart = o.createdAt.isAfter(startTime) || o.createdAt.isAtSameMomentAs(startTime);
+            final beforeEnd = endTime == null || o.createdAt.isBefore(endTime) || o.createdAt.isAtSameMomentAs(endTime);
+            return afterStart && beforeEnd;
+          }
+          return false;
+        }).toList();
+      }
+    }
+
+    // 5. Search Query Filter
     if (state.searchQuery.trim().isNotEmpty) {
       final q = state.searchQuery.trim().toLowerCase();
       filtered = filtered.where((o) =>
@@ -187,17 +295,40 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
     return filtered;
   }
 
-  Future<void> loadData() async {
-    state = state.copyWith(isLoading: true, errorMessage: null);
+  void _applyFilters() {
+    final filtered = _filterOrders(state.allOrders);
+    final totalRevenue = filtered.fold<double>(0.0, (sum, o) => sum + o.totalAmount);
+    final syncedCount = filtered.where((o) => o.isSynced).length;
+    final pendingCount = filtered.where((o) => !o.isSynced && o.syncStatus != 'failed').length;
+
+    state = state.copyWith(
+      orders: filtered,
+      summary: DataSyncSummary(
+        totalOrders: filtered.length,
+        totalRevenue: totalRevenue,
+        syncedCount: syncedCount,
+        pendingCount: pendingCount,
+        lastSyncTimestamp: state.summary.lastSyncTimestamp,
+        sqliteStorageStatus: state.summary.sqliteStorageStatus,
+        cloudStorageStatus: state.summary.cloudStorageStatus,
+      ),
+    );
+  }
+
+  Future<void> loadData({bool silent = false}) async {
+    if (!silent && state.allOrders.isEmpty) {
+      state = state.copyWith(isLoading: true, errorMessage: null);
+    }
 
     List<DataSyncOrder> localOrders = [];
+    List<Map<String, String>> shifts = [];
     if (FeatureFlags.offlineFirstEnabled && _db != null) {
       localOrders = await _loadLocalOrders();
+      shifts = await _loadAvailableShifts();
     }
 
     final isOnline = _connectivity?.isOnline ?? true;
     if (FeatureFlags.offlineFirstEnabled && !isOnline) {
-      final filtered = _filterOrders(localOrders);
       final totalRevenue = localOrders.fold(0.0, (sum, o) => sum + o.totalAmount);
       final syncedCount = localOrders.where((o) => o.isSynced).length;
       final pendingCount = localOrders.where((o) => !o.isSynced).length;
@@ -214,10 +345,12 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
           sqliteStorageStatus: 'HEALTHY',
           cloudStorageStatus: 'OFFLINE',
         ),
-        orders: filtered,
+        allOrders: localOrders,
+        availableShifts: shifts,
         isLoading: false,
         isOffline: true,
       );
+      _applyFilters();
       return;
     }
 
@@ -233,7 +366,7 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
 
       if (FeatureFlags.offlineFirstEnabled) {
         final pendingLocal = localOrders.where((o) => !o.isSynced);
-        for (final p in _filterOrders(pendingLocal.toList())) {
+        for (final p in pendingLocal) {
           mergedOrders.add(p);
           seenIds.add(p.id);
         }
@@ -260,13 +393,14 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
           sqliteStorageStatus: 'HEALTHY',
           cloudStorageStatus: 'CONNECTED',
         ),
-        orders: mergedOrders,
+        allOrders: mergedOrders,
+        availableShifts: shifts,
         isLoading: false,
         isOffline: false,
       );
+      _applyFilters();
     } catch (e) {
       if (FeatureFlags.offlineFirstEnabled && localOrders.isNotEmpty) {
-        final filtered = _filterOrders(localOrders);
         final totalRevenue = localOrders.fold(0.0, (sum, o) => sum + o.totalAmount);
         final syncedCount = localOrders.where((o) => o.isSynced).length;
         final pendingCount = localOrders.where((o) => !o.isSynced).length;
@@ -283,10 +417,12 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
             sqliteStorageStatus: 'HEALTHY',
             cloudStorageStatus: 'DISCONNECTED',
           ),
-          orders: filtered,
+          allOrders: localOrders,
+          availableShifts: shifts,
           isLoading: false,
           isOffline: true,
         );
+        _applyFilters();
       } else {
         final isNetErr = e is SocketException || e.toString().contains('SocketException') || e.toString().contains('Connection refused');
         state = state.copyWith(
@@ -300,17 +436,27 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
 
   Future<void> setSyncFilter(String filter) async {
     state = state.copyWith(selectedSyncFilter: filter);
-    await loadData();
+    _applyFilters();
   }
 
   Future<void> setTypeFilter(String type) async {
     state = state.copyWith(selectedTypeFilter: type);
-    await loadData();
+    _applyFilters();
+  }
+
+  Future<void> setDatePreset(String preset, {DateTime? customDate}) async {
+    state = state.copyWith(selectedDatePreset: preset, selectedDate: customDate);
+    _applyFilters();
+  }
+
+  Future<void> setShiftFilter(String shiftId) async {
+    state = state.copyWith(selectedShift: shiftId);
+    _applyFilters();
   }
 
   Future<void> setSearchQuery(String query) async {
     state = state.copyWith(searchQuery: query);
-    await loadData();
+    _applyFilters();
   }
 
   Future<void> syncSingleOrder(String orderId) async {
@@ -327,12 +473,15 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
                 retryCount: Value(0),
               ));
         }
-        await worker.triggerPush();
-        await loadData();
-      } else {
-        await _syncApiService.syncSingleOrder(orderId);
-        await loadData();
+        await worker.triggerPush(force: true);
       }
+
+      // Also mark synced on cloud backend ledger
+      try {
+        await _syncApiService.syncSingleOrder(orderId);
+      } catch (_) {}
+
+      await loadData(silent: true);
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
     } finally {
@@ -347,16 +496,9 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
       if (FeatureFlags.offlineFirstEnabled && worker != null) {
         final db = _db;
         if (db != null) {
-          // Reset any conflict entries to pending so they can be re-evaluated
-          await (db.update(db.syncOutbox)
-                ..where((t) => t.status.equals(SyncOutboxStatus.conflict)))
-              .write(const SyncOutboxCompanion(
-                status: Value(SyncOutboxStatus.pending),
-                retryCount: Value(0),
-              ));
+          await db.outboxDao.resetFailedEntries();
         }
 
-        // Reset tripped circuit breaker on explicit manual sync request
         if (worker.state.isCircuitBreakerTripped) {
           worker.stateNotifier.updateState(
             worker.state.copyWith(
@@ -368,8 +510,16 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
         }
 
         final pendingBefore = state.summary.pendingCount;
-        await worker.triggerPush();
-        await loadData();
+        await worker.triggerPush(force: true);
+
+        try {
+          final pendingIds = state.allOrders.where((o) => !o.isSynced).map((o) => o.id).toList();
+          if (pendingIds.isNotEmpty) {
+            await _syncApiService.syncBatchOrders(pendingIds);
+          }
+        } catch (_) {}
+
+        await loadData(silent: true);
         final pendingAfter = state.summary.pendingCount;
 
         if (worker.state.lastError != null && worker.state.lastError!.isNotEmpty) {
@@ -380,20 +530,20 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
         return actuallySynced > 0 ? actuallySynced : 0;
       }
 
-      if (state.orders.isEmpty) {
-        await loadData();
+      if (state.allOrders.isEmpty) {
+        await loadData(silent: true);
       }
-      var targetIds = state.orders.where((o) => !o.isSynced).map((o) => o.id).toList();
+      var targetIds = state.allOrders.where((o) => !o.isSynced).map((o) => o.id).toList();
       if (targetIds.isEmpty) {
         final fullRes = await _syncApiService.getSyncOverview();
         targetIds = fullRes.orders.where((o) => !o.isSynced).map((o) => o.id).toList();
       }
       if (targetIds.isEmpty) {
-        await loadData();
+        await loadData(silent: true);
         return 0;
       }
       final count = await _syncApiService.syncBatchOrders(targetIds);
-      await loadData();
+      await loadData(silent: true);
       return count;
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
@@ -403,10 +553,22 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
     }
   }
 
+  Future<void> clearFailedErrors() async {
+    try {
+      final db = _db;
+      if (db != null) {
+        await db.outboxDao.clearFailedEntries();
+      }
+      await loadData(silent: true);
+    } catch (e) {
+      state = state.copyWith(errorMessage: e.toString());
+    }
+  }
+
   Future<void> toggleOrderSyncStatus(String orderId) async {
     try {
       await _syncApiService.toggleSyncStatus(orderId);
-      await loadData();
+      await loadData(silent: true);
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
     }

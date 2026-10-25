@@ -16,7 +16,7 @@ class UnauthorizedScreen extends ConsumerWidget {
 
     String redirectPath = '/sales/tables';
     if (role == UserRole.owner) redirectPath = '/owner/tables';
-    if (role == UserRole.manager) redirectPath = '/manager/dashboard';
+    if (role == UserRole.manager) redirectPath = '/manager/tables';
 
     return Scaffold(
       backgroundColor: AppColors.offWhite,

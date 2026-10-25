@@ -168,12 +168,12 @@ class DashboardScreen extends ConsumerWidget {
             children: [
               Expanded(
                 child: GlassCard(
-                  onTap: () => context.go('/pos'),
+                  onTap: () => context.go('/owner/tables'),
                   child: Column(
                     children: const [
-                      Icon(Icons.point_of_sale_rounded, color: AppColors.primaryRed, size: 36),
+                      Icon(Icons.table_restaurant_rounded, color: AppColors.primaryRed, size: 36),
                       SizedBox(height: 8),
-                      Text('POS Billing Terminal', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
+                      Text('Dine-In Tables', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
@@ -246,17 +246,17 @@ class DashboardScreen extends ConsumerWidget {
                 children: [
                   const Icon(Icons.touch_app_rounded, color: AppColors.primaryRed, size: 64),
                   const SizedBox(height: 14),
-                  const Text('HIGH-SPEED POS BILLING TERMINAL', style: TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const Text('DINE-IN & RESTAURANT TABLES', style: TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
-                  const Text('Select order type (Dine In, Take Away, Delivery) & process billing', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  const Text('Manage tables, view floor map, take dine-in orders & settle bills', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
                   const SizedBox(height: 20),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.play_arrow_rounded, size: 22),
-                    label: const Text('OPEN POS BILLING NOW', style: TextStyle(fontSize: 15)),
+                    label: const Text('OPEN TABLES NOW', style: TextStyle(fontSize: 15)),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
                     ),
-                    onPressed: () => context.go('/pos'),
+                    onPressed: () => context.go('/owner/tables'),
                   ),
                 ],
               ),

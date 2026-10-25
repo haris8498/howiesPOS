@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../services/sync/global_sync_controller.dart';
 import '../data/auth_repository.dart';
+import '../data/role_rights_repository.dart';
 import '../domain/models/user_role.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/unauthorized_screen.dart';
@@ -15,7 +16,6 @@ import '../features/kitchen/kitchen_screen.dart';
 import '../features/menu/menu_screen.dart';
 import '../features/online_orders/online_orders_screen.dart';
 import '../features/passwords/password_management_screen.dart';
-import '../features/pos/pos_screen.dart';
 import '../features/reports/reports_screen.dart';
 import '../features/rights/rights_screen.dart';
 import '../features/settings/settings_screen.dart';
@@ -28,12 +28,16 @@ import '../features/daily_calculation/daily_calculation_screen.dart';
 import '../features/daily_calculation/daily_calculation_admin_screen.dart';
 import '../features/daily_calculation/widgets/starting_cash_dialog.dart';
 import '../data/daily_calculation_repository.dart';
-import '../features/sync/data_sync_screen.dart';
+import '../features/sync/sync_center_screen.dart';
+import '../features/sync/cashier_sync_center_screen.dart';
 import '../shared/widgets/navigation_sidebar.dart';
 import '../shared/widgets/cashier_top_navigation_bar.dart';
 
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: '/login',
     refreshListenable: _RiverpodListenable(ref, authProvider),
     redirect: (context, state) {
@@ -53,7 +57,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           case UserRole.owner:
             return '/owner/tables';
           case UserRole.manager:
-            return '/manager/dashboard';
+            return '/manager/tables';
           case UserRole.cashier:
             return '/sales/tables';
         }
@@ -64,8 +68,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         if (location.startsWith('/owner') && role != UserRole.owner) {
           return '/unauthorized';
         }
-        if (location.startsWith('/manager') && role != UserRole.owner && role != UserRole.manager) {
+        if (location.startsWith('/manager') &&
+            role != UserRole.owner &&
+            role != UserRole.manager) {
           return '/unauthorized';
+        }
+
+        if (role == UserRole.cashier && location.startsWith('/sales/')) {
+          final roleRights = ref.read(roleRightsProvider);
+          if ((location.startsWith('/sales/stock') || location == '/sales/inventory') &&
+              !roleRights.isModuleGranted(UserRole.cashier, 'stock')) {
+            return '/sales/tables';
+          }
+          if (location.startsWith('/sales/stock-in-out') &&
+              !roleRights.isModuleGranted(UserRole.cashier, 'stock_in_out')) {
+            return '/sales/tables';
+          }
+          if ((location.startsWith('/sales/users') || location.startsWith('/sales/staff')) &&
+              !roleRights.isModuleGranted(UserRole.cashier, 'users')) {
+            return '/sales/tables';
+          }
+          if (location.startsWith('/sales/expenses') &&
+              !roleRights.isModuleGranted(UserRole.cashier, 'expenses')) {
+            return '/sales/tables';
+          }
+          if (location.startsWith('/sales/reports') &&
+              !roleRights.isModuleGranted(UserRole.cashier, 'reports')) {
+            return '/sales/tables';
+          }
         }
       }
 
@@ -74,20 +104,33 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(
         path: '/login',
-        pageBuilder: (context, state) => _noAnimationPage(const LoginScreen(), state),
+        pageBuilder: (context, state) =>
+            _noAnimationPage(const LoginScreen(), state),
       ),
       GoRoute(
         path: '/unauthorized',
-        pageBuilder: (context, state) => _noAnimationPage(const UnauthorizedScreen(), state),
+        pageBuilder: (context, state) =>
+            _noAnimationPage(const UnauthorizedScreen(), state),
       ),
       GoRoute(
         path: '/sync',
         redirect: (context, state) {
           final authState = ref.read(authProvider);
           return switch (authState.currentUser.role) {
-            UserRole.owner => '/owner/data-sync',
-            UserRole.manager => '/manager/data-sync',
-            UserRole.cashier => '/sales/data-sync',
+            UserRole.owner => '/owner/sync-center',
+            UserRole.manager => '/manager/sync-center',
+            UserRole.cashier => '/sales/sync-center',
+          };
+        },
+      ),
+      GoRoute(
+        path: '/pos',
+        redirect: (context, state) {
+          final authState = ref.read(authProvider);
+          return switch (authState.currentUser.role) {
+            UserRole.owner => '/owner/tables',
+            UserRole.manager => '/manager/tables',
+            UserRole.cashier => '/sales/tables',
           };
         },
       ),
@@ -96,30 +139,122 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // OWNER PORTAL ROUTES (/owner/...)
       // =========================================================
       ShellRoute(
-        builder: (context, state, child) => _buildPortalShell(context, state, child),
+        builder: (context, state, child) =>
+            _buildPortalShell(context, state, child),
         routes: [
-          GoRoute(path: '/owner/dashboard', pageBuilder: (context, state) => _noAnimationPage(const DashboardScreen(), state)),
-          GoRoute(path: '/owner/online-orders', pageBuilder: (context, state) => _noAnimationPage(const OnlineOrdersScreen(), state)),
-          GoRoute(path: '/owner/sales', pageBuilder: (context, state) => _noAnimationPage(const PosScreen(), state)),
-          GoRoute(path: '/owner/pos', pageBuilder: (context, state) => _noAnimationPage(const PosScreen(), state)),
-          GoRoute(path: '/owner/tables', pageBuilder: (context, state) => _noAnimationPage(const TablesScreen(), state)),
-          GoRoute(path: '/owner/takeaway', pageBuilder: (context, state) => _noAnimationPage(const TakeawayScreen(), state)),
-          GoRoute(path: '/owner/kitchen', pageBuilder: (context, state) => _noAnimationPage(const KitchenScreen(), state)),
-          GoRoute(path: '/owner/inventory', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/owner/stock', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/owner/stock-in-out', pageBuilder: (context, state) => _noAnimationPage(const StockInOutScreen(), state)),
-          GoRoute(path: '/owner/menu', pageBuilder: (context, state) => _noAnimationPage(const MenuScreen(), state)),
-          GoRoute(path: '/owner/customers', pageBuilder: (context, state) => _noAnimationPage(const CustomersScreen(), state)),
-          GoRoute(path: '/owner/staff', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/owner/users', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/owner/passwords', pageBuilder: (context, state) => _noAnimationPage(const PasswordManagementScreen(), state)),
-          GoRoute(path: '/owner/rights', pageBuilder: (context, state) => _noAnimationPage(const RightsScreen(), state)),
-          GoRoute(path: '/owner/expenses', pageBuilder: (context, state) => _noAnimationPage(const ExpensesScreen(), state)),
-          GoRoute(path: '/owner/daily-calculation', pageBuilder: (context, state) => _noAnimationPage(const DailyCalculationAdminScreen(), state)),
-          GoRoute(path: '/owner/delivery', pageBuilder: (context, state) => _noAnimationPage(const DeliveryScreen(), state)),
-          GoRoute(path: '/owner/reports', pageBuilder: (context, state) => _noAnimationPage(const ReportsScreen(), state)),
-          GoRoute(path: '/owner/data-sync', pageBuilder: (context, state) => _noAnimationPage(const DataSyncScreen(), state)),
-          GoRoute(path: '/owner/settings', pageBuilder: (context, state) => _noAnimationPage(const SettingsScreen(), state)),
+          GoRoute(
+            path: '/owner/dashboard',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DashboardScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/online-orders',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const OnlineOrdersScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/sales',
+            redirect: (context, state) => '/owner/tables',
+          ),
+          GoRoute(
+            path: '/owner/pos',
+            redirect: (context, state) => '/owner/tables',
+          ),
+          GoRoute(
+            path: '/owner/tables',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TablesScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/takeaway',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TakeawayScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/kitchen',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const KitchenScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/inventory',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/stock',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/stock-in-out',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockInOutScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/menu',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const MenuScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/customers',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const CustomersScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/staff',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/users',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/passwords',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const PasswordManagementScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/rights',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const RightsScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/expenses',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ExpensesScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/daily-calculation',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DailyCalculationAdminScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/delivery',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DeliveryScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/reports',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ReportsScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/data-sync',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SyncCenterScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/sync-center',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SyncCenterScreen(), state),
+          ),
+          GoRoute(
+            path: '/owner/settings',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SettingsScreen(), state),
+          ),
         ],
       ),
 
@@ -127,28 +262,112 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // MANAGER PORTAL ROUTES (/manager/...)
       // =========================================================
       ShellRoute(
-        builder: (context, state, child) => _buildPortalShell(context, state, child),
+        builder: (context, state, child) =>
+            _buildPortalShell(context, state, child),
         routes: [
-          GoRoute(path: '/manager/dashboard', pageBuilder: (context, state) => _noAnimationPage(const DashboardScreen(), state)),
-          GoRoute(path: '/manager/online-orders', pageBuilder: (context, state) => _noAnimationPage(const OnlineOrdersScreen(), state)),
-          GoRoute(path: '/manager/pos', pageBuilder: (context, state) => _noAnimationPage(const PosScreen(), state)),
-          GoRoute(path: '/manager/tables', pageBuilder: (context, state) => _noAnimationPage(const TablesScreen(), state)),
-          GoRoute(path: '/manager/takeaway', pageBuilder: (context, state) => _noAnimationPage(const TakeawayScreen(), state)),
-          GoRoute(path: '/manager/kitchen', pageBuilder: (context, state) => _noAnimationPage(const KitchenScreen(), state)),
-          GoRoute(path: '/manager/inventory', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/manager/stock', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/manager/stock-in-out', pageBuilder: (context, state) => _noAnimationPage(const StockInOutScreen(), state)),
-          GoRoute(path: '/manager/menu', pageBuilder: (context, state) => _noAnimationPage(const MenuScreen(), state)),
-          GoRoute(path: '/manager/customers', pageBuilder: (context, state) => _noAnimationPage(const CustomersScreen(), state)),
-          GoRoute(path: '/manager/staff', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/manager/users', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/manager/passwords', pageBuilder: (context, state) => _noAnimationPage(const PasswordManagementScreen(), state)),
-          GoRoute(path: '/manager/rights', pageBuilder: (context, state) => _noAnimationPage(const RightsScreen(), state)),
-          GoRoute(path: '/manager/expenses', pageBuilder: (context, state) => _noAnimationPage(const ExpensesScreen(), state)),
-          GoRoute(path: '/manager/daily-calculation', pageBuilder: (context, state) => _noAnimationPage(const DailyCalculationAdminScreen(), state)),
-          GoRoute(path: '/manager/delivery', pageBuilder: (context, state) => _noAnimationPage(const DeliveryScreen(), state)),
-          GoRoute(path: '/manager/reports', pageBuilder: (context, state) => _noAnimationPage(const ReportsScreen(), state)),
-          GoRoute(path: '/manager/data-sync', pageBuilder: (context, state) => _noAnimationPage(const DataSyncScreen(), state)),
+          GoRoute(
+            path: '/manager/dashboard',
+            redirect: (context, state) => '/manager/tables',
+          ),
+          GoRoute(
+            path: '/manager/online-orders',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const OnlineOrdersScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/pos',
+            redirect: (context, state) => '/manager/tables',
+          ),
+          GoRoute(
+            path: '/manager/tables',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TablesScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/takeaway',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TakeawayScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/kitchen',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const KitchenScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/inventory',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/stock',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/stock-in-out',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockInOutScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/menu',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const MenuScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/customers',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const CustomersScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/staff',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/users',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/passwords',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const PasswordManagementScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/rights',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const RightsScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/expenses',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ExpensesScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/daily-calculation',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DailyCalculationAdminScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/delivery',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DeliveryScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/reports',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ReportsScreen(), state),
+          ),
+          GoRoute(
+            path: '/manager/data-sync',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SyncCenterScreen(isManager: true), state),
+          ),
+          GoRoute(
+            path: '/manager/sync-center',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SyncCenterScreen(isManager: true), state),
+          ),
         ],
       ),
 
@@ -156,29 +375,117 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // SALES PERSON PORTAL ROUTES (/sales/...)
       // =========================================================
       ShellRoute(
-        builder: (context, state, child) => _buildPortalShell(context, state, child),
+        builder: (context, state, child) =>
+            _buildPortalShell(context, state, child),
         routes: [
-          GoRoute(path: '/sales/dashboard', pageBuilder: (context, state) => _noAnimationPage(const DashboardScreen(), state)),
-          GoRoute(path: '/sales/online-orders', pageBuilder: (context, state) => _noAnimationPage(const OnlineOrdersScreen(), state)),
-          GoRoute(path: '/sales/pos', pageBuilder: (context, state) => _noAnimationPage(const PosScreen(), state)),
-          GoRoute(path: '/sales/orders', pageBuilder: (context, state) => _noAnimationPage(const PosScreen(), state)),
-          GoRoute(path: '/sales/tables', pageBuilder: (context, state) => _noAnimationPage(const TablesScreen(), state)),
-          GoRoute(path: '/sales/takeaway', pageBuilder: (context, state) => _noAnimationPage(const TakeawayScreen(), state)),
-          GoRoute(path: '/sales/kitchen', pageBuilder: (context, state) => _noAnimationPage(const KitchenScreen(), state)),
-          GoRoute(path: '/sales/menu', pageBuilder: (context, state) => _noAnimationPage(const MenuScreen(), state)),
-          GoRoute(path: '/sales/delivery', pageBuilder: (context, state) => _noAnimationPage(const DeliveryScreen(), state)),
-          GoRoute(path: '/sales/inventory', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/sales/stock', pageBuilder: (context, state) => _noAnimationPage(const StockScreen(), state)),
-          GoRoute(path: '/sales/stock-in-out', pageBuilder: (context, state) => _noAnimationPage(const StockInOutScreen(), state)),
-          GoRoute(path: '/sales/customers', pageBuilder: (context, state) => _noAnimationPage(const CustomersScreen(), state)),
-          GoRoute(path: '/sales/staff', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/sales/users', pageBuilder: (context, state) => _noAnimationPage(const StaffScreen(), state)),
-          GoRoute(path: '/sales/passwords', pageBuilder: (context, state) => _noAnimationPage(const PasswordManagementScreen(), state)),
-          GoRoute(path: '/sales/rights', pageBuilder: (context, state) => _noAnimationPage(const RightsScreen(), state)),
-          GoRoute(path: '/sales/expenses', pageBuilder: (context, state) => _noAnimationPage(const ExpensesScreen(), state)),
-          GoRoute(path: '/sales/daily-calculation', pageBuilder: (context, state) => _noAnimationPage(const DailyCalculationScreen(), state)),
-          GoRoute(path: '/sales/reports', pageBuilder: (context, state) => _noAnimationPage(const ReportsScreen(), state)),
-          GoRoute(path: '/sales/data-sync', pageBuilder: (context, state) => _noAnimationPage(const DataSyncScreen(), state)),
+          GoRoute(
+            path: '/sales/dashboard',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DashboardScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/online-orders',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const OnlineOrdersScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/pos',
+            redirect: (context, state) => '/sales/tables',
+          ),
+          GoRoute(
+            path: '/sales/orders',
+            redirect: (context, state) => '/sales/tables',
+          ),
+          GoRoute(
+            path: '/sales/tables',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TablesScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/takeaway',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const TakeawayScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/kitchen',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const KitchenScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/menu',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const MenuScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/delivery',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DeliveryScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/inventory',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/stock',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/stock-in-out',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StockInOutScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/customers',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const CustomersScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/staff',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/users',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const StaffScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/passwords',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const PasswordManagementScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/rights',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const RightsScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/expenses',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ExpensesScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/daily-calculation',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const DailyCalculationScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/reports',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const ReportsScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/data-sync',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const CashierSyncCenterScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/sync-center',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const CashierSyncCenterScreen(), state),
+          ),
         ],
       ),
     ],
@@ -186,30 +493,26 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 });
 
 Page<dynamic> _noAnimationPage(Widget child, GoRouterState state) {
-  return NoTransitionPage(
-    key: state.pageKey,
-    child: child,
-  );
+  return NoTransitionPage(key: state.pageKey, child: child);
 }
 
-Widget _buildPortalShell(BuildContext context, GoRouterState state, Widget child) {
-  return _PortalShellWrapper(
-    currentRoute: state.matchedLocation,
-    child: child,
-  );
+Widget _buildPortalShell(
+  BuildContext context,
+  GoRouterState state,
+  Widget child,
+) {
+  return _PortalShellWrapper(currentRoute: state.matchedLocation, child: child);
 }
 
 class _PortalShellWrapper extends ConsumerStatefulWidget {
   final String currentRoute;
   final Widget child;
 
-  const _PortalShellWrapper({
-    required this.currentRoute,
-    required this.child,
-  });
+  const _PortalShellWrapper({required this.currentRoute, required this.child});
 
   @override
-  ConsumerState<_PortalShellWrapper> createState() => _PortalShellWrapperState();
+  ConsumerState<_PortalShellWrapper> createState() =>
+      _PortalShellWrapperState();
 }
 
 class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
@@ -240,7 +543,9 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
     if (authState.currentUser.role != UserRole.cashier) return;
 
     final cashierId = authState.currentUser.id;
-    final hasActive = await ref.read(dailyCalculationProvider.notifier).checkActiveSession(cashierId: cashierId);
+    final hasActive = await ref
+        .read(dailyCalculationProvider.notifier)
+        .checkActiveSession(cashierId: cashierId);
 
     if (!hasActive && mounted) {
       StartingCashDialog.show(context, isDismissible: false);
@@ -250,7 +555,9 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
-    final isCashier = authState.currentUser.role == UserRole.cashier || widget.currentRoute.startsWith('/sales');
+    final isCashier =
+        authState.currentUser.role == UserRole.cashier ||
+        widget.currentRoute.startsWith('/sales');
 
     final Widget shellScaffold = isCashier
         ? Scaffold(
@@ -287,10 +594,7 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
           );
         },
       },
-      child: Focus(
-        autofocus: true,
-        child: shellScaffold,
-      ),
+      child: Focus(autofocus: true, child: shellScaffold),
     );
   }
 }

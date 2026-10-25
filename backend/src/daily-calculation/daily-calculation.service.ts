@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubmitDailyCalculationDto } from './dto/submit-daily-calculation.dto';
@@ -9,7 +10,10 @@ import { QueryDailyCalculationDto } from './dto/query-daily-calculation.dto';
 export class DailyCalculationService {
   private readonly logger = new Logger(DailyCalculationService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
+  ) {}
 
   /**
    * Sessions are strictly closed by manual cashier submission.
@@ -27,15 +31,8 @@ export class DailyCalculationService {
   async getActiveSession(cashierId?: string) {
     await this.autoCloseStaleSessions();
 
-    const where: Prisma.DailyCalculationWhereInput = {
-      status: 'ACTIVE',
-    };
-    if (cashierId) {
-      where.cashier_id = cashierId;
-    }
-
     const session = await this.prisma.dailyCalculation.findFirst({
-      where,
+      where: { status: 'ACTIVE' },
       orderBy: { created_at: 'desc' },
       include: { expense_items: true },
     });
@@ -62,18 +59,24 @@ export class DailyCalculationService {
 
     const currentTotalChange = Number(session.total_change_cash || session.starting_cash || persistentBaseline);
 
+    const shiftDateObj = new Date(session.date || session.created_at);
+    const localYear = shiftDateObj.getFullYear();
+    const localMonth = String(shiftDateObj.getMonth() + 1).padStart(2, '0');
+    const localDate = String(shiftDateObj.getDate()).padStart(2, '0');
+    const shiftDateFormatted = `${localYear}-${localMonth}-${localDate}`;
+
     return {
       has_active_session: true,
       session,
+      shift_date: shiftDateFormatted,
+      opened_at: session.created_at,
+      status: 'OPEN',
       total_change_cash: currentTotalChange,
       starting_cash: Number(session.starting_cash || currentTotalChange),
       previous_float: persistentBaseline,
     };
   }
 
-  /**
-   * Start a new shift session / Enter or Adjust Starting Cash (Cumulative Rolling Float)
-   */
   async startSession(dto: StartSessionDto, cashierInfo?: { id?: string; username?: string }) {
     const cashierId = dto.cashier_id || cashierInfo?.id || 'cashier-1';
     const cashierName = dto.cashier_name || cashierInfo?.username || 'Cashier';
@@ -99,7 +102,6 @@ export class DailyCalculationService {
     } else if (dto.adjustment_type === 'SET') {
       effectiveStartingCash = Math.max(0, inputAmount);
     } else {
-      // Default: If input is 0 or matches baseline, keep baseline; if new value provided, update
       if (inputAmount === 0 && baselineFloat > 0) {
         effectiveStartingCash = baselineFloat;
       } else {
@@ -107,66 +109,107 @@ export class DailyCalculationService {
       }
     }
 
-    // 3. Check if there is an existing ACTIVE session
+    // 3. Rule 1: Only ONE active shift at a time store-wide
     const existing = await this.prisma.dailyCalculation.findFirst({
       where: {
-        cashier_id: cashierId,
         status: 'ACTIVE',
       },
       orderBy: { created_at: 'desc' },
     });
 
     if (existing) {
-      const updated = await this.prisma.dailyCalculation.update({
-        where: { id: existing.id },
+      if (dto.is_adjustment === true) {
+        const updated = await this.prisma.dailyCalculation.update({
+          where: { id: existing.id },
+          data: {
+            starting_cash: new Prisma.Decimal(effectiveStartingCash),
+            total_change_cash: new Prisma.Decimal(effectiveStartingCash),
+            opening_float: new Prisma.Decimal(effectiveStartingCash),
+          },
+          include: { expense_items: true },
+        });
+
+        this.logger.log(`Updated rolling starting cash to PKR ${effectiveStartingCash} for active session ${existing.id}`);
+        return {
+          has_active_session: true,
+          session: updated,
+          total_change_cash: Number(updated.total_change_cash),
+          starting_cash: Number(updated.starting_cash),
+        };
+      }
+
+      // Reject duplicate/concurrent active shifts
+      throw new ConflictException({
+        success: false,
+        message: 'An active shift already exists. Close the current shift before opening a new shift.',
+        activeShift: {
+          id: existing.id,
+          shiftDate: existing.date,
+          shift_name: existing.shift_name,
+          cashier_id: existing.cashier_id,
+          cashier_name: existing.cashier_name,
+          openedAt: existing.created_at,
+          status: existing.status,
+        },
+      });
+    }
+
+    // 4. Compute restaurant local start calendar date (Rule 3: shift date is based on start date)
+    const now = new Date();
+    const shiftDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+
+    // 5. Create new ACTIVE session with cumulative rolling baseline float
+    try {
+      const created = await this.prisma.dailyCalculation.create({
         data: {
+          date: shiftDate,
+          shift_name: dto.shift_name || 'General Shift',
+          cashier_id: cashierId,
+          cashier_name: cashierName,
           starting_cash: new Prisma.Decimal(effectiveStartingCash),
           total_change_cash: new Prisma.Decimal(effectiveStartingCash),
           opening_float: new Prisma.Decimal(effectiveStartingCash),
+          status: 'ACTIVE',
         },
         include: { expense_items: true },
       });
 
-      this.logger.log(`Updated rolling starting cash to PKR ${effectiveStartingCash} for active session ${existing.id}`);
+      this.logger.log(`Opened new shift session for ${cashierName} (Shift Date: ${shiftDate.toISOString().split('T')[0]})`);
+      this.realtimeGateway?.emitShiftStarted(created as any);
       return {
         has_active_session: true,
-        session: updated,
-        total_change_cash: Number(updated.total_change_cash),
-        starting_cash: Number(updated.starting_cash),
+        session: created,
+        total_change_cash: Number(created.total_change_cash),
+        starting_cash: Number(created.starting_cash),
       };
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException({
+          success: false,
+          message: 'An active shift already exists. Close the current shift before opening a new shift.',
+        });
+      }
+      throw err;
     }
-
-    // 4. Create new ACTIVE session with cumulative rolling baseline float
-    const created = await this.prisma.dailyCalculation.create({
-      data: {
-        date: new Date(),
-        shift_name: dto.shift_name || 'General Shift',
-        cashier_id: cashierId,
-        cashier_name: cashierName,
-        starting_cash: new Prisma.Decimal(effectiveStartingCash),
-        total_change_cash: new Prisma.Decimal(effectiveStartingCash),
-        opening_float: new Prisma.Decimal(effectiveStartingCash),
-        status: 'ACTIVE',
-      },
-      include: { expense_items: true },
-    });
-
-    this.logger.log(`Opened new shift session for ${cashierName} with cumulative starting cash float PKR ${effectiveStartingCash} (Baseline: PKR ${baselineFloat})`);
-    return {
-      has_active_session: true,
-      session: created,
-      total_change_cash: Number(created.total_change_cash),
-      starting_cash: Number(created.starting_cash),
-    };
   }
 
-  /**
-   * Helper to resolve start/end and active shift query time window
-   */
   private async resolveShiftTimeWindow(dateString?: string, cashierId?: string) {
     const now = new Date();
     let startOfDay: Date;
     let endOfDay: Date;
+
+    const activeSessionInfo = await this.getActiveSession(cashierId);
+
+    if (activeSessionInfo.has_active_session && activeSessionInfo.session) {
+      // RULE 3 & 4: Shift date is strictly based on START DATE
+      const sessionDate = new Date(activeSessionInfo.session.date || activeSessionInfo.session.created_at);
+      startOfDay = new Date(sessionDate.getFullYear(), sessionDate.getMonth(), sessionDate.getDate(), 0, 0, 0, 0);
+      endOfDay = new Date(Math.max(now.getTime(), new Date(sessionDate.getFullYear(), sessionDate.getMonth(), sessionDate.getDate(), 23, 59, 59, 999).getTime()));
+      const sessionStart = new Date(activeSessionInfo.session.created_at || activeSessionInfo.session.date);
+      const queryStartTime = sessionStart;
+      const queryEndTime = new Date(Math.max(now.getTime() + 60000, endOfDay.getTime()));
+      return { startOfDay, endOfDay, queryStartTime, queryEndTime, activeSessionInfo };
+    }
 
     if (dateString) {
       const parts = dateString.split('-');
@@ -186,27 +229,11 @@ export class DailyCalculationService {
       endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     }
 
-    const activeSessionInfo = await this.getActiveSession(cashierId);
-
-    // Business day scoping: Daily calculations for a given calendar day
-    // strictly cover all completed orders placed during that business day
-    let queryStartTime = startOfDay;
-    let queryEndTime = endOfDay;
-
-    // If an active session is in progress, orders strictly cover from when this session was started until now
-    // (regardless of whether 12 AM passed or multiple days have elapsed)
-    if (activeSessionInfo.has_active_session && activeSessionInfo.session) {
-      const sessionStart = new Date(activeSessionInfo.session.created_at || activeSessionInfo.session.date);
-      queryStartTime = sessionStart;
-      queryEndTime = new Date(Math.max(now.getTime(), endOfDay.getTime()));
-    }
-
+    const queryStartTime = startOfDay;
+    const queryEndTime = endOfDay;
     return { startOfDay, endOfDay, queryStartTime, queryEndTime, activeSessionInfo };
   }
 
-  /**
-   * Fetch live sales, payment totals, and order counts for a given business day.
-   */
   async getLiveSummary(dateString?: string, cashierId?: string) {
     const { startOfDay, queryStartTime, queryEndTime, activeSessionInfo } =
       await this.resolveShiftTimeWindow(dateString, cashierId);
@@ -302,16 +329,24 @@ export class DailyCalculationService {
     const startingCash = activeSessionInfo.starting_cash || 0;
     const totalChangeCash = activeSessionInfo.total_change_cash || startingCash;
 
-    const localYear = startOfDay.getFullYear();
-    const localMonth = String(startOfDay.getMonth() + 1).padStart(2, '0');
-    const localDate = String(startOfDay.getDate()).padStart(2, '0');
+    const shiftDateObj = activeSessionInfo.session
+      ? new Date(activeSessionInfo.session.date || activeSessionInfo.session.created_at)
+      : startOfDay;
+    const localYear = shiftDateObj.getFullYear();
+    const localMonth = String(shiftDateObj.getMonth() + 1).padStart(2, '0');
+    const localDate = String(shiftDateObj.getDate()).padStart(2, '0');
     const dateFormatted = `${localYear}-${localMonth}-${localDate}`;
 
     return {
       date: dateFormatted,
+      shift_date: dateFormatted,
+      opened_at: activeSessionInfo.session?.created_at || null,
+      status: activeSessionInfo.has_active_session ? 'OPEN' : 'CLOSED',
       starting_cash: startingCash,
       total_change_cash: totalChangeCash,
       has_active_session: activeSessionInfo.has_active_session,
+      shift_id: activeSessionInfo.session?.id || null,
+      session_id: activeSessionInfo.session?.id || null,
       total_gross_sales: Number(totalGrossSales.toFixed(2)),
       total_cash_sales: Number(totalCashSales.toFixed(2)),
       total_card_sales: Number(totalCardSales.toFixed(2)),
@@ -332,18 +367,42 @@ export class DailyCalculationService {
     const cashierId = dto.cashier_id || cashierInfo?.id || 'cashier-1';
     const cashierName = dto.cashier_name || cashierInfo?.username || 'Cashier';
 
-    const { queryStartTime, queryEndTime } = await this.resolveShiftTimeWindow(dto.date, cashierId);
+    // 1. Identify active shift to close
+    const targetShiftId = dto.shift_id || dto.id;
+    const activeSession = targetShiftId
+      ? await this.prisma.dailyCalculation.findUnique({
+          where: { id: targetShiftId },
+        })
+      : await this.prisma.dailyCalculation.findFirst({
+          where: { status: 'ACTIVE' },
+          orderBy: { created_at: 'desc' },
+        });
 
-    // Guard: Prevent shift closure while any order in this shift remains unresolved or unpaid
+    if (!activeSession) {
+      throw new NotFoundException('No active shift session found to close.');
+    }
+
+    const sessionStartTime = new Date(activeSession.created_at || activeSession.date);
+
+    // 2. Rule 2: Guard - Prevent shift closure while ANY unresolved or pending order exists belonging to this shift
     const unresolvedOrders = await this.prisma.order.findMany({
       where: {
-        created_at: {
-          gte: queryStartTime,
-          lte: queryEndTime,
-        },
-        OR: [
-          { status: { in: ['newOrder', 'pending', 'confirmed', 'preparing', 'ready', 'served', 'accepted'] } },
-          { is_paid: false, status: { notIn: ['cancelled', 'rejected'] } },
+        AND: [
+          {
+            OR: [
+              { shift_id: activeSession.id },
+              {
+                shift_id: null,
+                created_at: { gte: sessionStartTime },
+              },
+            ],
+          },
+          {
+            OR: [
+              { status: { in: ['newOrder', 'pending', 'confirmed', 'preparing', 'ready', 'served', 'accepted', 'in_progress'] } },
+              { is_paid: false, status: { notIn: ['cancelled', 'rejected'] } },
+            ],
+          },
         ],
       },
       select: {
@@ -353,17 +412,43 @@ export class DailyCalculationService {
         status: true,
         is_paid: true,
         grand_total: true,
+        created_at: true,
       },
+      orderBy: { created_at: 'asc' },
     });
 
     if (unresolvedOrders.length > 0) {
-      const orderDetails = unresolvedOrders
-        .map((o) => `#${o.order_number} (${o.order_type}, status: ${o.status}, paid: ${o.is_paid ? 'YES' : 'NO'})`)
-        .join(', ');
-      throw new BadRequestException(
-        `Cannot close shift: ${unresolvedOrders.length} order(s) remain unresolved: ${orderDetails}. ` +
-        `Please complete, settle payment, or cancel all unresolved orders before closing the shift.`,
-      );
+      if (dto.force_close === true || dto.auto_resolve_pending === true) {
+        this.logger.warn(`Force close requested: Auto-resolving ${unresolvedOrders.length} pending order(s) for shift ${activeSession.id}`);
+        for (const o of unresolvedOrders) {
+          await this.prisma.order.update({
+            where: { id: o.id },
+            data: {
+              status: o.is_paid ? 'completed' : 'cancelled',
+              shift_id: activeSession.id,
+            },
+          });
+        }
+      } else {
+        const orderDetails = unresolvedOrders
+          .map((o) => `#${o.order_number} (${o.order_type}, status: ${o.status}, paid: ${o.is_paid ? 'YES' : 'NO'})`)
+          .join(', ');
+        throw new ConflictException({
+          success: false,
+          message: `Cannot close this shift because there are pending orders. Please complete or resolve all pending orders before closing the shift.`,
+          pendingOrders: unresolvedOrders.length,
+          pending_orders_count: unresolvedOrders.length,
+          orders: unresolvedOrders.map((o) => ({
+            id: o.id,
+            order_number: o.order_number,
+            order_type: o.order_type,
+            status: o.status,
+            is_paid: o.is_paid,
+            grand_total: Number(o.grand_total),
+            created_at: o.created_at,
+          })),
+        });
+      }
     }
 
     // Guard: Prevent shift closure if any delivery dispatches in this shift remain active in transit
@@ -372,7 +457,13 @@ export class DailyCalculationService {
         dispatch_status: { in: ['pending', 'assigned', 'picked_up', 'on_the_way'] },
         online_order_detail: {
           order: {
-            created_at: { gte: queryStartTime, lte: queryEndTime },
+            OR: [
+              { shift_id: activeSession.id },
+              {
+                shift_id: null,
+                created_at: { gte: sessionStartTime },
+              },
+            ],
             status: { notIn: ['cancelled', 'rejected'] },
           },
         },
@@ -385,13 +476,25 @@ export class DailyCalculationService {
     });
 
     if (activeDispatches.length > 0) {
-      const dispatchDetails = activeDispatches
-        .map((d) => `#${d.online_order_detail?.order?.order_number || d.id} (status: ${d.dispatch_status})`)
-        .join(', ');
-      throw new BadRequestException(
-        `Cannot close shift: ${activeDispatches.length} delivery dispatch(es) remain active: ${dispatchDetails}. ` +
-        `Please mark dispatches delivered or resolved before closing the shift.`,
-      );
+      if (dto.force_close === true || dto.auto_resolve_pending === true) {
+        this.logger.warn(`Force close requested: Auto-resolving ${activeDispatches.length} active delivery dispatch(es) for shift ${activeSession.id}`);
+        for (const d of activeDispatches) {
+          await this.prisma.deliveryDispatch.update({
+            where: { id: d.id },
+            data: { dispatch_status: 'delivered' },
+          });
+        }
+      } else {
+        const dispatchDetails = activeDispatches
+          .map((d) => `#${d.online_order_detail?.order?.order_number || d.id} (status: ${d.dispatch_status})`)
+          .join(', ');
+        throw new ConflictException({
+          success: false,
+          message: `Cannot close shift: ${activeDispatches.length} delivery dispatch(es) remain active: ${dispatchDetails}. Please mark dispatches delivered or resolved before closing the shift.`,
+          pendingOrders: activeDispatches.length,
+          pending_orders_count: activeDispatches.length,
+        });
+      }
     }
 
     const live = await this.getLiveSummary(dto.date, cashierId);
@@ -408,23 +511,15 @@ export class DailyCalculationService {
       totalExpenses += Number(item.amount || 0);
     }
 
-    // Validation 1: Cash Skimming must strictly equal Total Shift Expenses (relaxed for OFFLINE_CLOSED)
-    if (dto.status !== 'OFFLINE_CLOSED' && (cashSkimming > 0 || totalExpenses > 0) && Math.abs(cashSkimming - totalExpenses) > 0.5) {
-      throw new BadRequestException(
-        `Validation Failed: Cash Skimming (PKR ${cashSkimming.toFixed(2)}) must equal Total Shift Expenses (PKR ${totalExpenses.toFixed(2)}).`
-      );
-    }
+    // Validation: Cash Skimming and Expenses are independent cash drawer deductions
+    // Expected drawer cash is calculated as startingCash + cashSales - cashSkimming - totalExpenses
 
-    // Validation 2 & 3 removed per Spec §8.3(3) and Decision 2:
-    // Cash variances (shortages/overages) are permitted without blocking.
-    // Variances are stored in PostgreSQL for supervisory audit.
     const submittedAmount = dto.total_cash !== undefined
       ? Number(dto.total_cash)
       : (dto.total_cash_submitted !== undefined ? Number(dto.total_cash_submitted) : Number(dto.cash_submitted || 0));
     const expectedSubmitted = Math.max(0, live.total_cash_sales - totalExpenses);
     const expectedCounted = startingCash + live.total_cash_sales;
 
-    // Expected Cash = Starting Cash + System Cash Sales - Cash Skimming - Cash Expenses
     const expectedCash = startingCash + live.total_cash_sales - cashSkimming - totalExpenses;
     const variance = dto.cash_variance !== undefined
       ? Number(dto.cash_variance)
@@ -434,147 +529,84 @@ export class DailyCalculationService {
       : (dto.actual_cash_counted !== undefined
           ? Number(dto.actual_cash_counted) - expectedCounted
           : (cashSubmitted - expectedCounted));
-    const shiftStatus = dto.status || 'SUBMITTED';
-
-    const targetDateObj = dto.date ? new Date(dto.date) : new Date();
 
     // Execute within Prisma atomic transaction
     const result = await this.prisma.$transaction(async (tx) => {
-      // Find active session to update or create new
-      const targetShiftId = dto.shift_id || dto.id;
-      const activeSession = targetShiftId
-        ? await tx.dailyCalculation.findUnique({
-            where: { id: targetShiftId },
-          })
-        : await tx.dailyCalculation.findFirst({
-            where: {
-              cashier_id: cashierId,
-              status: 'ACTIVE',
-            },
-            orderBy: { created_at: 'desc' },
-          });
+      // Synchronize final expense items
+      await tx.dailyExpenseItem.deleteMany({
+        where: { calculation_id: activeSession.id },
+      });
 
-      let calculation;
-      if (activeSession) {
-        // Synchronize final expense items
-        await tx.dailyExpenseItem.deleteMany({
-          where: { calculation_id: activeSession.id },
-        });
-
-        if (expenseItems.length > 0) {
-          await tx.dailyExpenseItem.createMany({
-            data: expenseItems.map((exp) => ({
-              calculation_id: activeSession.id,
-              item_name: exp.item_name,
-              category: exp.category || 'Kitchen Supplies',
-              amount: new Prisma.Decimal(Number(exp.amount || 0)),
-              receipt_number: exp.receipt_number || null,
-              notes: exp.notes || null,
-            })),
-          });
-        }
-
-        calculation = await tx.dailyCalculation.update({
-          where: { id: activeSession.id },
-          data: {
-            date: dto.date ? targetDateObj : activeSession.date,
-            shift_name: dto.shift_name || activeSession.shift_name || 'Full Day',
-            cashier_name: cashierName,
-            starting_cash: new Prisma.Decimal(startingCash),
-            total_change_cash: new Prisma.Decimal(live.total_change_cash),
-            cash_submitted: new Prisma.Decimal(cashSubmitted),
-            total_cash: new Prisma.Decimal(totalCash),
-            cash_skimming: new Prisma.Decimal(cashSkimming),
-            total_gross_sales: new Prisma.Decimal(live.total_gross_sales),
-            total_cash_sales: new Prisma.Decimal(live.total_cash_sales),
-            total_card_sales: new Prisma.Decimal(live.total_card_sales),
-            total_online_sales: new Prisma.Decimal(live.total_online_sales),
-            total_discounts: new Prisma.Decimal(live.total_discounts),
-            total_tax: new Prisma.Decimal(live.total_tax),
-            total_orders_count: live.total_orders_count,
-            dine_in_count: live.dine_in_count,
-            takeaway_count: live.takeaway_count,
-            online_count: live.online_count,
-            opening_float: new Prisma.Decimal(startingCash),
-            total_cash_submitted: new Prisma.Decimal(cashSubmitted),
-            total_cash_expenses: new Prisma.Decimal(totalExpenses),
-            expected_cash_in_hand: new Prisma.Decimal(expectedCash),
-            variance_amount: new Prisma.Decimal(variance),
-            cash_variance: new Prisma.Decimal(cashVariance),
-            variance_reason: dto.variance_reason || null,
-            status: shiftStatus,
-            closing_notes: dto.closing_notes || null,
-            version: { increment: 1 },
-            submitted_at: new Date(),
-          },
-          include: { expense_items: true },
-        });
-
-        // Permanently stamp any orders that were created during this shift
-        await tx.order.updateMany({
-          where: {
-            OR: [
-              { shift_id: activeSession.id },
-              {
-                shift_id: null,
-                created_at: {
-                  gte: queryStartTime,
-                  lte: new Date(),
-                },
-              },
-            ],
-          },
-          data: {
-            shift_id: activeSession.id,
-          },
-        });
-      } else {
-        calculation = await tx.dailyCalculation.create({
-          data: {
-            date: targetDateObj,
-            shift_name: dto.shift_name || 'Full Day',
-            cashier_id: cashierId,
-            cashier_name: cashierName,
-            starting_cash: new Prisma.Decimal(startingCash),
-            total_change_cash: new Prisma.Decimal(live.total_change_cash),
-            cash_submitted: new Prisma.Decimal(cashSubmitted),
-            total_cash: new Prisma.Decimal(totalCash),
-            cash_skimming: new Prisma.Decimal(cashSkimming),
-            total_gross_sales: new Prisma.Decimal(live.total_gross_sales),
-            total_cash_sales: new Prisma.Decimal(live.total_cash_sales),
-            total_card_sales: new Prisma.Decimal(live.total_card_sales),
-            total_online_sales: new Prisma.Decimal(live.total_online_sales),
-            total_discounts: new Prisma.Decimal(live.total_discounts),
-            total_tax: new Prisma.Decimal(live.total_tax),
-            total_orders_count: live.total_orders_count,
-            dine_in_count: live.dine_in_count,
-            takeaway_count: live.takeaway_count,
-            online_count: live.online_count,
-            opening_float: new Prisma.Decimal(startingCash),
-            total_cash_submitted: new Prisma.Decimal(cashSubmitted),
-            total_cash_expenses: new Prisma.Decimal(totalExpenses),
-            ...(dto.id ? { id: dto.id } : {}),
-            expected_cash_in_hand: new Prisma.Decimal(expectedCash),
-            variance_amount: new Prisma.Decimal(variance),
-            cash_variance: new Prisma.Decimal(cashVariance),
-            variance_reason: dto.variance_reason || null,
-            status: shiftStatus,
-            closing_notes: dto.closing_notes || null,
-            version: 1,
-            submitted_at: new Date(),
-            expense_items: {
-              create: expenseItems.map((exp) => ({
-                item_name: exp.item_name,
-                category: exp.category || 'Supplies',
-                amount: new Prisma.Decimal(Number(exp.amount || 0)),
-                receipt_number: exp.receipt_number || null,
-                notes: exp.notes || null,
-              })),
-            },
-          },
-          include: { expense_items: true },
+      if (expenseItems.length > 0) {
+        await tx.dailyExpenseItem.createMany({
+          data: expenseItems.map((exp) => ({
+            calculation_id: activeSession.id,
+            item_name: exp.item_name,
+            category: exp.category || 'Kitchen Supplies',
+            amount: new Prisma.Decimal(Number(exp.amount || 0)),
+            receipt_number: exp.receipt_number || null,
+            notes: exp.notes || null,
+          })),
         });
       }
+
+      // Rule 3 & 4: Shift date is strictly based on START DATE. Never overwrite with closing date!
+      const calculation = await tx.dailyCalculation.update({
+        where: { id: activeSession.id },
+        data: {
+          date: activeSession.date,
+          shift_name: dto.shift_name || activeSession.shift_name || 'Full Day',
+          cashier_name: activeSession.cashier_name,
+          closed_by_id: cashierId,
+          closed_by_name: cashierName,
+          starting_cash: new Prisma.Decimal(startingCash),
+          total_change_cash: new Prisma.Decimal(live.total_change_cash),
+          cash_submitted: new Prisma.Decimal(cashSubmitted),
+          total_cash: new Prisma.Decimal(totalCash),
+          cash_skimming: new Prisma.Decimal(cashSkimming),
+          total_gross_sales: new Prisma.Decimal(live.total_gross_sales),
+          total_cash_sales: new Prisma.Decimal(live.total_cash_sales),
+          total_card_sales: new Prisma.Decimal(live.total_card_sales),
+          total_online_sales: new Prisma.Decimal(live.total_online_sales),
+          total_discounts: new Prisma.Decimal(live.total_discounts),
+          total_tax: new Prisma.Decimal(live.total_tax),
+          total_orders_count: live.total_orders_count,
+          dine_in_count: live.dine_in_count,
+          takeaway_count: live.takeaway_count,
+          online_count: live.online_count,
+          opening_float: new Prisma.Decimal(startingCash),
+          total_cash_submitted: new Prisma.Decimal(cashSubmitted),
+          total_cash_expenses: new Prisma.Decimal(totalExpenses),
+          expected_cash_in_hand: new Prisma.Decimal(expectedCash),
+          variance_amount: new Prisma.Decimal(variance),
+          cash_variance: new Prisma.Decimal(cashVariance),
+          variance_reason: dto.variance_reason || null,
+          status: 'CLOSED',
+          closing_notes: dto.closing_notes || null,
+          version: { increment: 1 },
+          submitted_at: new Date(),
+        },
+        include: { expense_items: true },
+      });
+
+      // Permanently stamp any orders that were created during this shift
+      await tx.order.updateMany({
+        where: {
+          OR: [
+            { shift_id: activeSession.id },
+            {
+              shift_id: null,
+              created_at: {
+                gte: sessionStartTime,
+                lte: new Date(),
+              },
+            },
+          ],
+        },
+        data: {
+          shift_id: activeSession.id,
+        },
+      });
 
       // Mirror each cash expense into global expenses table for audit
       for (const exp of expenseItems) {
@@ -583,13 +615,13 @@ export class DailyCalculationService {
             title: `[Daily Close] ${exp.item_name}`,
             category: exp.category || 'Store Supplies',
             amount: new Prisma.Decimal(Number(exp.amount || 0)),
-            date: targetDateObj,
+            date: activeSession.date,
             recorded_by: cashierName,
           },
         });
       }
 
-      // Reset all restaurant tables to available (Zero data loss: all shift orders already confirmed settled)
+      // Reset all restaurant tables to available
       await tx.restaurantTable.updateMany({
         data: {
           status: 'available',
@@ -613,13 +645,11 @@ export class DailyCalculationService {
       return calculation;
     });
 
-    this.logger.log(`Day closed & submitted successfully by ${cashierName}. Tables reset safely.`);
+    this.logger.log(`Shift closed & submitted successfully by ${cashierName}. Tables reset safely.`);
+    this.realtimeGateway?.emitShiftClosed(result as any);
     return result;
   }
 
-  /**
-   * List date-wise calculations for Admin
-   */
   async getHistory(query: QueryDailyCalculationDto) {
     const where: Prisma.DailyCalculationWhereInput = {};
 

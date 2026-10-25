@@ -50,6 +50,7 @@ class DataSyncOrder {
   final String deviceId;
   final String sourceStorage;
   final String targetStorage;
+  final String? shiftId;
 
   const DataSyncOrder({
     required this.id,
@@ -71,6 +72,7 @@ class DataSyncOrder {
     this.deviceId = 'POS-TERMINAL-01',
     this.sourceStorage = 'SQLite Local',
     this.targetStorage = 'PostgreSQL Cloud',
+    this.shiftId,
   });
 
   factory DataSyncOrder.fromJson(Map<String, dynamic> json) {
@@ -96,6 +98,7 @@ class DataSyncOrder {
       deviceId: json['device_id']?.toString() ?? 'POS-TERMINAL-01',
       sourceStorage: json['source_storage']?.toString() ?? 'SQLite Local',
       targetStorage: json['target_storage']?.toString() ?? 'PostgreSQL Cloud',
+      shiftId: json['shift_id']?.toString() ?? json['shiftId']?.toString(),
     );
   }
 }

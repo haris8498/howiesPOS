@@ -870,7 +870,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                         final canAddTable = ref.watch(roleRightsProvider).isActionGranted(
                           userRole,
                           'tables_add',
-                          defaultIfMissing: userRole == UserRole.owner || userRole == UserRole.manager,
+                          defaultIfMissing: true,
                         );
                         if (!canAddTable) return const SizedBox.shrink();
                         return ElevatedButton.icon(
@@ -1946,14 +1946,23 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                       final kotReceipt = ReceiptData.fromTableKot(table: table, ticketId: displayTicketId);
                       final hasCancelled = table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1);
 
-                      return FutureBuilder<bool>(
-                        future: ReceiptPrinterService.isKitchenReceiptPrinted(
-                          rawTicketId,
-                          tokenNumber: table.tableNumber,
-                          currentItemsSignature: kotReceipt.itemsSignature,
-                        ),
+                      return FutureBuilder<List<bool>>(
+                        future: Future.wait([
+                          ReceiptPrinterService.isKitchenReceiptPrinted(
+                            rawTicketId,
+                            tokenNumber: table.tableNumber,
+                            currentItemsSignature: kotReceipt.itemsSignature,
+                          ),
+                          ReceiptPrinterService.hasOrderEverPrintedKot(
+                            rawTicketId,
+                            tokenNumber: table.tableNumber,
+                          ),
+                        ]),
                         builder: (context, snapshot) {
-                          final isPrinted = snapshot.data ?? false;
+                          final isPrinted = snapshot.data?[0] ?? false;
+                          final hasEverPrinted = snapshot.data?[1] ?? false;
+                          final isModified = hasEverPrinted || hasCancelled;
+
                           if (isPrinted) {
                             return Column(
                               children: [
@@ -1972,7 +1981,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                       SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          'Table kitchen ticket has already been printed once. Modify order or cancel items to print an updated ticket.',
+                                          'Kitchen ticket has already been printed. Modify order, add items, or cancel items to print an updated ticket.',
                                           style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
                                         ),
                                       ),
@@ -1998,49 +2007,90 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             );
                           }
 
-                          final isModified = hasCancelled;
-                          return SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () async {
-                                Navigator.pop(dialogContext);
-
-                                // Physical Thermal Print to Attached Laptop Printer
-                                final printSuccess = await ReceiptPrinterService.printReceipt(
-                                  context: context,
-                                  receipt: ReceiptData.fromTableKot(
-                                    table: table,
-                                    ticketId: displayTicketId,
-                                    isModified: isModified,
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isModified)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  decoration: BoxDecoration(
+                                    color: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: const Color(0xFFFCD34D)),
                                   ),
-                                  forcePrint: isModified,
-                                );
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.edit_note_rounded, color: Color(0xFFD97706), size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Order has been modified! Tap below to send the updated ticket to the kitchen.',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: () async {
+                                    Navigator.pop(dialogContext);
 
-                                if (printSuccess && hasCancelled) {
-                                  await ReceiptPrinterService.markKitchenReceiptPrinted(
-                                    '${rawTicketId}_cancel',
-                                    signature: kotReceipt.itemsSignature,
-                                  );
-                                }
+                                    // Physical Thermal Print to Attached Win32 Printer Spooler
+                                    final printSuccess = await ReceiptPrinterService.printReceipt(
+                                      context: context,
+                                      receipt: ReceiptData.fromTableKot(
+                                        table: table,
+                                        ticketId: displayTicketId,
+                                        isModified: isModified,
+                                      ),
+                                      forcePrint: true,
+                                    );
 
-                                if (table.activeOrderId != null && table.activeOrderId!.isNotEmpty) {
-                                  try {
-                                    await ref.read(kitchenApiServiceProvider).sendKitchenTicket(table.activeOrderId!);
-                                  } catch (e) {
-                                    debugPrint('Error marking kitchen ticket as sent: $e');
-                                  }
-                                }
-                              },
-                              icon: const Icon(Icons.print_rounded, size: 16),
-                              label: Text(isModified ? 'PRINT UPDATED KITCHEN RECEIPT' : 'PRINT KITCHEN RECEIPT'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isModified ? const Color(0xFFEA580C) : const Color(0xFFD97706),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                    if (printSuccess) {
+                                      await ReceiptPrinterService.markKitchenReceiptPrinted(
+                                        rawTicketId,
+                                        signature: kotReceipt.itemsSignature,
+                                      );
+                                      await ReceiptPrinterService.markKitchenReceiptPrinted(
+                                        displayTicketId,
+                                        signature: kotReceipt.itemsSignature,
+                                      );
+                                      if (hasCancelled) {
+                                        await ReceiptPrinterService.markKitchenReceiptPrinted(
+                                          '${rawTicketId}_cancel',
+                                          signature: kotReceipt.itemsSignature,
+                                        );
+                                      }
+                                    }
+
+                                    if (table.activeOrderId != null && table.activeOrderId!.isNotEmpty) {
+                                      try {
+                                        await ref.read(kitchenApiServiceProvider).sendKitchenTicket(table.activeOrderId!);
+                                      } catch (e) {
+                                        debugPrint('Error marking kitchen ticket as sent: $e');
+                                      }
+                                    }
+                                  },
+                                  icon: const Icon(Icons.print_rounded, size: 16),
+                                  label: Text(isModified ? 'PRINT UPDATED KITCHEN RECEIPT' : 'PRINT KITCHEN RECEIPT'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: isModified ? const Color(0xFFEA580C) : const Color(0xFFD97706),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           );
                         },
                       );
@@ -2729,7 +2779,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                               ],
                             ),
                             child: ElevatedButton.icon(
-                              onPressed: () {
+                              onPressed: () async {
                                 final name = nameController.text.trim();
                                 final cap = int.tryParse(capacityController.text.trim()) ?? 4;
                                 if (name.isEmpty) {
@@ -2762,14 +2812,33 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                   status: TableStatus.available,
                                   section: selectedSection,
                                 );
-                                tableNotifier.addTable(newTable);
-                                Navigator.pop(dialogContext);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Table "$name" ($cap Seats) added to $selectedSection zone!'),
-                                    backgroundColor: AppColors.success,
-                                  ),
-                                );
+                                try {
+                                  await tableNotifier.addTable(newTable);
+                                  tableNotifier.setSection(selectedSection);
+                                  if (dialogContext.mounted) {
+                                    Navigator.pop(dialogContext);
+                                  }
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Table "$name" ($cap Seats) added to $selectedSection zone!'),
+                                        backgroundColor: AppColors.success,
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (dialogContext.mounted) {
+                                    Navigator.pop(dialogContext);
+                                  }
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Table "$name" ($cap Seats) added!'),
+                                        backgroundColor: AppColors.success,
+                                      ),
+                                    );
+                                  }
+                                }
                               },
                               icon: const Icon(Icons.check_circle_rounded, size: 20, color: Colors.white),
                               label: const Text(
@@ -3798,8 +3867,48 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                       'unit_price': c.item.price,
                                     }).toList();
 
+                                    // 1. Save directly to Backend PostgreSQL Database
+                                    final ordersApi = widget.ref.read(ordersApiServiceProvider);
                                     try {
-                                      if (FeatureFlags.offlineFirstEnabled) {
+                                      if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
+                                        // Update / Modify existing order in PostgreSQL database
+                                        final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
+                                          'order_type': 'dineIn',
+                                          if (table.id.isNotEmpty) 'table_id': table.id,
+                                          'status': 'accepted',
+                                          'subtotal': _totalBill,
+                                          'grand_total': _totalBill,
+                                          'items': itemsPayload,
+                                        });
+                                        effectiveOrderId = updatedOrder['id']?.toString() ?? updatedOrder['data']?['id']?.toString() ?? effectiveOrderId;
+                                        effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? updatedOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
+                                        debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                      } else {
+                                        // Insert New Dine-In Order into PostgreSQL Database
+                                        final orderDto = {
+                                          'order_type': 'dineIn',
+                                          if (table.id.isNotEmpty) 'table_id': table.id,
+                                          'guest_count': table.capacity > 0 ? table.capacity : 1,
+                                          'status': 'accepted',
+                                          'is_paid': false,
+                                          'payment_status': 'UNPAID',
+                                          'subtotal': _totalBill,
+                                          'grand_total': _totalBill,
+                                          'items': itemsPayload,
+                                        };
+
+                                        final createdOrder = await ordersApi.createOrder(orderDto);
+                                        effectiveOrderId = createdOrder['id']?.toString() ?? createdOrder['data']?['id']?.toString() ?? effectiveOrderId;
+                                        effectiveOrderNumber = createdOrder['order_number']?.toString() ?? createdOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
+                                        debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                      }
+                                    } catch (apiErr) {
+                                      debugPrint('⚠️ Orders API call error (fallback to local offline store): $apiErr');
+                                    }
+
+                                    // 2. Also persist offline in Drift SQLite if enabled
+                                    if (FeatureFlags.offlineFirstEnabled) {
+                                      try {
                                         final orderRepo = widget.ref.read(orderRepositoryProvider);
                                         final orderItems = _cartItems.map((c) {
                                           final itemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
@@ -3820,109 +3929,57 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                           );
                                         }).toList();
 
-                                        if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
-                                          final existing = await orderRepo.getOrderById(effectiveOrderId);
-                                          if (existing != null) {
-                                            final updated = existing.copyWith(
-                                              items: orderItems,
-                                              subtotalOverride: _totalBill,
-                                              grandTotalOverride: _totalBill,
-                                              status: OrderStatus.newOrder,
-                                            );
-                                            final saved = await orderRepo.updateOrder(updated);
-                                            effectiveOrderId = saved.id;
-                                            effectiveOrderNumber = saved.orderNumber;
-                                          } else {
-                                            final newOrder = OrderModel(
-                                              id: effectiveOrderId,
-                                              orderNumber: effectiveOrderNumber ?? '',
-                                              type: OrderType.dineIn,
-                                              status: OrderStatus.newOrder,
-                                              items: orderItems,
-                                              createdAt: DateTime.now(),
-                                              subtotalOverride: _totalBill,
-                                              grandTotalOverride: _totalBill,
-                                              dineInDetail: DineInOrderDetail(
-                                                id: const Uuid().v7(),
-                                                orderId: effectiveOrderId,
-                                                tableId: table.id,
-                                                guestCount: table.capacity > 0 ? table.capacity : 1,
-                                                waiterName: 'Cashier',
-                                              ),
-                                            );
-                                            final saved = await orderRepo.saveOrder(newOrder);
-                                            effectiveOrderId = saved.id;
-                                            effectiveOrderNumber = saved.orderNumber;
-                                          }
+                                        final finalOrderId = effectiveOrderId ?? const Uuid().v7();
+                                        final existing = await orderRepo.getOrderById(finalOrderId);
+                                        if (existing != null) {
+                                          final updated = existing.copyWith(
+                                            items: orderItems,
+                                            subtotalOverride: _totalBill,
+                                            grandTotalOverride: _totalBill,
+                                            status: OrderStatus.accepted,
+                                          );
+                                          final saved = await orderRepo.updateOrder(updated);
+                                          effectiveOrderId ??= saved.id;
+                                          effectiveOrderNumber ??= saved.orderNumber;
                                         } else {
-                                          final orderUuid = const Uuid().v7();
                                           final newOrder = OrderModel(
-                                            id: orderUuid,
-                                            orderNumber: '',
+                                            id: finalOrderId,
+                                            orderNumber: effectiveOrderNumber ?? '',
                                             type: OrderType.dineIn,
-                                            status: OrderStatus.newOrder,
+                                            status: OrderStatus.accepted,
                                             items: orderItems,
                                             createdAt: DateTime.now(),
                                             subtotalOverride: _totalBill,
                                             grandTotalOverride: _totalBill,
                                             dineInDetail: DineInOrderDetail(
                                               id: const Uuid().v7(),
-                                              orderId: orderUuid,
+                                              orderId: finalOrderId,
                                               tableId: table.id,
                                               guestCount: table.capacity > 0 ? table.capacity : 1,
                                               waiterName: 'Cashier',
                                             ),
                                           );
                                           final saved = await orderRepo.saveOrder(newOrder);
-                                          effectiveOrderId = saved.id;
-                                          effectiveOrderNumber = saved.orderNumber;
+                                          effectiveOrderId ??= saved.id;
+                                          effectiveOrderNumber ??= saved.orderNumber;
                                         }
-                                        await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
-                                          orderId: effectiveOrderId,
-                                          orderNumber: effectiveOrderNumber,
-                                          tableNumber: table.tableNumber,
-                                        );
                                         widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
-                                        debugPrint('✅ Offline-first dine-in order persisted: $effectiveOrderId (#$effectiveOrderNumber)');
-                                      } else {
-                                        final ordersApi = widget.ref.read(ordersApiServiceProvider);
-                                        if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
-                                          // Update / Modify existing order in database
-                                          final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
-                                            'order_type': 'dineIn',
-                                            if (table.id.isNotEmpty) 'table_id': table.id,
-                                            'status': 'newOrder',
-                                            'items': itemsPayload,
-                                          });
-                                          effectiveOrderId = updatedOrder['id']?.toString() ?? effectiveOrderId;
-                                          effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? effectiveOrderNumber;
-                                          await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
-                                            orderId: effectiveOrderId,
-                                            orderNumber: effectiveOrderNumber,
-                                            tableNumber: table.tableNumber,
-                                          );
-                                          debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
-                                        } else {
-                                          // Insert New Dine-In Order into Database
-                                          final orderDto = {
-                                            'order_type': 'dineIn',
-                                            if (table.id.isNotEmpty) 'table_id': table.id,
-                                            'guest_count': table.capacity > 0 ? table.capacity : 1,
-                                            'status': 'newOrder',
-                                            'subtotal': _totalBill,
-                                            'grand_total': _totalBill,
-                                            'items': itemsPayload,
-                                          };
-
-                                          final createdOrder = await ordersApi.createOrder(orderDto);
-                                          effectiveOrderId = createdOrder['id']?.toString();
-                                          effectiveOrderNumber = createdOrder['order_number']?.toString();
-                                          debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
-                                        }
+                                      } catch (driftErr) {
+                                        debugPrint('⚠️ Drift offline order save error: $driftErr');
                                       }
-                                    } catch (e) {
-                                      debugPrint('⚠️ Error updating/creating dine-in order: $e');
                                     }
+
+                                    final rawTicketId = (table.activeOrderNumber != null && table.activeOrderNumber!.isNotEmpty)
+                                        ? table.activeOrderNumber!
+                                        : (table.activeOrderId ?? table.tableNumber);
+                                    final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
+
+                                    await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+                                      orderId: effectiveOrderId,
+                                      orderNumber: effectiveOrderNumber ?? rawTicketId,
+                                      tokenNumber: displayTicketId,
+                                      tableNumber: table.tableNumber,
+                                    );
 
                                     // 2. Update Table Status & Bill Amount in Database & POS state
                                     final notifier = widget.ref.read(tableProvider.notifier);
@@ -5273,7 +5330,14 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                           }
                         }
 
-                        final notifier = widget.ref.read(tableProvider.notifier);
+                        await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+      orderId: widget.table.activeOrderId,
+      orderNumber: widget.table.activeOrderNumber,
+      tokenNumber: EscPosBuilder.format3DigitOrderNumber(widget.table.activeOrderNumber ?? widget.table.tableNumber),
+      tableNumber: widget.table.tableNumber,
+    );
+
+    final notifier = widget.ref.read(tableProvider.notifier);
                         await notifier.updateTableBillAndStatus(
                           widget.table.id,
                           0.0,
@@ -5905,6 +5969,13 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
         debugPrint('⚠️ Error settling table payment in DB: $e');
       }
     }
+
+    await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+      orderId: widget.table.activeOrderId,
+      orderNumber: widget.table.activeOrderNumber,
+      tokenNumber: EscPosBuilder.format3DigitOrderNumber(widget.table.activeOrderNumber ?? widget.table.tableNumber),
+      tableNumber: widget.table.tableNumber,
+    );
 
     final notifier = widget.ref.read(tableProvider.notifier);
     await notifier.updateTableBillAndStatus(
@@ -6567,10 +6638,15 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
         }
 
         final activeOrderNum = widget.table.activeOrderNumber;
+        final rawTicketId = (activeOrderNum != null && activeOrderNum.isNotEmpty)
+            ? activeOrderNum
+            : (orderId.isNotEmpty ? orderId : widget.table.tableNumber);
+        final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
         if (orderId.isNotEmpty) {
           await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
             orderId: orderId,
-            orderNumber: activeOrderNum,
+            orderNumber: activeOrderNum ?? rawTicketId,
+            tokenNumber: displayTicketId,
             tableNumber: widget.table.tableNumber,
           );
         }

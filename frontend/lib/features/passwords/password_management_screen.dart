@@ -1044,31 +1044,81 @@ class _StaffUsersScreenState extends ConsumerState<StaffUsersScreen> {
                             ),
                             const SizedBox(height: 14),
 
-                            // 2. Select Role
-                            Text(
-                              'USER ROLE',
-                              style: TextStyle(
-                                color: isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.5,
-                              ),
+                            // 2. Select Role (Disabled for Owner)
+                            Row(
+                              children: [
+                                Text(
+                                  'USER ROLE',
+                                  style: TextStyle(
+                                    color: isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                                if (user.role == UserRole.owner) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.brandYellow.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      'LOCKED FOR OWNER',
+                                      style: TextStyle(
+                                        color: AppColors.brandYellow,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                             const SizedBox(height: 6),
                             DropdownButtonFormField<UserRole>(
                               initialValue: selectedRole,
                               dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
                               borderRadius: BorderRadius.circular(12),
-                              style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontSize: 13),
+                              style: TextStyle(
+                                color: user.role == UserRole.owner
+                                    ? (isDark ? Colors.white60 : Colors.black54)
+                                    : (isDark ? Colors.white : AppColors.textPrimary),
+                                fontSize: 13,
+                              ),
                               decoration: InputDecoration(
                                 filled: true,
-                                fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                fillColor: user.role == UserRole.owner
+                                    ? (isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9))
+                                    : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC)),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                prefixIcon: const Icon(Icons.badge_outlined, size: 18, color: AppColors.primaryRed),
+                                prefixIcon: Icon(
+                                  user.role == UserRole.owner ? Icons.lock_outline_rounded : Icons.badge_outlined,
+                                  size: 18,
+                                  color: user.role == UserRole.owner
+                                      ? (isDark ? Colors.white38 : AppColors.textMuted)
+                                      : AppColors.primaryRed,
+                                ),
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1))),
                                 enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1))),
-                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.primaryRed, width: 2)),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide(
+                                    color: user.role == UserRole.owner
+                                        ? (isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1))
+                                        : AppColors.primaryRed,
+                                    width: user.role == UserRole.owner ? 1 : 2,
+                                  ),
+                                ),
+                                helperText: user.role == UserRole.owner ? 'Owner role cannot be changed' : null,
+                                helperStyle: TextStyle(
+                                  fontSize: 10.5,
+                                  color: isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
+                              disabledHint: const Text('Owner (Full System & Analytics Access)'),
                               items: [
                                 if (user.role == UserRole.owner)
                                   const DropdownMenuItem(
@@ -1084,11 +1134,13 @@ class _StaffUsersScreenState extends ConsumerState<StaffUsersScreen> {
                                   child: Text('Sales Person / Cashier (POS Billing)'),
                                 ),
                               ],
-                              onChanged: (r) {
-                                if (r != null) {
-                                  setDialogState(() => selectedRole = r);
-                                }
-                              },
+                              onChanged: user.role == UserRole.owner
+                                  ? null
+                                  : (r) {
+                                      if (r != null) {
+                                        setDialogState(() => selectedRole = r);
+                                      }
+                                    },
                             ),
                             const SizedBox(height: 14),
 

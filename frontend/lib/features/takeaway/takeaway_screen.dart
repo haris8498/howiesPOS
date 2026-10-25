@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
 import '../../data/auth_repository.dart';
-import '../../data/role_rights_repository.dart';
 import '../../data/takeaway_repository.dart';
 import '../../domain/models/takeaway_model.dart';
 import '../../domain/models/user_role.dart';
@@ -352,8 +351,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
     final bool canEditSelected = selectedOrder != null &&
         !selectedOrder.isPaid &&
-        selectedOrder.status.toLowerCase() != 'completed' &&
-        !selectedOrder.isBillPrinted;
+        selectedOrder.status.toLowerCase() != 'completed';
 
     final bool canSettleSelected = selectedOrder != null &&
         !selectedOrder.isPaid &&
@@ -361,11 +359,6 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
-    final bool canCreateTakeaway = ref.watch(roleRightsProvider).isActionGranted(
-      authState.currentUser.role,
-      'takeaway_create',
-      defaultIfMissing: authState.currentUser.role != UserRole.cashier,
-    );
 
     return Padding(
       padding: EdgeInsets.fromLTRB(18.0, 18.0, 18.0, isCashier ? 0.0 : 18.0),
@@ -395,20 +388,14 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                     isEnabled: canEditSelected,
                     onTap: () {
                       final sel = _getSelectedOrder(takeawayState.orders);
-                      if (sel != null && !sel.isPaid && sel.status.toLowerCase() != 'completed' && !sel.isBillPrinted) {
+                      if (sel != null && !sel.isPaid && sel.status.toLowerCase() != 'completed') {
                         _openEditTakeawayOrderDialog(context, ref, sel, takeawayNotifier, isDark);
-                      } else if (sel != null && (sel.isPaid || sel.isBillPrinted)) {
+                      } else if (sel != null && (sel.isPaid || sel.status.toLowerCase() == 'completed')) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Cannot edit order ${sel.tokenNumber} because bill is already printed or settled.')),
+                          SnackBar(content: Text('Cannot edit order ${sel.tokenNumber} because it is already paid or settled.')),
                         );
                       } else {
-                        if (canCreateTakeaway) {
-                          _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark);
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('You do not have permission to create takeaway orders.')),
-                          );
-                        }
+                        _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark);
                       }
                     },
                   ),
@@ -509,20 +496,23 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                   const SizedBox(height: 14),
 
-                  if (canCreateTakeaway) ...[
-                    // New Order Direct Action Button
-                    OutlinedButton.icon(
+                  // New Order Direct Action Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
                       onPressed: () => _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark),
-                      icon: const Icon(Icons.add_circle_outline_rounded, size: 16, color: AppColors.primaryRed),
-                      label: const Text('+ New Takeaway Order', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppColors.primaryRed)),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: AppColors.primaryRed.withValues(alpha: 0.5)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
+                      label: const Text('+ New Takeaway Order', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD97706),
+                        foregroundColor: Colors.white,
+                        elevation: 2,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                  ],
+                  ),
+                  const SizedBox(height: 12),
                 ],
               ),
             ),
@@ -584,11 +574,10 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                         ),
                       ],
                     ),
-                    if (canCreateTakeaway)
-                      ElevatedButton.icon(
-                        onPressed: () => _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark),
-                        icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
-                        label: const Text('+ Create Takeaway Order'),
+                    ElevatedButton.icon(
+                      onPressed: () => _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark),
+                      icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
+                      label: const Text('+ Create Takeaway Order'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFD97706),
                         foregroundColor: Colors.white,
@@ -839,6 +828,20 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                   ),
                                 ),
                               ],
+                              const SizedBox(height: 14),
+                              ElevatedButton.icon(
+                                onPressed: () => _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark),
+                                icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
+                                label: const Text('+ Create Takeaway Order'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFD97706),
+                                  foregroundColor: Colors.white,
+                                  elevation: 2,
+                                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                                  textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                              ),
                             ],
                           ),
                         )
@@ -1276,7 +1279,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
     bool isDark,
   ) {
     final isCompletedOrPaid = order.isPaid || order.status.toLowerCase() == 'completed';
-    final isLockedFromEdit = isCompletedOrPaid || order.isBillPrinted;
+    final isLockedFromEdit = isCompletedOrPaid;
     final timeStr = DateFormat('hh:mm a, dd MMM yyyy').format(order.createdAt);
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
@@ -1311,11 +1314,11 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             isDark: isDark,
                             isEnabled: canEditSelected,
                             onTap: () {
-                              if (!order.isPaid && order.status.toLowerCase() != 'completed' && !order.isBillPrinted) {
+                              if (!order.isPaid && order.status.toLowerCase() != 'completed') {
                                 _openEditTakeawayOrderDialog(context, ref, order, takeawayNotifier, isDark);
                               } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Cannot edit order ${order.tokenNumber} because bill is already printed or settled.')),
+                                  SnackBar(content: Text('Cannot edit order ${order.tokenNumber} because it is already paid or settled.')),
                                 );
                               }
                             },
@@ -1382,6 +1385,25 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                           ),
 
                           const SizedBox(height: 16),
+
+                          // Direct Action Button: + New Takeaway Order
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => _openCreateTakeawayOrderDialog(context, ref, takeawayNotifier, isDark),
+                              icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
+                              label: const Text('+ New Takeaway Order', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFD97706),
+                                foregroundColor: Colors.white,
+                                elevation: 2,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 12),
 
                           // Return to Takeaway Queue Button
                           InkWell(
@@ -1940,14 +1962,23 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                       );
                       final hasCancelledItems = order.items.any((i) => i.isCancelled);
 
-                      return FutureBuilder<bool>(
-                        future: ReceiptPrinterService.isKitchenReceiptPrinted(
-                          order.id.isNotEmpty ? order.id : order.tokenNumber,
-                          tokenNumber: order.tokenNumber,
-                          currentItemsSignature: kotReceipt.itemsSignature,
-                        ),
+                      return FutureBuilder<List<bool>>(
+                        future: Future.wait([
+                          ReceiptPrinterService.isKitchenReceiptPrinted(
+                            order.id.isNotEmpty ? order.id : order.tokenNumber,
+                            tokenNumber: order.tokenNumber,
+                            currentItemsSignature: kotReceipt.itemsSignature,
+                          ),
+                          ReceiptPrinterService.hasOrderEverPrintedKot(
+                            order.id.isNotEmpty ? order.id : order.tokenNumber,
+                            tokenNumber: order.tokenNumber,
+                          ),
+                        ]),
                         builder: (context, snapshot) {
-                          final isPrinted = snapshot.data ?? false;
+                          final isPrinted = snapshot.data?[0] ?? false;
+                          final hasEverPrinted = snapshot.data?[1] ?? false;
+                          final isModified = hasEverPrinted || hasCancelledItems;
+
                           if (isPrinted) {
                             return Column(
                               children: [
@@ -1966,7 +1997,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                       SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          'Takeaway kitchen ticket has already been printed once. Modify order or cancel items to print an updated ticket.',
+                                          'Takeaway kitchen ticket has already been printed. Modify order or cancel items to print an updated ticket.',
                                           style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
                                         ),
                                       ),
@@ -1992,34 +2023,80 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             );
                           }
 
-                          final isModified = hasCancelledItems;
-                          return SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () async {
-                                Navigator.pop(dialogContext);
-
-                                // Physical Thermal Print to Attached Laptop Printer
-                                await ReceiptPrinterService.printReceipt(
-                                  context: context,
-                                  receipt: ReceiptData.fromTakeawayOrder(
-                                    order: order,
-                                    type: ReceiptType.kitchenKot,
-                                    isModified: isModified,
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isModified)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  decoration: BoxDecoration(
+                                    color: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: const Color(0xFFFCD34D)),
                                   ),
-                                  forcePrint: isModified,
-                                );
-                              },
-                              icon: const Icon(Icons.print_rounded, size: 16),
-                              label: Text(isModified ? 'PRINT UPDATED KITCHEN TICKET' : 'PRINT KITCHEN TICKET (KOT)'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isModified ? const Color(0xFFEA580C) : const Color(0xFFD97706),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.edit_note_rounded, color: Color(0xFFD97706), size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Order has been modified! Tap below to send the updated ticket to the kitchen.',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: () async {
+                                    Navigator.pop(dialogContext);
+
+                                    // Physical Thermal Print to Attached Laptop Printer
+                                    final printSuccess = await ReceiptPrinterService.printReceipt(
+                                      context: context,
+                                      receipt: ReceiptData.fromTakeawayOrder(
+                                        order: order,
+                                        type: ReceiptType.kitchenKot,
+                                        isModified: isModified,
+                                      ),
+                                      forcePrint: true,
+                                    );
+
+                                    if (printSuccess) {
+                                      if (order.id.isNotEmpty) {
+                                        await ReceiptPrinterService.markKitchenReceiptPrinted(
+                                          order.id,
+                                          signature: kotReceipt.itemsSignature,
+                                        );
+                                      }
+                                      if (order.tokenNumber.isNotEmpty) {
+                                        await ReceiptPrinterService.markKitchenReceiptPrinted(
+                                          order.tokenNumber,
+                                          signature: kotReceipt.itemsSignature,
+                                        );
+                                      }
+                                    }
+                                  },
+                                  icon: const Icon(Icons.print_rounded, size: 16),
+                                  label: Text(isModified ? 'PRINT UPDATED KITCHEN TICKET' : 'PRINT KITCHEN TICKET (KOT)'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: isModified ? const Color(0xFFEA580C) : const Color(0xFFD97706),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           );
                         },
                       );
@@ -4118,14 +4195,22 @@ class _TakeawayMenuItem {
 }
 
 class _TakeawayOrderItem {
+  final String? id;
+  final String? menuItemId;
   final _TakeawayMenuItem item;
   int quantity;
   final int initialOrderedQty;
+  final String selectedSize;
+  final String selectedCrust;
 
   _TakeawayOrderItem({
+    this.id,
+    this.menuItemId,
     required this.item,
     this.quantity = 1,
     this.initialOrderedQty = 0,
+    this.selectedSize = 'Regular',
+    this.selectedCrust = 'Original',
   });
 
   bool get isExistingOrderedItem => initialOrderedQty > 0;
@@ -4285,10 +4370,21 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
               imagePath: 'assets/images/Pizza.png',
             ),
           );
+          final effectivePrice = oi.unitPrice > 0 ? oi.unitPrice : found.price;
+          final effectiveItem = _TakeawayMenuItem(
+            name: oi.item.name,
+            category: found.category,
+            price: effectivePrice,
+            imagePath: found.imagePath,
+          );
           _cartItems.add(_TakeawayOrderItem(
-            item: found,
+            id: oi.id,
+            menuItemId: oi.item.id,
+            item: effectiveItem,
             quantity: oi.quantity,
             initialOrderedQty: oi.quantity,
+            selectedSize: oi.selectedSize.isNotEmpty ? oi.selectedSize : 'Regular',
+            selectedCrust: oi.selectedCrust.isNotEmpty ? oi.selectedCrust : 'Original',
           ));
         }
       } else {
@@ -4356,27 +4452,17 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
 
   void _decrementCartItem(int index) {
     setState(() {
-      final cartItem = _cartItems[index];
-      if (cartItem.isExistingOrderedItem) {
-        if (cartItem.quantity > cartItem.initialOrderedQty) {
-          cartItem.quantity -= 1;
-        } else {
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Cannot remove already ordered items here. Please use "Cancel Item" to cancel existing items.'),
-              backgroundColor: Color(0xFFDC2626),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
+      if (_cartItems[index].quantity > 1) {
+        _cartItems[index].quantity -= 1;
       } else {
-        if (_cartItems[index].quantity > 1) {
-          _cartItems[index].quantity -= 1;
-        } else {
-          _cartItems.removeAt(index);
-        }
+        _cartItems.removeAt(index);
       }
+    });
+  }
+
+  void _removeCartItem(int index) {
+    setState(() {
+      _cartItems.removeAt(index);
     });
   }
 
@@ -4743,6 +4829,18 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                                   child: const Icon(Icons.add_rounded, color: Colors.white, size: 14),
                                                 ),
                                               ),
+                                              const SizedBox(width: 8),
+                                              InkWell(
+                                                onTap: () => _removeCartItem(index),
+                                                child: Container(
+                                                  padding: const EdgeInsets.all(2),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.red.withValues(alpha: 0.1),
+                                                    borderRadius: BorderRadius.circular(4),
+                                                  ),
+                                                  child: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 15),
+                                                ),
+                                              ),
                                             ],
                                           ),
                                         ],
@@ -4866,12 +4964,14 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                 : () async {
                                     final summaryParts = _cartItems.map((c) => '${c.quantity}x ${c.item.name}').join(', ');
                                     final itemsList = _cartItems.map((c) => {
+                                      if (c.id != null) 'id': c.id,
+                                      if (c.menuItemId != null) 'menu_item_id': c.menuItemId,
                                       'item_name': c.item.name,
                                       'quantity': c.quantity,
                                       'unit_price': c.item.price,
                                       'total_price': c.totalPrice,
-                                      'selected_size': 'Regular',
-                                      'selected_crust': 'Original',
+                                      'selected_size': c.selectedSize,
+                                      'selected_crust': c.selectedCrust,
                                     }).toList();
 
                                     final custName = _customerNameController.text.trim().isEmpty

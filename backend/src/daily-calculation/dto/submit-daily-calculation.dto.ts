@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsNotEmpty,
   IsNumber,
@@ -113,4 +114,12 @@ export class SubmitDailyCalculationDto {
   @IsOptional()
   @IsNumber()
   expected_cash_drawer?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  force_close?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  auto_resolve_pending?: boolean;
 }

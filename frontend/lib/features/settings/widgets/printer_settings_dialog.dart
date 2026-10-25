@@ -47,7 +47,7 @@ class _PrinterSettingsDialogState extends State<PrinterSettingsDialog> {
           _printerOptions = cleanPrinters;
 
           // POS Printer selection: select saved printer if currently detected, otherwise default to first detected
-          if (savedPos != null && cleanPrinters.contains(savedPos)) {
+          if (savedPos != null && ReceiptPrinterService.isPrinterConfigured(savedPos) && cleanPrinters.contains(savedPos)) {
             _selectedPosPrinter = savedPos;
           } else if (cleanPrinters.isNotEmpty) {
             _selectedPosPrinter = cleanPrinters.first;
@@ -56,7 +56,7 @@ class _PrinterSettingsDialogState extends State<PrinterSettingsDialog> {
           }
 
           // Kitchen Printer selection: only select if user previously saved a real detected printer
-          if (savedKitchen != null && cleanPrinters.contains(savedKitchen)) {
+          if (savedKitchen != null && ReceiptPrinterService.isPrinterConfigured(savedKitchen) && cleanPrinters.contains(savedKitchen)) {
             _selectedKitchenPrinter = savedKitchen;
           } else {
             _selectedKitchenPrinter = 'None';

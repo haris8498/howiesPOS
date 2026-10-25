@@ -790,10 +790,13 @@ class ReceiptPrinterService {
   // Preference Key & Cache for strictly One-Time Kitchen (KOT) Printed Ticket IDs
   static const String _prefKeyPrintedKotList = 'pos_printed_kitchen_kot_set';
   static const String _prefKeyPrintedKotSignatures = 'pos_printed_kot_signatures_map';
+  static const String _prefKeyEverPrintedKotList = 'pos_ever_printed_kitchen_kot_set';
   static final Set<String> _printedKitchenTickets = <String>{};
+  static final Set<String> _everPrintedKotTickets = <String>{};
   static final Map<String, String> _printedKitchenSignatures = <String, String>{};
   static bool _hasLoadedPrintedKotSet = false;
   static bool _hasLoadedPrintedKotSignatures = false;
+  static bool _hasLoadedEverPrintedKotSet = false;
 
   /// Loads printed kitchen tickets from local persistent storage
   static Future<Set<String>> _loadPrintedKitchenTickets() async {
@@ -804,6 +807,52 @@ class ReceiptPrinterService {
       _hasLoadedPrintedKotSet = true;
     }
     return _printedKitchenTickets;
+  }
+
+  /// Loads tickets that have ever been sent to kitchen
+  static Future<Set<String>> _loadEverPrintedKotTickets() async {
+    if (!_hasLoadedEverPrintedKotSet) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedList = prefs.getStringList(_prefKeyEverPrintedKotList) ?? [];
+      _everPrintedKotTickets.addAll(savedList.map((e) => e.trim().toLowerCase()));
+      _hasLoadedEverPrintedKotSet = true;
+    }
+    return _everPrintedKotTickets;
+  }
+
+  /// Checks if an order was EVER printed to the kitchen at least once
+  static Future<bool> hasOrderEverPrintedKot(
+    String? idOrOrderNumber, {
+    String? tokenNumber,
+    AppDatabase? db,
+  }) async {
+    final candidateIds = expandOrderCandidates([idOrOrderNumber, tokenNumber]);
+    if (candidateIds.isEmpty) return false;
+
+    // 1. Check in-memory & persistent ever-printed set
+    final everSet = await _loadEverPrintedKotTickets();
+    for (final raw in candidateIds) {
+      if (everSet.contains(raw.toLowerCase())) return true;
+    }
+
+    // 2. Check SQLite print jobs
+    final targetDb = db ?? _database;
+    if (targetDb != null) {
+      for (final raw in candidateIds) {
+        final jobs = await targetDb.printJobsDao.getJobsForOrder(raw);
+        if (jobs.any((j) => j.jobType == PrintJobType.kitchenTicket)) {
+          return true;
+        }
+      }
+    }
+
+    // 3. Check SharedPreferences / in-memory set as fallback
+    final set = await _loadPrintedKitchenTickets();
+    for (final raw in candidateIds) {
+      if (set.contains(raw.toLowerCase())) return true;
+    }
+
+    return false;
   }
 
   /// Loads printed kitchen item signatures from local storage
@@ -855,6 +904,31 @@ class ReceiptPrinterService {
     }
   }
 
+  /// Expands an order identifier into all its permutations (exact, lowercase, 3-digit padded, extracted numbers)
+  static Set<String> expandOrderCandidates(Iterable<String?> inputs) {
+    final result = <String>{};
+    for (final raw in inputs) {
+      if (raw == null || raw.trim().isEmpty) continue;
+      final c = raw.trim();
+      result.add(c);
+      result.add(c.toLowerCase());
+      final fmt3 = EscPosBuilder.format3DigitOrderNumber(c);
+      if (fmt3.isNotEmpty) {
+        result.add(fmt3);
+        result.add(fmt3.toLowerCase());
+      }
+      for (final m in RegExp(r'\d+').allMatches(c)) {
+        final s = m.group(0)!;
+        final n = int.tryParse(s);
+        if (n != null) {
+          result.add(n.toString());
+          result.add(n.toString().padLeft(3, '0'));
+        }
+      }
+    }
+    return result;
+  }
+
   /// Checks if a kitchen ticket / order has already been printed once for the exact current items.
   /// If [currentItemsSignature] is provided and does not match the recorded signature,
   /// returns false because the order was modified and must be allowed to print!
@@ -864,13 +938,7 @@ class ReceiptPrinterService {
     String? currentItemsSignature,
     AppDatabase? db,
   }) async {
-    final candidateIds = <String>[];
-    if (idOrOrderNumber != null && idOrOrderNumber.trim().isNotEmpty) {
-      candidateIds.add(idOrOrderNumber.trim());
-    }
-    if (tokenNumber != null && tokenNumber.trim().isNotEmpty) {
-      candidateIds.add(tokenNumber.trim());
-    }
+    final candidateIds = expandOrderCandidates([idOrOrderNumber, tokenNumber]);
     if (candidateIds.isEmpty) return false;
 
     // Test receipts are never blocked
@@ -907,25 +975,6 @@ class ReceiptPrinterService {
           matchedKey = clean;
           break;
         }
-        final numeric = int.tryParse(clean);
-        if (numeric != null) {
-          final formatted3 = numeric.toString().padLeft(3, '0');
-          if (set.contains(formatted3) || set.contains(numeric.toString())) {
-            isInPrintedSet = true;
-            matchedKey = clean;
-            break;
-          }
-        }
-        for (final m in RegExp(r'\d+').allMatches(clean)) {
-          final s = m.group(0)!;
-          final n = int.tryParse(s);
-          if (n != null && (set.contains(n.toString()) || set.contains(n.toString().padLeft(3, '0')))) {
-            isInPrintedSet = true;
-            matchedKey = clean;
-            break;
-          }
-        }
-        if (isInPrintedSet) break;
       }
     }
 
@@ -945,18 +994,16 @@ class ReceiptPrinterService {
             sigMap[clean.replaceAll('_cancel', '')] ??
             sigMap[clean.replaceAll(RegExp(r'[^0-9]'), '')];
         if (recordedSig != null) break;
-        for (final m in RegExp(r'\d+').allMatches(clean)) {
-          final s = m.group(0)!;
-          final n = int.tryParse(s);
-          if (n != null) {
-            recordedSig = sigMap[n.toString()] ?? sigMap[n.toString().padLeft(3, '0')];
-            if (recordedSig != null) break;
-          }
-        }
-        if (recordedSig != null) break;
       }
 
-      if (recordedSig != null && recordedSig != currentItemsSignature) {
+      // If recordedSig is null (signature was cleared/un-marked when order was modified),
+      // order is unlocked and updated KOT can print!
+      if (recordedSig == null) {
+        debugPrint('🔔 KOT No signature found for [$matchedKey]: Order was unlocked/modified. Updated print unlocked.');
+        return false;
+      }
+
+      if (recordedSig != currentItemsSignature) {
         debugPrint('🔔 KOT Signature mismatch for [$matchedKey]: Order was modified ($recordedSig != $currentItemsSignature). Updated print unlocked.');
         return false;
       }
@@ -1011,16 +1058,14 @@ class ReceiptPrinterService {
 
     // 2. Mark in-memory and SharedPreferences cache
     await _loadPrintedKitchenTickets();
-    _printedKitchenTickets.add(cleanId);
-
-    final numeric = int.tryParse(cleanId);
-    if (numeric != null) {
-      _printedKitchenTickets.add(numeric.toString().padLeft(3, '0'));
-      _printedKitchenTickets.add(numeric.toString());
-    }
-
-    if (signature != null && signature.isNotEmpty) {
-      await recordPrintedKitchenSignature(cleanId, signature);
+    await _loadEverPrintedKotTickets();
+    final candidates = expandOrderCandidates([idOrOrderNumber]);
+    for (final c in candidates) {
+      _printedKitchenTickets.add(c.toLowerCase());
+      _everPrintedKotTickets.add(c.toLowerCase());
+      if (signature != null && signature.isNotEmpty) {
+        await recordPrintedKitchenSignature(c.toLowerCase(), signature);
+      }
     }
 
     try {
@@ -1030,6 +1075,12 @@ class ReceiptPrinterService {
         listToSave.removeRange(0, listToSave.length - 3000);
       }
       await prefs.setStringList(_prefKeyPrintedKotList, listToSave);
+
+      final everListToSave = _everPrintedKotTickets.toList();
+      if (everListToSave.length > 3000) {
+        everListToSave.removeRange(0, everListToSave.length - 3000);
+      }
+      await prefs.setStringList(_prefKeyEverPrintedKotList, everListToSave);
     } catch (e) {
       debugPrint('Error saving printed KOT set: $e');
     }
@@ -1041,63 +1092,53 @@ class ReceiptPrinterService {
     String? orderNumber,
     String? tokenNumber,
     String? tableNumber,
+    bool clearHistory = false,
     AppDatabase? db,
   }) async {
+    final idsToUnmark = expandOrderCandidates([orderId, orderNumber, tokenNumber, tableNumber]);
+    final cancelVariations = <String>{};
+    for (final id in idsToUnmark) {
+      cancelVariations.add('${id}_cancel');
+      if (id.endsWith('_cancel')) {
+        cancelVariations.add(id.replaceAll('_cancel', ''));
+      }
+    }
+    idsToUnmark.addAll(cancelVariations);
+
     final targetDb = db ?? _database;
     if (targetDb != null) {
-      final ids = [orderId, orderNumber, tokenNumber, tableNumber];
-      for (final id in ids) {
-        if (id != null && id.trim().isNotEmpty) {
-          try {
-            await targetDb.printJobsDao.deleteJobsForOrder(id.trim());
-          } catch (e) {
-            debugPrint('Error deleting print jobs in SQLite for $id: $e');
-          }
+      for (final id in idsToUnmark) {
+        try {
+          await targetDb.printJobsDao.deleteJobsForOrder(id);
+        } catch (e) {
+          debugPrint('Error deleting print jobs in SQLite for $id: $e');
         }
       }
     }
 
     await _loadPrintedKitchenTickets();
     await _loadPrintedKitchenSignatures();
-
-    final idsToUnmark = <String>{};
-
-    void addId(String? raw) {
-      if (raw == null || raw.trim().isEmpty) return;
-      final c = raw.trim().toLowerCase();
-      idsToUnmark.add(c);
-      idsToUnmark.add('${c}_cancel');
-      if (c.endsWith('_cancel')) {
-        idsToUnmark.add(c.replaceAll('_cancel', ''));
-      }
-      // Extract all numbers inside the string
-      final matches = RegExp(r'\d+').allMatches(c);
-      for (final m in matches) {
-        final s = m.group(0)!;
-        final n = int.tryParse(s);
-        if (n != null) {
-          idsToUnmark.add(n.toString());
-          idsToUnmark.add(n.toString().padLeft(3, '0'));
-          idsToUnmark.add('${n}_cancel');
-          idsToUnmark.add('${n.toString().padLeft(3, '0')}_cancel');
-        }
-      }
-    }
-
-    addId(orderId);
-    addId(orderNumber);
-    addId(tokenNumber);
-    addId(tableNumber);
+    await _loadEverPrintedKotTickets();
 
     for (final id in idsToUnmark) {
-      _printedKitchenTickets.remove(id);
-      _printedKitchenSignatures.remove(id);
+      _printedKitchenTickets.remove(id.toLowerCase());
+      _printedKitchenSignatures.remove(id.toLowerCase());
+      if (clearHistory) {
+        _everPrintedKotTickets.remove(id.toLowerCase());
+      }
+      _recentPrintLocks.remove('kitchenKot_$id');
+      _recentPrintLocks.remove('kitchenKot_${id.toLowerCase()}');
+      _inFlightJobLocks.remove('kitchenKot_$id');
+      _inFlightJobLocks.remove('kitchenKot_${id.toLowerCase()}');
     }
 
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_prefKeyPrintedKotList, _printedKitchenTickets.toList());
       await prefs.setString(_prefKeyPrintedKotSignatures, jsonEncode(_printedKitchenSignatures));
+      if (clearHistory) {
+        await prefs.setStringList(_prefKeyEverPrintedKotList, _everPrintedKotTickets.toList());
+      }
       debugPrint('🔄 KOT print lock and signatures reset for order keys: $idsToUnmark');
     } catch (e) {
       debugPrint('Error unmarking printed KOT: $e');
@@ -1114,10 +1155,13 @@ class ReceiptPrinterService {
   /// Clears printed kitchen receipts history (e.g., daily reset)
   static Future<void> clearPrintedKitchenHistory() async {
     _printedKitchenTickets.clear();
+    _everPrintedKotTickets.clear();
     _hasLoadedPrintedKotSet = true;
+    _hasLoadedEverPrintedKotSet = true;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefKeyPrintedKotList);
+      await prefs.remove(_prefKeyEverPrintedKotList);
     } catch (e) {
       debugPrint('Error clearing printed KOT history: $e');
     }
@@ -1128,8 +1172,10 @@ class ReceiptPrinterService {
   static void resetForTesting() {
     _printedKitchenTickets.clear();
     _printedKitchenSignatures.clear();
+    _everPrintedKotTickets.clear();
     _hasLoadedPrintedKotSet = false;
     _hasLoadedPrintedKotSignatures = false;
+    _hasLoadedEverPrintedKotSet = false;
     _inFlightJobLocks.clear();
     _recentPrintLocks.clear();
     testPrinterFn = null;
@@ -1397,10 +1443,10 @@ class ReceiptPrinterService {
   }) async {
     final targetDb = db ?? _database;
 
-    // Debounce protection: Prevent duplicate rapid clicks within 1.5 seconds
+    // Debounce protection: Prevent duplicate rapid clicks within 1.5 seconds (bypassed if forcePrint)
     final lockKey = '${receipt.type.name}_${receipt.orderNumber}';
     final now = DateTime.now();
-    if (_recentPrintLocks.containsKey(lockKey)) {
+    if (!forcePrint && _recentPrintLocks.containsKey(lockKey)) {
       final lastPrint = _recentPrintLocks[lockKey]!;
       if (now.difference(lastPrint).inMilliseconds < 1500) {
         debugPrint('Debounce: Print request ignored for $lockKey (already processing)');
@@ -1497,7 +1543,7 @@ class ReceiptPrinterService {
       String? posPrinter;
       if (isPrinterConfigured(rawPos)) {
         posPrinter = rawPos;
-      } else if (rawPos == null) {
+      } else {
         final autoResolved = await _resolveBestThermalPrinter();
         if (isPrinterConfigured(autoResolved)) {
           posPrinter = autoResolved;
@@ -1550,6 +1596,9 @@ class ReceiptPrinterService {
             await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature, db: targetDb);
             if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
               await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature, db: targetDb);
+            }
+            if (receipt.tableNumber != null && receipt.tableNumber!.isNotEmpty) {
+              await markKitchenReceiptPrinted(receipt.tableNumber!, signature: receipt.itemsSignature, db: targetDb);
             }
           }
 
@@ -1637,6 +1686,9 @@ class ReceiptPrinterService {
           await markKitchenReceiptPrinted(receipt.orderNumber, signature: receipt.itemsSignature, db: targetDb);
           if (receipt.tokenNumber != null && receipt.tokenNumber!.isNotEmpty) {
             await markKitchenReceiptPrinted(receipt.tokenNumber!, signature: receipt.itemsSignature, db: targetDb);
+          }
+          if (receipt.tableNumber != null && receipt.tableNumber!.isNotEmpty) {
+            await markKitchenReceiptPrinted(receipt.tableNumber!, signature: receipt.itemsSignature, db: targetDb);
           }
         }
 
@@ -1902,31 +1954,8 @@ class ReceiptPrinterService {
 
     bool printSuccess = false;
 
-    // 1. PRIORITY 1: DIRECT BACKEND PRINT API (Works on Web & Desktop)
-    try {
-      final b64 = base64Encode(escposBytes);
-      final res = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/printer/print'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'printerName': targetPrinter,
-          'base64Data': b64,
-          'docName': docName,
-        }),
-      ).timeout(const Duration(seconds: 5));
-
-      if (res.statusCode == 200) {
-        final decoded = jsonDecode(res.body);
-        if (decoded['success'] == true) {
-          printSuccess = true;
-        }
-      }
-    } catch (e) {
-      debugPrint('Backend direct print attempt: $e');
-    }
-
-    // 2. PRIORITY 2: DIRECT NATIVE WIN32 DESKTOP PRINTING
-    if (!printSuccess && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+    // 1. PRIORITY 1: DIRECT NATIVE WIN32 DESKTOP PRINTING (Windows Desktop Native Spooler / Port)
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
       if (targetPrinter.startsWith('Port: ')) {
         final port = targetPrinter.replaceFirst('Port: ', '').trim();
         printSuccess = await NativeWin32Printer.printRawBytesToPort(port, escposBytes);
@@ -1935,7 +1964,11 @@ class ReceiptPrinterService {
             printerName: 'POS Receipt Printer',
             portName: port,
           );
-          printSuccess = await NativeWin32Printer.printRawBytesToSpooler('POS Receipt Printer', escposBytes);
+          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
+            'POS Receipt Printer',
+            escposBytes,
+            docName: docName,
+          );
         }
       } else if (targetPrinter.contains(':') && RegExp(r'^\d+\.\d+\.\d+\.\d+:\d+$').hasMatch(targetPrinter)) {
         final parts = targetPrinter.split(':');
@@ -1953,8 +1986,34 @@ class ReceiptPrinterService {
           printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
             'POS Receipt Printer',
             escposBytes,
+            docName: docName,
           );
         }
+      }
+    }
+
+    // 2. PRIORITY 2: LOCAL BACKEND PRINT API (Only when running on Web or local print server)
+    if (!printSuccess && (kIsWeb || ApiConfig.baseUrl.contains('localhost') || ApiConfig.baseUrl.contains('127.0.0.1'))) {
+      try {
+        final b64 = base64Encode(escposBytes);
+        final res = await http.post(
+          Uri.parse('${ApiConfig.baseUrl}/printer/print'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'printerName': targetPrinter,
+            'base64Data': b64,
+            'docName': docName,
+          }),
+        ).timeout(const Duration(seconds: 4));
+
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(res.body);
+          if (decoded['success'] == true) {
+            printSuccess = true;
+          }
+        }
+      } catch (e) {
+        debugPrint('Backend direct print attempt: $e');
       }
     }
 

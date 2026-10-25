@@ -5,6 +5,7 @@ import '../../config/app_colors.dart';
 import '../../config/app_theme.dart';
 import '../../data/auth_repository.dart';
 import '../../features/settings/widgets/printer_settings_dialog.dart';
+import '../../features/updater/auto_update_controller.dart';
 
 class CashierSidebarFooter extends ConsumerWidget {
   const CashierSidebarFooter({super.key});
@@ -54,6 +55,8 @@ class CashierSidebarFooter extends ConsumerWidget {
         onSelected: (value) async {
           if (value == 'printer') {
             PrinterSettingsDialog.show(context);
+          } else if (value == 'updates') {
+            triggerManualUpdateCheck(context, ref);
           } else if (value == 'theme') {
             ref.read(themeProvider.notifier).toggleTheme();
           } else if (value == 'logout') {
@@ -145,6 +148,43 @@ class CashierSidebarFooter extends ConsumerWidget {
                 ),
                 Icon(
                   Icons.tune_rounded,
+                  size: 15,
+                  color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                ),
+              ],
+            ),
+          ),
+
+          // 2b. Check for Updates Option
+          PopupMenuItem(
+            value: 'updates',
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.system_update_rounded,
+                    size: 16,
+                    color: AppColors.primaryRed,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Check for Updates',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.cloud_sync_rounded,
                   size: 15,
                   color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
                 ),

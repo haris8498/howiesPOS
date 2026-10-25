@@ -9,6 +9,7 @@ import '../../domain/models/user_role.dart';
 
 import '../../data/role_rights_repository.dart';
 import '../../data/network_speed_provider.dart';
+import '../../features/updater/auto_update_controller.dart';
 import 'sync_button.dart';
 
 final sidebarCollapsedProvider = StateProvider<bool>((ref) => false);
@@ -49,6 +50,7 @@ class NavigationSidebar extends ConsumerWidget {
         _NavItem('Daily Calculation', '/owner/daily-calculation', Icons.calculate_rounded),
         _NavItem('Reports', '/owner/reports', Icons.analytics_rounded),
         _NavItem('Sync Center', '/owner/sync-center', Icons.cloud_sync_rounded),
+        _NavItem('Settings & Updates', '/owner/settings', Icons.settings_rounded),
         ];
     } else if (role == UserRole.manager) {
       final roleRights = ref.watch(roleRightsProvider);
@@ -76,6 +78,7 @@ class NavigationSidebar extends ConsumerWidget {
       if (can('daily_calculation', moduleName: 'Daily Calculation', defaultIfMissing: true)) navItems.add(_NavItem('Daily Calculation', '/manager/daily-calculation', Icons.calculate_rounded));
       if (can('reports', moduleName: 'Reports')) navItems.add(_NavItem('Reports', '/manager/reports', Icons.analytics_rounded));
       if (can('data_sync', moduleName: 'Sync Center', defaultIfMissing: true)) navItems.add(_NavItem('Sync Center', '/manager/sync-center', Icons.cloud_sync_rounded));
+      navItems.add(_NavItem('Settings & Updates', '/manager/settings', Icons.settings_rounded));
 
       // Fallback if no modules granted
       if (navItems.isEmpty) {
@@ -105,6 +108,7 @@ class NavigationSidebar extends ConsumerWidget {
       if (can('daily_calculation', moduleName: 'Daily Calculation', defaultIfMissing: true)) navItems.add(_NavItem('Daily Calculation', '/sales/daily-calculation', Icons.calculate_rounded));
       if (can('reports', moduleName: 'Reports')) navItems.add(_NavItem('Reports', '/sales/reports', Icons.analytics_rounded));
       if (can('data_sync', moduleName: 'Sync Center', defaultIfMissing: true)) navItems.add(_NavItem('Sync Center', '/sales/sync-center', Icons.cloud_sync_rounded));
+      navItems.add(_NavItem('Settings & Updates', '/sales/settings', Icons.settings_rounded));
       
       // Fallback if no modules granted
       if (navItems.isEmpty) {
@@ -548,6 +552,34 @@ class NavigationSidebar extends ConsumerWidget {
                               ),
                               const SizedBox(height: 8),
                             ],
+                            // Collapsed Update Action
+                            Tooltip(
+                              message: 'Check for Updates',
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () => triggerManualUpdateCheck(context, ref),
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: AppColors.primaryRed.withValues(alpha: isDark ? 0.45 : 0.35),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.system_update_rounded,
+                                      color: AppColors.primaryRed,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
                             // Collapsed Logout Action
                             Tooltip(
                               message: 'Log Out',
@@ -596,6 +628,46 @@ class NavigationSidebar extends ConsumerWidget {
                                 // Left Side: Professional Network Quality & Latency Capsule
                                 Flexible(
                                   child: _buildNetworkSpeedIndicators(context, ref, isDark),
+                                ),
+                                const SizedBox(width: 6),
+
+                                // Center Right: Check for Updates Action Button
+                                Material(
+                                  color: Colors.transparent,
+                                  child: Tooltip(
+                                    message: 'Check for Updates from GitHub',
+                                    child: InkWell(
+                                      onTap: () => triggerManualUpdateCheck(context, ref),
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: AppColors.primaryRed.withValues(alpha: isDark ? 0.45 : 0.35),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.system_update_rounded, color: AppColors.primaryRed, size: 14),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              'Update',
+                                              style: TextStyle(
+                                                color: AppColors.primaryRed,
+                                                fontSize: 11.5,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 0.2,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                                 const SizedBox(width: 6),
 

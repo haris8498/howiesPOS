@@ -8,6 +8,7 @@ import '../../data/network_speed_provider.dart';
 import '../../data/online_orders_repository.dart';
 import '../../data/role_rights_repository.dart';
 import '../../domain/models/user_role.dart';
+import '../../features/updater/auto_update_controller.dart';
 import '../widgets/sync_button.dart';
 
 class CashierTopNavigationBar extends ConsumerWidget {
@@ -294,6 +295,53 @@ class CashierTopNavigationBar extends ConsumerWidget {
 
           // Sync status light (green/red offline-first health indicator)
           const SyncStatusIndicatorWidget(),
+
+          const SizedBox(width: 8),
+
+          // Check for Updates Action Button
+          Tooltip(
+            message: 'Check for Updates from GitHub',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => triggerManualUpdateCheck(context, ref),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.system_update_rounded, color: Colors.white, size: 16),
+                      SizedBox(width: 5),
+                      Text(
+                        'Update',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
 
           const SizedBox(width: 8),
 

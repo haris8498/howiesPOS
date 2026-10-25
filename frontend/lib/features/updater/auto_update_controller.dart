@@ -1,9 +1,64 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/updater/app_version_provider.dart';
 import '../../core/updater/update_models.dart';
 import '../../core/updater/update_service.dart';
 import 'update_dialog.dart';
+
+/// Global helper function to manually check for updates with user feedback.
+Future<void> triggerManualUpdateCheck(BuildContext context, WidgetRef ref) async {
+  final scaffoldMessenger = ScaffoldMessenger.of(context);
+  scaffoldMessenger.hideCurrentSnackBar();
+  scaffoldMessenger.showSnackBar(
+    const SnackBar(
+      content: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+          ),
+          SizedBox(width: 12),
+          Text('Checking for updates from GitHub...'),
+        ],
+      ),
+      duration: Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+    ),
+  );
+
+  final update = await ref
+      .read(autoUpdateControllerProvider.notifier)
+      .manualCheckForUpdate(context);
+
+  if (!context.mounted) return;
+  scaffoldMessenger.hideCurrentSnackBar();
+
+  if (update == null) {
+    final ver = await const DefaultAppVersionProvider().getAppVersion();
+    if (!context.mounted) return;
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Hungry Howie\'s POS is up to date (Version $ver). No new updates found.',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF16A34A),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+}
 
 /// State of the auto-update controller.
 class AutoUpdateState {

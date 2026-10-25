@@ -58,9 +58,24 @@ class WindowsUpdater implements IWindowsUpdater {
         onProgress: onProgress,
       );
 
-      // Step 3: Validate downloaded ZIP
+      // Step 3: Validate downloaded file
       if (!await zipFile.exists() || await zipFile.length() == 0) {
-        throw Exception('Downloaded update ZIP is empty or missing.');
+        throw Exception('Downloaded update package is empty or missing.');
+      }
+
+      // If the asset is an InnoSetup .exe installer, run it directly and close POS
+      if (update.assetName.toLowerCase().endsWith('.exe')) {
+        onProgress?.call(
+          const UpdateProgress(
+            phase: UpdatePhase.preparing,
+            percentage: 1.0,
+            statusMessage: 'Launching installer and closing POS...',
+          ),
+        );
+        debugPrint('[WindowsUpdater] Launching Setup installer: ${zipFile.path}');
+        await Process.start(zipFile.path, ['/SILENT', '/CLOSEAPPLICATIONS'],
+            mode: ProcessStartMode.detached);
+        exit(0);
       }
 
       onProgress?.call(

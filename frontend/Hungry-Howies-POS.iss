@@ -1,5 +1,5 @@
 #define MyAppName "Hungry Howie's POS"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "Hungry Howie's"
 #define MyAppExeName "hungry_howies_pos.exe"
 
@@ -11,7 +11,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Hungry Howie's POS
 DefaultGroupName={#MyAppName}
 OutputDir=dist
-OutputBaseFilename=Hungry-Howies-POS-Setup-v1.0.1
+OutputBaseFilename=Hungry-Howies-POS-Setup-v{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64
@@ -32,3 +32,4 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+

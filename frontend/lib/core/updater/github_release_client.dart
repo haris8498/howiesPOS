@@ -118,7 +118,7 @@ class GitHubReleaseClient implements IGitHubReleaseClient {
     final releaseName = json['name'] as String? ?? tagName;
     final body = json['body'] as String? ?? '';
 
-    // Search assets dynamically for the Windows ZIP
+    // Search assets dynamically for the Windows ZIP or EXE Setup installer
     String? matchedAssetName;
     String? downloadUrl;
     int assetSize = 0;
@@ -127,7 +127,10 @@ class GitHubReleaseClient implements IGitHubReleaseClient {
     for (final item in assetsList) {
       if (item is Map<String, dynamic>) {
         final name = item['name'] as String? ?? '';
-        if (name.toLowerCase() == targetAssetName.toLowerCase()) {
+        final lower = name.toLowerCase();
+        if (lower == targetAssetName.toLowerCase() ||
+            lower.endsWith('.zip') ||
+            lower.endsWith('.exe')) {
           matchedAssetName = name;
           final url = item['browser_download_url'] as String? ?? '';
           if (url.startsWith('https://')) {

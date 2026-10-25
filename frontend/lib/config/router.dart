@@ -368,6 +368,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             pageBuilder: (context, state) =>
                 _noAnimationPage(const SyncCenterScreen(isManager: true), state),
           ),
+          GoRoute(
+            path: '/manager/settings',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SettingsScreen(), state),
+          ),
         ],
       ),
 
@@ -485,6 +490,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/sales/sync-center',
             pageBuilder: (context, state) =>
                 _noAnimationPage(const CashierSyncCenterScreen(), state),
+          ),
+          GoRoute(
+            path: '/sales/settings',
+            pageBuilder: (context, state) =>
+                _noAnimationPage(const SettingsScreen(), state),
           ),
         ],
       ),

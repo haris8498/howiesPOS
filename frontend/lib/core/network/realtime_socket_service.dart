@@ -56,10 +56,14 @@ class RealtimeSocketService {
     try {
       final parsedUri = Uri.parse(baseUrl);
       final wsScheme = parsedUri.scheme == 'https' ? 'wss' : 'ws';
+      final defaultPort = wsScheme == 'wss' ? 443 : 80;
+      final port = parsedUri.hasPort ? parsedUri.port : defaultPort;
 
       // Build Socket.IO v4 WebSocket URI with query parameters
-      final uri = parsedUri.replace(
+      final uri = Uri(
         scheme: wsScheme,
+        host: parsedUri.host,
+        port: port,
         path: '/socket.io/',
         queryParameters: {
           'EIO': '4',

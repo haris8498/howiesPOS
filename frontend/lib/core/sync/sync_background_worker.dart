@@ -746,7 +746,7 @@ class SyncBackgroundWorker {
   // ───────────────────────────────────────────────────────────────────────────
 
   Future<void> _handleAuthPaused(List<SyncOutboxEntry> batch, String error) async {
-    final newToken = await _trySilentReauth();
+    final newToken = await trySilentReauth();
     if (newToken != null && newToken.isNotEmpty) {
       stateNotifier.updateState(state.copyWith(isAuthPaused: false));
       await resumeAuthPaused();
@@ -1258,10 +1258,16 @@ class SyncBackgroundWorker {
   // 7. HTTP HEADERS
   // ───────────────────────────────────────────────────────────────────────────
 
-  Future<String?> _trySilentReauth() async {
+  Future<String?> trySilentReauth([String? explicitUsername]) async {
     try {
       final session = await TokenStorage.getUserSession();
-      final username = session?['username'] as String?;
+      String? username = explicitUsername ?? session?['username'] as String?;
+      if (username == null || username.isEmpty) {
+        try {
+          final activeCalc = await db.dailyCalculationsDao.getAnyActiveCalculation();
+          username = activeCalc?.cashierName;
+        } catch (_) {}
+      }
       if (username == null || username.isEmpty) return null;
 
       final client = httpClient ?? http.Client();
@@ -1270,7 +1276,7 @@ class SyncBackgroundWorker {
         Uri.parse('$_baseUrl/auth/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'username': username, 'password': password}),
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 15));
 
       if (res.statusCode == 200 || res.statusCode == 201) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -1293,7 +1299,7 @@ class SyncBackgroundWorker {
 
     var token = await TokenStorage.getToken();
     if (token == null || token.isEmpty || token.startsWith('local_offline_token_')) {
-      final newToken = await _trySilentReauth();
+      final newToken = await trySilentReauth();
       if (newToken != null && newToken.isNotEmpty) {
         token = newToken;
       }

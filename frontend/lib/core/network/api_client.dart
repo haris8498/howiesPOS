@@ -189,7 +189,7 @@ class ApiClient {
     _logResponse(method, uri, statusCode, errorMessage);
 
     if (statusCode == 401) {
-      await TokenStorage.clearSession();
+      TokenStorage.resetCacheForTesting();
       onUnauthorized?.call();
       throw UnauthorizedException(errorMessage.isNotEmpty ? errorMessage : 'Session expired. Please log in again.');
     } else if (statusCode == 403) {

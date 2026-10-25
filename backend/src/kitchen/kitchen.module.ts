@@ -1,17 +1,18 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PermissionsModule } from '../permissions/permissions.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { KitchenController } from './kitchen.controller';
 import { KitchenService } from './kitchen.service';
-import { KitchenGateway } from './kitchen.gateway';
 
 @Module({
   imports: [
     PrismaModule,
     PermissionsModule,
+    RealtimeModule,
   ],
   controllers: [KitchenController],
-  providers: [KitchenService, KitchenGateway],
-  exports: [KitchenService, KitchenGateway],
+  providers: [KitchenService],
+  exports: [KitchenService],
 })
 export class KitchenModule {}

@@ -213,9 +213,21 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
 
     // 2. Order Type Filter
     if (state.selectedTypeFilter != 'all') {
-      filtered = filtered.where((o) =>
-          o.rawOrderType.toLowerCase() == state.selectedTypeFilter.toLowerCase() ||
-          o.orderType.toLowerCase() == state.selectedTypeFilter.toLowerCase()).toList();
+      final f = state.selectedTypeFilter.toLowerCase();
+      filtered = filtered.where((o) {
+        final raw = o.rawOrderType.toLowerCase();
+        final disp = o.orderType.toLowerCase();
+        if (f == 'takeaway' || f == 'take_away') {
+          return raw.contains('take') || disp.contains('take');
+        }
+        if (f == 'delivery' || f == 'online') {
+          return raw.contains('deliv') || raw.contains('online') || disp.contains('deliv') || disp.contains('online');
+        }
+        if (f.contains('dine')) {
+          return raw.contains('dine') || disp.contains('dine');
+        }
+        return raw == f || disp == f;
+      }).toList();
     }
 
     // 3. Date Filter (Owner Portal Feature)
@@ -248,7 +260,7 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
     // 4. Shift Filter (Cashier Portal Feature)
     if (state.selectedShift != 'all') {
       if (state.selectedShift == 'active') {
-        final activeShift = state.availableShifts.firstWhere((s) => s['status'] == 'ACTIVE', orElse: () => {});
+        final activeShift = state.availableShifts.firstWhere((s) => s['status'] == 'ACTIVE' || s['status'] == 'active', orElse: () => {});
         final activeId = activeShift['id'];
         final createdAtStr = activeShift['createdAt'];
         final activeStart = createdAtStr != null ? DateTime.tryParse(createdAtStr) : null;
@@ -258,6 +270,9 @@ class DataSyncNotifier extends StateNotifier<DataSyncState> {
           }
           if (activeStart != null && (o.shiftId == null || o.shiftId!.isEmpty)) {
             return o.createdAt.isAfter(activeStart) || o.createdAt.isAtSameMomentAs(activeStart);
+          }
+          if (activeId == null || activeId.isEmpty) {
+            return true;
           }
           return false;
         }).toList();

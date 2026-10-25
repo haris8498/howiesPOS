@@ -621,18 +621,8 @@ export class DailyCalculationService {
         });
       }
 
-      // Reset all restaurant tables to available
-      await tx.restaurantTable.updateMany({
-        data: {
-          status: 'available',
-          current_bill_amount: new Prisma.Decimal(0),
-          current_customer_count: 0,
-          occupied_since: null,
-          active_order_id: null,
-          reserved_customer_name: null,
-          reservation_time: null,
-        },
-      });
+      // Note: Restaurant tables are NOT automatically reset to available upon shift close.
+      // Active table occupations, reservations, and orders persist across shifts until explicitly cleared by staff.
 
       // Reset riders active counts
       await tx.deliveryRider.updateMany({
@@ -645,7 +635,7 @@ export class DailyCalculationService {
       return calculation;
     });
 
-    this.logger.log(`Shift closed & submitted successfully by ${cashierName}. Tables reset safely.`);
+    this.logger.log(`Shift closed & submitted successfully by ${cashierName}. Table states preserved.`);
     this.realtimeGateway?.emitShiftClosed(result as any);
     return result;
   }

@@ -31,7 +31,7 @@ class DailyCalculationsDao extends DatabaseAccessor<AppDatabase> with _$DailyCal
   /// Check if ANY active shift exists store-wide
   Future<LocalDailyCalculation?> getAnyActiveCalculation() {
     return (select(localDailyCalculations)
-      ..where((t) => t.status.equals(DailyCalculationStatus.active))
+      ..where((t) => t.status.equals(DailyCalculationStatus.active) | t.status.equals('active'))
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1))
       .getSingleOrNull();

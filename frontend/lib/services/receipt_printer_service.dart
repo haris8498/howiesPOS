@@ -379,7 +379,10 @@ class ReceiptData {
       final size = item['selected_size']?.toString();
       final crust = item['selected_crust']?.toString();
       final notes = item['notes']?.toString();
-      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      final isCancelled = item['is_cancelled'] == true ||
+          item['is_cancelled'] == 1 ||
+          item['is_cancelled'] == 'true' ||
+          item['is_cancelled'] == '1';
       final cancelReason = item['cancel_reason']?.toString();
       items.add(
         ReceiptItemData(
@@ -1471,22 +1474,24 @@ class ReceiptPrinterService {
       if (isKot) {
         final hasCancelled = receipt.items.any((i) => i.isCancelled);
         if (hasCancelled) {
-          final isAlreadyPrinted = await isKitchenReceiptPrinted(
+          final hasEverPrinted = await hasOrderEverPrintedKot(
             receipt.orderNumber,
             tokenNumber: receipt.tokenNumber,
             db: targetDb,
           );
 
-          if (!isAlreadyPrinted) {
+          if (!hasEverPrinted && !receipt.isModified && !forcePrint) {
             // If all items are cancelled and ticket was never printed, skip printing
             if (receipt.items.every((i) => i.isCancelled)) {
               debugPrint('Skipping KOT print: All items are cancelled and order was never printed to kitchen.');
               return true;
             }
-            // If some items are active and some cancelled, only print active items on initial KOT
+            // If some items are active and some cancelled, only print active items on initial unprinted KOT
             final activeOnly = receipt.items.where((i) => !i.isCancelled).toList();
             receipt = receipt.copyWith(items: activeOnly);
           }
+          // If the order WAS previously printed to the kitchen (hasEverPrinted == true)
+          // or is modified/forcePrint: KEEP all cancelled items so they are printed with strikethrough!
         }
       }
 
@@ -2512,12 +2517,12 @@ class ReceiptPrinterService {
                                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                                   children: [
                                     pw.Text(
-                                      item.name,
+                                      item.isCancelled ? '[CANCELLED] ${item.name}' : item.name,
                                       style: pw.TextStyle(
                                         fontSize: fontSizeBase + 0.5,
-                                        fontWeight: pw.FontWeight.normal,
+                                        fontWeight: item.isCancelled ? pw.FontWeight.bold : pw.FontWeight.normal,
                                         decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
-                                        decorationThickness: item.isCancelled ? 1.5 : null,
+                                        decorationThickness: item.isCancelled ? 2.5 : null,
                                         decorationColor: item.isCancelled ? PdfColors.black : null,
                                         color: item.isCancelled ? PdfColors.black : null,
                                       ),
@@ -2528,7 +2533,7 @@ class ReceiptPrinterService {
                                             fontSize: fontSizeBase - 0.5,
                                             fontStyle: _cachedRobotoItalic != null ? pw.FontStyle.italic : pw.FontStyle.normal,
                                             decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
-                                            decorationThickness: item.isCancelled ? 1.5 : null,
+                                            decorationThickness: item.isCancelled ? 2.0 : null,
                                             decorationColor: item.isCancelled ? PdfColors.black : null,
                                             color: item.isCancelled ? PdfColors.black : null,
                                           ),
@@ -2547,7 +2552,7 @@ class ReceiptPrinterService {
                                   fontSize: fontSizeBase + 1,
                                   fontWeight: pw.FontWeight.bold,
                                   decoration: item.isCancelled ? pw.TextDecoration.lineThrough : null,
-                                  decorationThickness: item.isCancelled ? 1.5 : null,
+                                  decorationThickness: item.isCancelled ? 2.5 : null,
                                   decorationColor: item.isCancelled ? PdfColors.black : null,
                                   color: item.isCancelled ? PdfColors.black : null,
                                 ),

@@ -19,18 +19,23 @@ bool _orderMatchesReportFilter(
 
   final cleanPeriod = filters['period']?.toLowerCase().replaceAll(RegExp(r'[\s_-]'), '') ?? 'today';
   final now = DateTime.now();
-  final shiftDate = activeShift != null
-      ? DateTime(activeShift.createdAt.year, activeShift.createdAt.month, activeShift.createdAt.day)
-      : DateTime(now.year, now.month, now.day);
+  final oDate = order.createdAt.toLocal();
 
-  // If order explicitly belongs to active shift, always match for today/shift view
-  if (activeShift != null && order.shiftId == activeShift.id) {
-    if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
+  // If order explicitly belongs to active shift, or shiftId is null (pending active shift assignment)
+  if (activeShift != null && (order.shiftId == activeShift.id || order.shiftId == null)) {
+    if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'thismonth') {
       return true;
     }
   }
 
-  final oDate = order.createdAt.toLocal();
+  // If unassigned shift, also treat today's orders as matching active shift/today
+  if (order.shiftId == null) {
+    if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'thismonth') {
+      if (oDate.year == now.year && oDate.month == now.month && oDate.day == now.day) {
+        return true;
+      }
+    }
+  }
 
   if (filters['startDate'] != null) {
     final start = DateTime.tryParse(filters['startDate']!);
@@ -41,16 +46,16 @@ bool _orderMatchesReportFilter(
   }
 
   if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
-    return oDate.year == shiftDate.year && oDate.month == shiftDate.month && oDate.day == shiftDate.day;
+    return oDate.year == now.year && oDate.month == now.month && oDate.day == now.day;
   } else if (cleanPeriod == 'thisweek') {
-    final weekStart = shiftDate.subtract(Duration(days: shiftDate.weekday - 1));
-    return oDate.isAfter(weekStart.subtract(const Duration(seconds: 1)));
+    final weekStart = now.subtract(Duration(days: now.weekday - 1));
+    return oDate.isAfter(DateTime(weekStart.year, weekStart.month, weekStart.day).subtract(const Duration(seconds: 1)));
   } else if (cleanPeriod == 'thismonth') {
-    return oDate.year == shiftDate.year && oDate.month == shiftDate.month;
+    return oDate.year == now.year && oDate.month == now.month;
   } else if (cleanPeriod == 'thisyear') {
-    return oDate.year == shiftDate.year;
+    return oDate.year == now.year;
   } else if (cleanPeriod == 'lastyear') {
-    return oDate.year == (shiftDate.year - 1);
+    return oDate.year == (now.year - 1);
   }
 
   return true;
@@ -127,8 +132,8 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
     } catch (_) {}
   }
 
-  // Offline SQLite Fallback for products across all periods
-  if (products.isEmpty && FeatureFlags.offlineFirstEnabled) {
+  // Offline SQLite Integration: Merge local offline/pending orders (or full fallback if offline)
+  if (FeatureFlags.offlineFirstEnabled) {
     try {
       final db = ref.watch(appDatabaseProvider);
       final activeShift = await db.dailyCalculationsDao.getAnyActiveCalculation();
@@ -137,8 +142,13 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
             ..where((t) => t.isDeleted.equals(false)))
           .get();
 
-      final filteredOrders = localOrders.where((o) => _orderMatchesReportFilter(o, filters, activeShift)).toList();
-      final orderIds = filteredOrders.map((o) => o.id).toSet();
+      // If products is empty, include all matching local orders.
+      // If products has online data, merge in any pending local orders that haven't synced yet.
+      final ordersToInclude = products.isEmpty
+          ? localOrders.where((o) => _orderMatchesReportFilter(o, filters, activeShift)).toList()
+          : localOrders.where((o) => (o.syncStatus == 'pending_insert' || o.syncStatus == 'pending_update') && _orderMatchesReportFilter(o, filters, activeShift)).toList();
+
+      final orderIds = ordersToInclude.map((o) => o.id).toSet();
 
       if (orderIds.isNotEmpty) {
         final allItems = await (db.select(db.localOrderItems)
@@ -155,7 +165,9 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
           };
         } catch (_) {}
 
-        final Map<String, Map<String, dynamic>> aggregated = {};
+        final Map<String, Map<String, dynamic>> productMap = {
+          for (final p in products) (p['productName']?.toString() ?? ''): Map<String, dynamic>.from(p)
+        };
 
         for (final item in allItems) {
           if (!orderIds.contains(item.orderId)) continue;
@@ -166,11 +178,11 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
           final total = item.subtotal;
           final category = itemCatMap[name.trim().toLowerCase()] ?? 'General';
 
-          if (aggregated.containsKey(name)) {
-            aggregated[name]!['unitsSold'] = (aggregated[name]!['unitsSold'] as int) + qty;
-            aggregated[name]!['totalRevenue'] = (aggregated[name]!['totalRevenue'] as double) + total;
+          if (productMap.containsKey(name)) {
+            productMap[name]!['unitsSold'] = (productMap[name]!['unitsSold'] as int) + qty;
+            productMap[name]!['totalRevenue'] = (productMap[name]!['totalRevenue'] as double) + total;
           } else {
-            aggregated[name] = {
+            productMap[name] = {
               'productName': name,
               'category': category,
               'unitPrice': price,
@@ -182,10 +194,8 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
           }
         }
 
-        if (aggregated.isNotEmpty) {
-          products = aggregated.values.toList()
-            ..sort((a, b) => (b['totalRevenue'] as num).compareTo(a['totalRevenue'] as num));
-        }
+        products = productMap.values.toList()
+          ..sort((a, b) => (b['totalRevenue'] as num).compareTo(a['totalRevenue'] as num));
       }
     } catch (_) {}
   }
@@ -209,8 +219,8 @@ final reportSummaryProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   final rev = ((summary['totalRevenue'] ?? 0) as num).toDouble();
   final ords = ((summary['totalOrders'] ?? 0) as num).toInt();
 
-  // If online summary is empty or 0 revenue, calculate from SQLite local database!
-  if (rev == 0 && ords == 0 && FeatureFlags.offlineFirstEnabled) {
+  // If offlineFirstEnabled, merge pending offline orders from SQLite, or compute full summary if offline!
+  if (FeatureFlags.offlineFirstEnabled) {
     try {
       final db = ref.watch(appDatabaseProvider);
       final activeShift = await db.dailyCalculationsDao.getAnyActiveCalculation();
@@ -219,41 +229,46 @@ final reportSummaryProvider = FutureProvider<Map<String, dynamic>>((ref) async {
             ..where((t) => t.isDeleted.equals(false)))
           .get();
 
-      final matchingOrders = localOrders.where((o) => _orderMatchesReportFilter(o, filters, activeShift)).toList();
+      final bool isOffline = (rev == 0 && ords == 0);
+      final matchingOrders = isOffline
+          ? localOrders.where((o) => _orderMatchesReportFilter(o, filters, activeShift)).toList()
+          : localOrders.where((o) => (o.syncStatus == 'pending_insert' || o.syncStatus == 'pending_update') && _orderMatchesReportFilter(o, filters, activeShift)).toList();
 
       if (matchingOrders.isNotEmpty) {
-        double grossRevenue = 0.0;
-        double totalSubtotal = 0.0;
-        double totalDiscounts = 0.0;
-        double totalTax = 0.0;
+        double pendingRevenue = 0.0;
+        double pendingSubtotal = 0.0;
+        double pendingDiscounts = 0.0;
+        double pendingTax = 0.0;
 
         for (final o in matchingOrders) {
-          grossRevenue += o.grandTotal;
-          totalSubtotal += o.subtotal;
-          totalDiscounts += o.discountAmount;
-          totalTax += o.taxAmount;
+          pendingRevenue += o.grandTotal;
+          pendingSubtotal += o.subtotal;
+          pendingDiscounts += o.discountAmount;
+          pendingTax += o.taxAmount;
         }
 
         final matchingOrderIds = matchingOrders.map((o) => o.id).toSet();
         final allPayments = await db.select(db.localOrderPayments).get();
         final relevantPayments = allPayments.where((p) => matchingOrderIds.contains(p.orderId)).toList();
 
-        double cashSales = 0.0;
-        double cardSales = 0.0;
-        double onlineSales = 0.0;
+        double pendingCash = 0.0;
+        double pendingCard = 0.0;
+        double pendingOnline = 0.0;
 
         for (final p in relevantPayments) {
           final m = p.paymentMethod.toLowerCase();
           if (m == 'cash') {
-            cashSales += p.amount;
+            pendingCash += p.amount;
           } else if (m == 'card') {
-            cardSales += p.amount;
+            pendingCard += p.amount;
           } else {
-            onlineSales += p.amount;
+            pendingOnline += p.amount;
           }
         }
         if (relevantPayments.isEmpty) {
-          cashSales = grossRevenue;
+          pendingCash = pendingRevenue;
+        } else if (pendingRevenue > (pendingCash + pendingCard + pendingOnline)) {
+          pendingCash += (pendingRevenue - (pendingCash + pendingCard + pendingOnline));
         }
 
         // Calculate units sold directly from reportProductsProvider
@@ -264,29 +279,56 @@ final reportSummaryProvider = FutureProvider<Map<String, dynamic>>((ref) async {
           computedUnits += ((p['unitsSold'] ?? 0) as num).toInt();
         }
 
-        final double avgPrice = computedUnits > 0 ? (totalSubtotal / computedUnits) : 0.0;
-        final topCategory = prods.isNotEmpty ? (prods.first['category']?.toString() ?? 'General') : 'General';
+        if (isOffline) {
+          final double avgPrice = computedUnits > 0 ? (pendingSubtotal / computedUnits) : 0.0;
+          final topCategory = prods.isNotEmpty ? (prods.first['category']?.toString() ?? 'General') : 'General';
 
-        return {
-          'totalRevenue': grossRevenue,
-          'totalCashSales': cashSales,
-          'totalCardSales': cardSales,
-          'totalOnlineSales': onlineSales,
-          'totalSubtotal': totalSubtotal,
-          'totalDiscount': totalDiscounts,
-          'totalTax': totalTax,
-          'totalOrders': matchingOrders.length,
-          'totalUnitsSold': computedUnits,
-          'avgItemPrice': avgPrice,
-          'topCategory': topCategory,
-          'totalExpenses': (summary['totalExpenses'] ?? 0),
-          'netProfit': (grossRevenue - ((summary['totalExpenses'] ?? 0) as num).toDouble()),
-          'dateRange': {
-            'startDate': filters['startDate'] ?? DateTime.now().toIso8601String(),
-            'endDate': filters['endDate'] ?? DateTime.now().toIso8601String(),
-            'period': filters['period'] ?? 'Today',
-          },
-        };
+          return {
+            'totalRevenue': pendingRevenue,
+            'totalCashSales': pendingCash,
+            'totalCardSales': pendingCard,
+            'totalOnlineSales': pendingOnline,
+            'totalSubtotal': pendingSubtotal,
+            'totalDiscount': pendingDiscounts,
+            'totalTax': pendingTax,
+            'totalOrders': matchingOrders.length,
+            'totalUnitsSold': computedUnits,
+            'avgItemPrice': avgPrice,
+            'topCategory': topCategory,
+            'totalExpenses': (summary['totalExpenses'] ?? 0),
+            'netProfit': (pendingRevenue - ((summary['totalExpenses'] ?? 0) as num).toDouble()),
+            'dateRange': {
+              'startDate': filters['startDate'] ?? DateTime.now().toIso8601String(),
+              'endDate': filters['endDate'] ?? DateTime.now().toIso8601String(),
+              'period': filters['period'] ?? 'Today',
+            },
+          };
+        } else {
+          // Merge pending offline orders into online summary
+          final double totalRevenue = rev + pendingRevenue;
+          final double totalSubtotal = ((summary['totalSubtotal'] ?? rev) as num).toDouble() + pendingSubtotal;
+          final double totalDiscount = ((summary['totalDiscount'] ?? 0) as num).toDouble() + pendingDiscounts;
+          final double totalTax = ((summary['totalTax'] ?? 0) as num).toDouble() + pendingTax;
+          final double totalCash = ((summary['totalCashSales'] ?? 0) as num).toDouble() + pendingCash;
+          final double totalCard = ((summary['totalCardSales'] ?? 0) as num).toDouble() + pendingCard;
+          final double totalOnline = ((summary['totalOnlineSales'] ?? 0) as num).toDouble() + pendingOnline;
+          final int totalOrders = ords + matchingOrders.length;
+          final double totalExpenses = ((summary['totalExpenses'] ?? 0) as num).toDouble();
+
+          return {
+            ...summary,
+            'totalRevenue': totalRevenue,
+            'totalSubtotal': totalSubtotal,
+            'totalDiscount': totalDiscount,
+            'totalTax': totalTax,
+            'totalCashSales': totalCash,
+            'totalCardSales': totalCard,
+            'totalOnlineSales': totalOnline,
+            'totalOrders': totalOrders,
+            'totalUnitsSold': computedUnits,
+            'netProfit': totalRevenue - totalExpenses,
+          };
+        }
       }
     } catch (_) {}
   }

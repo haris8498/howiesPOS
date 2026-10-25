@@ -87,12 +87,20 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           final activeShift = await _db.dailyCalculationsDao.getAnyActiveCalculation();
           if (activeShift != null) {
             resolvedShiftId = activeShift.id;
+          } else {
+            final latestShift = await (_db.select(_db.localDailyCalculations)
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+              ..limit(1))
+              .getSingleOrNull();
+            if (latestShift != null) {
+              resolvedShiftId = latestShift.id;
+            }
           }
         }
         final finalOrder = order.copyWith(
           shiftId: resolvedShiftId,
           id: effectiveOrderId,
-          orderNumber: receiptNumber,
+          orderNumber: (order.orderNumber.isNotEmpty && !order.orderNumber.startsWith('ORD-')) ? order.orderNumber : receiptNumber,
         );
 
         // 2. Prepare LocalOrders row

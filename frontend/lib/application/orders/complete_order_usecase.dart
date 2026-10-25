@@ -91,7 +91,7 @@ class CompleteOrderUseCase {
       // 3. Generate Secure Order Identifiers & Tokens
       final orderId = orderNumberGenerator.generateUniqueId();
       final orderNumber = orderNumberGenerator.generateOrderNumber();
-      final tokenNumber = command.orderType == OrderType.takeAway
+      final tokenNumber = (command.orderType == OrderType.takeaway || command.orderType == OrderType.takeAway)
           ? orderNumberGenerator.generateTakeawayToken()
           : null;
 
@@ -106,6 +106,17 @@ class CompleteOrderUseCase {
           customerPhone: command.customerPhone ?? '',
           deliveryAddress: command.deliveryAddress ?? '',
           deliveryFee: totals.deliveryFee,
+        );
+      }
+
+      TakeawayOrderDetail? takeawayDetail;
+      if (command.orderType == OrderType.takeaway || command.orderType == OrderType.takeAway) {
+        takeawayDetail = TakeawayOrderDetail(
+          id: orderId,
+          orderId: orderId,
+          customerName: command.customerName ?? 'Guest Customer',
+          customerPhone: command.customerPhone ?? '',
+          tokenNumber: tokenNumber ?? 'TK-1',
         );
       }
 
@@ -146,6 +157,7 @@ class CompleteOrderUseCase {
         isPaid: true,
         kitchenTicketSent: true,
         onlineDetail: onlineDetail,
+        takeawayDetail: takeawayDetail,
         dineInDetail: dineInDetail,
         payments: [
           OrderPaymentModel(

@@ -1,3 +1,8 @@
+import 'dart:convert';
+import 'package:drift/drift.dart';
+import '../config/feature_flags.dart';
+import '../core/database/app_database.dart';
+import '../core/sync/sync_providers.dart';
 import 'repositories/order_repository_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -56,6 +61,85 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     if (!silent && state.orders.isEmpty) {
       state = state.copyWith(isLoading: true);
     }
+
+    // 1. First, load from local Drift SQLite if offline-first is enabled:
+    List<TakeawayOrder> localTakeawayOrders = [];
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final db = _ref!.read(appDatabaseProvider);
+        final localOrders = await (db.select(db.localOrders)
+              ..where((t) => (t.orderType.equals('takeaway') | t.orderType.equals('takeAway')) & t.isDeleted.equals(false))
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+            .get();
+
+        for (final lo in localOrders) {
+          final items = await db.ordersDao.getOrderItems(lo.id);
+          final outbox = await (db.select(db.syncOutbox)..where((t) => t.entityId.equals(lo.id))).getSingleOrNull();
+
+          String custName = 'Guest Customer';
+          String custPhone = 'N/A';
+          String tok = lo.orderNumber;
+
+          if (outbox != null && outbox.payload.isNotEmpty) {
+            try {
+              final payload = jsonDecode(outbox.payload) as Map<String, dynamic>;
+              custName = payload['customer_name']?.toString() ?? payload['takeaway_detail']?['customer_name']?.toString() ?? custName;
+              custPhone = payload['customer_phone']?.toString() ?? payload['takeaway_detail']?['customer_phone']?.toString() ?? custPhone;
+              tok = payload['token_number']?.toString() ?? payload['takeaway_detail']?['token_number']?.toString() ?? tok;
+            } catch (_) {}
+          }
+
+          final itemsDesc = items.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
+          final mappedItems = items.map((i) {
+            return OrderItem(
+              id: i.id,
+              item: MenuItem(
+                id: i.menuItemId ?? i.id,
+                name: i.itemName,
+                category: 'General',
+                description: '',
+                basePrice: i.unitPrice,
+                imageUrl: '',
+              ),
+              quantity: i.quantity,
+              selectedSize: i.sizeName ?? 'Regular',
+              backendUnitPrice: i.unitPrice,
+              isCancelled: i.isCancelled,
+              cancelReason: i.cancelReason,
+            );
+          }).toList();
+
+          String status = 'In Kitchen';
+          if (lo.status == 'ready') {
+            status = 'Ready for Pickup';
+          } else if (lo.status == 'completed' || lo.status == 'served') {
+            status = 'Completed';
+          } else if (lo.status == 'cancelled') {
+            status = 'Cancelled';
+          }
+
+          localTakeawayOrders.add(TakeawayOrder(
+            id: lo.id,
+            tokenNumber: tok,
+            customerName: custName,
+            customerPhone: custPhone,
+            itemsSummary: itemsDesc.isNotEmpty ? itemsDesc : 'Takeaway Order',
+            subtotal: lo.subtotal,
+            discountPercentage: lo.discountPercentage,
+            discountAmount: lo.discountAmount,
+            taxAmount: lo.taxAmount,
+            grandTotal: lo.grandTotal,
+            createdAt: lo.createdAt,
+            status: status,
+            isPaid: lo.isPaid,
+            items: mappedItems,
+          ));
+        }
+      } catch (err) {
+        print('Error loading local takeaway orders from Drift: $err');
+      }
+    }
+
     try {
       final jsonList = await _ordersApiService.listOrders(orderType: 'takeaway');
       if (jsonList.isNotEmpty) {
@@ -138,14 +222,27 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             })
             .toList();
 
-        state = state.copyWith(orders: list, tokenCounter: list.isEmpty ? 1 : maxToken, isLoading: false);
+        // Merge backend list with any local pending unsynced orders
+        final serverIds = list.map((o) => o.id).toSet();
+        final pendingLocals = localTakeawayOrders.where((lo) => !serverIds.contains(lo.id)).toList();
+        final combined = [...pendingLocals, ...list];
+
+        state = state.copyWith(orders: combined, tokenCounter: combined.isEmpty ? 1 : maxToken, isLoading: false);
         return;
       } else {
+        if (localTakeawayOrders.isNotEmpty) {
+          state = state.copyWith(orders: localTakeawayOrders, tokenCounter: localTakeawayOrders.length + 1, isLoading: false);
+          return;
+        }
         state = state.copyWith(orders: [], tokenCounter: 1, isLoading: false);
         return;
       }
     } catch (e) {
-      print('Error loading takeaway orders: $e');
+      print('Network offline for takeaway orders: $e');
+      if (localTakeawayOrders.isNotEmpty) {
+        state = state.copyWith(orders: localTakeawayOrders, tokenCounter: localTakeawayOrders.length + 1, isLoading: false);
+        return;
+      }
     }
     state = state.copyWith(isLoading: false);
   }
@@ -182,51 +279,6 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             }
           ];
 
-    try {
-      final res = await _ordersApiService.createOrder({
-        'order_type': 'takeaway',
-        'token_number': tokenStr,
-        'customer_name': customerName.isNotEmpty ? customerName : 'Guest Customer',
-        'customer_phone': customerPhone.isNotEmpty ? customerPhone : 'N/A',
-        'subtotal': subtotal,
-        'discount_percentage': discountPercentage,
-        'discount_amount': effectiveDiscount,
-        'grand_total': grandTotal,
-        'status': 'accepted',
-        'is_paid': false,
-        'payment_status': 'UNPAID',
-        'kitchen_ticket_sent': true,
-        'items': orderItemsPayload,
-      });
-
-      final ord = OrderModel.fromBackendJson(res);
-      final newOrder = TakeawayOrder(
-        id: ord.id,
-        tokenNumber: ord.tokenNumber ?? tokenStr,
-        customerName: ord.customerName ?? (customerName.isEmpty ? 'Guest Customer' : customerName),
-        customerPhone: ord.customerPhone ?? (customerPhone.isEmpty ? 'N/A' : customerPhone),
-        itemsSummary: itemsSummary,
-        subtotal: subtotal,
-        discountPercentage: ord.discountPercentage,
-        discountAmount: ord.discountAmount,
-        taxAmount: 0.0,
-        grandTotal: grandTotal,
-        createdAt: ord.createdAt,
-        status: 'In Kitchen',
-        isPaid: false,
-        items: ord.items,
-      );
-
-      state = state.copyWith(
-        orders: [newOrder, ...state.orders.where((o) => o.id != ord.id)],
-        tokenCounter: nextToken + 1,
-      );
-      await loadTakeawayOrders();
-      return;
-    } catch (e) {
-      print('Error creating takeaway order in DB: $e');
-    }
-
     final fallbackItems = orderItemsPayload.map((it) {
       final itemName = it['item_name']?.toString() ?? 'Takeaway Meal';
       final qty = (it['quantity'] as num?)?.toInt() ?? 1;
@@ -248,8 +300,9 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       );
     }).toList();
 
+    final orderId = const Uuid().v4();
     final newOrder = TakeawayOrder(
-      id: const Uuid().v4(),
+      id: orderId,
       tokenNumber: tokenStr,
       customerName: customerName.isEmpty ? 'Guest Customer' : customerName,
       customerPhone: customerPhone.isEmpty ? 'N/A' : customerPhone,
@@ -265,10 +318,84 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       items: fallbackItems,
     );
 
+    // 1. SAVE TO LOCAL DRIFT DATABASE & SYNC OUTBOX ATOMICALLY (§5.2, §11, §12)
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final calcState = _ref!.read(dailyCalculationProvider);
+        final String? activeShiftId = calcState.selectedRecord?.id;
+
+        final orderModel = OrderModel(
+          id: orderId,
+          orderNumber: tokenStr,
+          type: OrderType.takeaway,
+          status: OrderStatus.accepted,
+          items: fallbackItems,
+          createdAt: DateTime.now(),
+          shiftId: activeShiftId,
+          subtotalOverride: subtotal,
+          discountPercentage: discountPercentage,
+          discountAmount: effectiveDiscount,
+          grandTotalOverride: grandTotal,
+          paymentStatus: 'UNPAID',
+          isPaid: false,
+          kitchenTicketSent: true,
+          takeawayDetail: TakeawayOrderDetail(
+            id: const Uuid().v7(),
+            orderId: orderId,
+            customerName: customerName.isNotEmpty ? customerName : 'Guest Customer',
+            customerPhone: customerPhone.isNotEmpty ? customerPhone : 'N/A',
+            tokenNumber: tokenStr,
+          ),
+        );
+        await orderRepo.saveOrder(orderModel);
+      } catch (err) {
+        print('Error saving takeaway order to local SQLite/outbox: $err');
+      }
+    }
+
+    // 2. Optimistic UI update
     state = state.copyWith(
-      orders: [newOrder, ...state.orders],
+      orders: [newOrder, ...state.orders.where((o) => o.id != orderId)],
       tokenCounter: nextToken + 1,
     );
+
+    // 3. Attempt direct HTTP push if online; if offline, SyncOutbox will push automatically
+    try {
+      final res = await _ordersApiService.createOrder({
+        'id': orderId,
+        'order_type': 'takeaway',
+        'token_number': tokenStr,
+        'customer_name': customerName.isNotEmpty ? customerName : 'Guest Customer',
+        'customer_phone': customerPhone.isNotEmpty ? customerPhone : 'N/A',
+        'subtotal': subtotal,
+        'discount_percentage': discountPercentage,
+        'discount_amount': effectiveDiscount,
+        'grand_total': grandTotal,
+        'status': 'accepted',
+        'is_paid': false,
+        'payment_status': 'UNPAID',
+        'kitchen_ticket_sent': true,
+        'items': orderItemsPayload,
+      });
+
+      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+        try {
+          final db = _ref!.read(appDatabaseProvider);
+          await db.ordersDao.markOrderSynced(orderId, 1, DateTime.now());
+          await (db.delete(db.syncOutbox)..where((t) => t.entityId.equals(orderId))).go();
+        } catch (_) {}
+      }
+
+      await loadTakeawayOrders(silent: true);
+    } catch (e) {
+      print('Takeaway order queued safely in local Drift SQLite outbox: $e');
+      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+        try {
+          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> updateTakeawayOrder({
@@ -339,6 +466,36 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       return o;
     }).toList();
     state = state.copyWith(orders: updatedList);
+
+    // Update local SQLite order atomically
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final existingLocal = await orderRepo.getOrderById(orderId);
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            subtotalOverride: subtotal,
+            discountPercentage: discountPercentage,
+            discountAmount: effectiveDiscount,
+            grandTotalOverride: grandTotal,
+            items: updatedItems,
+            takeawayDetail: TakeawayOrderDetail(
+              id: existingLocal.takeawayDetail?.id ?? const Uuid().v7(),
+              orderId: orderId,
+              customerName: customerName.isNotEmpty ? customerName : existingLocal.customerName ?? 'Guest Customer',
+              customerPhone: customerPhone.isNotEmpty ? customerPhone : existingLocal.customerPhone ?? 'N/A',
+              tokenNumber: existingLocal.tokenNumber ?? existingLocal.orderNumber,
+            ),
+          );
+          await orderRepo.updateOrder(updated);
+          try {
+            _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+          } catch (_) {}
+        }
+      } catch (err) {
+        print('Error updating local takeaway order in Drift: $err');
+      }
+    }
 
     try {
       await _ordersApiService.updateOrder(orderId, {
@@ -450,6 +607,86 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     final pct = discountPercentage ?? existing.discountPercentage;
     final amt = discountAmount ?? existing.discountAmount;
     final grandTotal = (subtotal - amt + existing.taxAmount).clamp(0.0, double.infinity);
+
+    // 1. Update in Local SQLite & sync outbox atomically
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final existingLocal = await orderRepo.getOrderById(orderId);
+        final calcState = _ref!.read(dailyCalculationProvider);
+        final String? activeShiftId = calcState.selectedRecord?.id;
+
+        final paymentList = <OrderPaymentModel>[];
+        if (payments != null && payments.isNotEmpty) {
+          for (final p in payments) {
+            paymentList.add(OrderPaymentModel(
+              id: const Uuid().v7(),
+              paymentMethod: (p['payment_method']?.toString() ?? paymentMethod).toLowerCase(),
+              amount: double.tryParse(p['amount']?.toString() ?? '0') ?? grandTotal,
+              tenderedAmount: double.tryParse(p['tendered_amount']?.toString() ?? p['amount']?.toString() ?? '0') ?? grandTotal,
+              changeReturned: double.tryParse(p['change_returned']?.toString() ?? '0') ?? 0.0,
+              paymentStatus: 'COMPLETED',
+              createdAt: DateTime.now(),
+            ));
+          }
+        } else {
+          paymentList.add(OrderPaymentModel(
+            id: const Uuid().v7(),
+            paymentMethod: paymentMethod.toLowerCase(),
+            amount: grandTotal,
+            tenderedAmount: grandTotal,
+            changeReturned: 0.0,
+            paymentStatus: 'COMPLETED',
+            createdAt: DateTime.now(),
+          ));
+        }
+
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            status: OrderStatus.completed,
+            isPaid: true,
+            paymentStatus: 'PAID',
+            discountPercentage: pct,
+            discountAmount: amt,
+            grandTotalOverride: grandTotal,
+            payments: paymentList,
+            shiftId: existingLocal.shiftId ?? activeShiftId,
+          );
+          await orderRepo.updateOrder(updated);
+        } else {
+          final newOrderModel = OrderModel(
+            id: orderId,
+            orderNumber: existing.tokenNumber,
+            type: OrderType.takeaway,
+            status: OrderStatus.completed,
+            items: existing.items,
+            createdAt: existing.createdAt,
+            shiftId: activeShiftId,
+            subtotalOverride: subtotal,
+            discountPercentage: pct,
+            discountAmount: amt,
+            grandTotalOverride: grandTotal,
+            paymentStatus: 'PAID',
+            isPaid: true,
+            kitchenTicketSent: true,
+            takeawayDetail: TakeawayOrderDetail(
+              id: const Uuid().v7(),
+              orderId: orderId,
+              customerName: existing.customerName,
+              customerPhone: existing.customerPhone,
+              tokenNumber: existing.tokenNumber,
+            ),
+            payments: paymentList,
+          );
+          await orderRepo.saveOrder(newOrderModel);
+        }
+        try {
+          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+        } catch (_) {}
+      } catch (err) {
+        print('Error updating takeaway payment in Drift: $err');
+      }
+    }
 
     try {
       await _ordersApiService.updateOrder(orderId, {

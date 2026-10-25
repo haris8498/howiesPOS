@@ -1,11 +1,19 @@
+import 'dart:convert';
+import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+import '../config/feature_flags.dart';
+import '../core/database/app_database.dart';
+import '../core/sync/sync_providers.dart';
 import '../domain/models/delivery_model.dart';
+import '../domain/models/menu_item.dart';
 import '../domain/models/order_model.dart';
 import '../services/api/api_providers.dart';
 import '../services/api/delivery_api_service.dart';
 import '../services/api/orders_api_service.dart';
 import '../services/receipt_printer_service.dart';
 import 'daily_calculation_repository.dart';
+import 'repositories/order_repository_provider.dart';
 
 class DeliveryState {
   final List<DeliveryOrder> deliveries;
@@ -54,6 +62,93 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     if (!silent && state.deliveries.isEmpty) {
       state = state.copyWith(isLoading: true);
     }
+
+    // 1. First, load any delivery/online orders from local Drift SQLite
+    List<DeliveryOrder> localDeliveries = [];
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final db = _ref!.read(appDatabaseProvider);
+        final localOrders = await (db.select(db.localOrders)
+              ..where((t) => (t.orderType.equals('online') | t.orderType.equals('delivery')) & t.isDeleted.equals(false))
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+            .get();
+
+        for (final lo in localOrders) {
+          final items = await db.ordersDao.getOrderItems(lo.id);
+          final outbox = await (db.select(db.syncOutbox)..where((t) => t.entityId.equals(lo.id))).getSingleOrNull();
+
+          String custName = 'Customer';
+          String custPhone = 'N/A';
+          String delAddress = 'Direct Delivery';
+          double fee = 150.0;
+          String payMethod = 'Cash on Delivery';
+
+          if (outbox != null && outbox.payload.isNotEmpty) {
+            try {
+              final payload = jsonDecode(outbox.payload) as Map<String, dynamic>;
+              custName = payload['customer_name']?.toString() ?? custName;
+              custPhone = payload['customer_phone']?.toString() ?? custPhone;
+              delAddress = payload['delivery_address']?.toString() ?? delAddress;
+              fee = double.tryParse(payload['delivery_fee']?.toString() ?? '150') ?? fee;
+              payMethod = payload['payment_method']?.toString() ?? payMethod;
+            } catch (_) {}
+          }
+
+          final itemsDesc = items.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
+          final mappedItems = items.map((i) {
+            return OrderItem(
+              id: i.id,
+              item: MenuItem(
+                id: i.menuItemId ?? i.id,
+                name: i.itemName,
+                category: 'General',
+                description: '',
+                basePrice: i.unitPrice,
+                imageUrl: '',
+              ),
+              quantity: i.quantity,
+              selectedSize: i.sizeName ?? 'Regular',
+              backendUnitPrice: i.unitPrice,
+              isCancelled: i.isCancelled,
+              cancelReason: i.cancelReason,
+            );
+          }).toList();
+
+          DeliveryStatus status = DeliveryStatus.pending;
+          if (lo.status == 'ready' || lo.status == 'readyForDispatch') {
+            status = DeliveryStatus.readyForDispatch;
+          } else if (lo.status == 'outForDelivery' || lo.status == 'on_the_way') {
+            status = DeliveryStatus.outForDelivery;
+          } else if (lo.status == 'completed' || lo.status == 'delivered') {
+            status = DeliveryStatus.delivered;
+          } else if (lo.status == 'cancelled') {
+            status = DeliveryStatus.cancelled;
+          }
+
+          localDeliveries.add(DeliveryOrder(
+            id: 'del-${lo.id}',
+            orderId: lo.id,
+            orderNumber: lo.orderNumber,
+            customerName: custName,
+            customerPhone: custPhone,
+            deliveryAddress: delAddress,
+            deliveryCharge: fee,
+            totalAmount: lo.grandTotal,
+            itemsSummary: itemsDesc.isNotEmpty ? itemsDesc : 'Delivery Order',
+            paymentStatus: lo.paymentStatus,
+            paymentMethod: payMethod,
+            status: status,
+            createdAt: lo.createdAt,
+            estimatedDeliveryTime: lo.createdAt.add(const Duration(minutes: 30)),
+            orderSource: 'Direct Delivery',
+            items: mappedItems,
+          ));
+        }
+      } catch (err) {
+        print('Error loading local delivery orders from Drift: $err');
+      }
+    }
+
     try {
       // 1. Riders
       final ridersJson = await _deliveryApiService.listRiders();
@@ -125,13 +220,22 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
         }
       }
 
+      // Merge with any local pending unsynced delivery orders
+      final serverOrderIds = mergedDeliveries.map((d) => d.orderId).toSet();
+      final pendingLocals = localDeliveries.where((ld) => !serverOrderIds.contains(ld.orderId)).toList();
+      final combined = [...pendingLocals, ...mergedDeliveries];
+
       state = state.copyWith(
         riders: riders,
-        deliveries: mergedDeliveries,
+        deliveries: combined,
         isLoading: false,
       );
     } catch (e) {
-      print('Error loading delivery tracking data: $e');
+      print('Network offline for delivery tracking: $e');
+      if (localDeliveries.isNotEmpty) {
+        state = state.copyWith(deliveries: localDeliveries, isLoading: false);
+        return;
+      }
       state = state.copyWith(isLoading: false);
     }
   }
@@ -157,10 +261,32 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
   }) async {
     final now = DateTime.now();
     final tempOrderNum = 'HH-${(now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0')}';
+    final rawOrderId = const Uuid().v4();
+
+    final effectiveItems = items.map((it) {
+      final itemName = it['item_name']?.toString() ?? it['name']?.toString() ?? 'Delivery Meal';
+      final qty = (it['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = double.tryParse(it['unit_price']?.toString() ?? it['price']?.toString() ?? '0') ?? (subtotal / (qty > 0 ? qty : 1));
+      return OrderItem(
+        id: const Uuid().v4(),
+        item: MenuItem(
+          id: it['menu_item_id']?.toString() ?? it['id']?.toString() ?? const Uuid().v4(),
+          name: itemName,
+          category: 'General',
+          description: '',
+          basePrice: unitPrice,
+          imageUrl: '',
+        ),
+        quantity: qty,
+        selectedSize: it['selected_size']?.toString() ?? 'Regular',
+        selectedCrust: it['selected_crust']?.toString() ?? 'Original',
+        backendUnitPrice: unitPrice,
+      );
+    }).toList();
 
     DeliveryOrder createdOrder = DeliveryOrder(
-      id: 'del-${now.millisecondsSinceEpoch}',
-      orderId: 'ord-${now.millisecondsSinceEpoch}',
+      id: 'del-$rawOrderId',
+      orderId: rawOrderId,
       orderNumber: tempOrderNum,
       customerName: customerName,
       customerPhone: customerPhone,
@@ -174,10 +300,70 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       createdAt: now,
       estimatedDeliveryTime: now.add(const Duration(minutes: 30)),
       orderSource: 'Direct Delivery',
+      items: effectiveItems,
     );
 
+    // 1. SAVE TO LOCAL DRIFT DATABASE & SYNC OUTBOX ATOMICALLY (§5.2, §11, §12)
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final calcState = _ref!.read(dailyCalculationProvider);
+        final String? activeShiftId = calcState.selectedRecord?.id;
+        final bool isPaidNow = paymentStatus.toUpperCase() == 'PAID';
+
+        final paymentList = <OrderPaymentModel>[];
+        if (isPaidNow) {
+          paymentList.add(OrderPaymentModel(
+            id: const Uuid().v7(),
+            paymentMethod: paymentMethod.toLowerCase(),
+            amount: grandTotal,
+            tenderedAmount: grandTotal,
+            changeReturned: 0.0,
+            paymentStatus: 'COMPLETED',
+            createdAt: now,
+          ));
+        }
+
+        final orderModel = OrderModel(
+          id: rawOrderId,
+          orderNumber: tempOrderNum,
+          type: OrderType.online,
+          status: isPaidNow ? OrderStatus.completed : OrderStatus.accepted,
+          items: effectiveItems,
+          createdAt: now,
+          shiftId: activeShiftId,
+          subtotalOverride: subtotal,
+          discountPercentage: discountPercentage,
+          discountAmount: discountAmount,
+          taxAmount: taxAmount,
+          grandTotalOverride: grandTotal,
+          paymentStatus: paymentStatus.toUpperCase(),
+          isPaid: isPaidNow,
+          kitchenTicketSent: true,
+          payments: paymentList,
+          onlineDetail: OnlineOrderDetail(
+            id: const Uuid().v7(),
+            orderId: rawOrderId,
+            customerName: customerName,
+            customerPhone: customerPhone,
+            deliveryAddress: deliveryAddress,
+            deliveryFee: deliveryFee,
+            orderSource: 'Direct Delivery',
+          ),
+        );
+        await orderRepo.saveOrder(orderModel);
+      } catch (err) {
+        print('Error saving delivery order to local SQLite/outbox: $err');
+      }
+    }
+
+    // 2. Optimistic UI update
+    state = state.copyWith(deliveries: [createdOrder, ...state.deliveries.where((d) => d.orderId != rawOrderId)]);
+
+    // 3. Attempt direct HTTP push if online; if offline, SyncOutbox will push automatically
     try {
       final res = await _ordersApiService.createOrder({
+        'id': rawOrderId,
         'order_type': 'online',
         'order_source': 'Direct Delivery',
         'customer_name': customerName,
@@ -197,12 +383,24 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
 
       if (res['id'] != null) {
         createdOrder = DeliveryOrder.fromBackendJson(res);
+        if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+          try {
+            final db = _ref!.read(appDatabaseProvider);
+            await db.ordersDao.markOrderSynced(rawOrderId, 1, DateTime.now());
+            await (db.delete(db.syncOutbox)..where((t) => t.entityId.equals(rawOrderId))).go();
+          } catch (_) {}
+        }
       }
     } catch (e) {
-      print('⚠️ Error creating delivery order in DB: $e');
+      print('Delivery order queued safely in local Drift SQLite outbox: $e');
+      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+        try {
+          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+        } catch (_) {}
+      }
     }
 
-    state = state.copyWith(deliveries: [createdOrder, ...state.deliveries]);
+    state = state.copyWith(deliveries: [createdOrder, ...state.deliveries.where((d) => d.orderId != rawOrderId && d.id != createdOrder.id)]);
     return createdOrder;
   }
 
@@ -222,6 +420,38 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     required List<Map<String, dynamic>> items,
   }) async {
     final rawOrderId = orderId.startsWith('del-') || orderId.startsWith('del_') ? (orderId.contains('_') ? orderId.substring(4) : orderId) : orderId;
+
+    // Update local SQLite order atomically
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final existingLocal = await orderRepo.getOrderById(rawOrderId);
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            subtotalOverride: subtotal,
+            discountPercentage: discountPercentage,
+            discountAmount: discountAmount,
+            taxAmount: taxAmount,
+            grandTotalOverride: grandTotal,
+            onlineDetail: OnlineOrderDetail(
+              id: existingLocal.onlineDetail?.id ?? const Uuid().v7(),
+              orderId: rawOrderId,
+              customerName: customerName,
+              customerPhone: customerPhone,
+              deliveryAddress: deliveryAddress,
+              deliveryFee: deliveryFee,
+              orderSource: existingLocal.onlineDetail?.orderSource ?? 'Direct Delivery',
+            ),
+          );
+          await orderRepo.updateOrder(updated);
+          try {
+            _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+          } catch (_) {}
+        }
+      } catch (err) {
+        print('Error updating local delivery order in Drift: $err');
+      }
+    }
 
     try {
       await _ordersApiService.updateOrder(rawOrderId, {
@@ -390,6 +620,59 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     final rawOrderId = target.orderId.isNotEmpty
         ? target.orderId
         : (deliveryId.startsWith('del_') ? deliveryId.substring(4) : (deliveryId.startsWith('del-') ? deliveryId.substring(4) : deliveryId));
+
+    // 1. Update in Local SQLite & sync outbox atomically
+    if (FeatureFlags.offlineFirstEnabled && _ref != null && rawOrderId.isNotEmpty && rawOrderId.length >= 20) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final existingLocal = await orderRepo.getOrderById(rawOrderId);
+        final calcState = _ref!.read(dailyCalculationProvider);
+        final String? activeShiftId = calcState.selectedRecord?.id;
+
+        final paymentList = <OrderPaymentModel>[];
+        if (isPaid) {
+          if (payments != null && payments.isNotEmpty) {
+            for (final p in payments) {
+              paymentList.add(OrderPaymentModel(
+                id: const Uuid().v7(),
+                paymentMethod: (p['payment_method']?.toString() ?? paymentMethod ?? 'cash').toLowerCase(),
+                amount: double.tryParse(p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? 0.0),
+                tenderedAmount: double.tryParse(p['tendered_amount']?.toString() ?? p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? 0.0),
+                changeReturned: double.tryParse(p['change_returned']?.toString() ?? '0') ?? 0.0,
+                paymentStatus: 'COMPLETED',
+                createdAt: DateTime.now(),
+              ));
+            }
+          } else {
+            paymentList.add(OrderPaymentModel(
+              id: const Uuid().v7(),
+              paymentMethod: (paymentMethod ?? 'cash').toLowerCase(),
+              amount: existingLocal?.grandTotal ?? 0.0,
+              tenderedAmount: existingLocal?.grandTotal ?? 0.0,
+              changeReturned: 0.0,
+              paymentStatus: 'COMPLETED',
+              createdAt: DateTime.now(),
+            ));
+          }
+        }
+
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            status: isPaid ? OrderStatus.completed : existingLocal.status,
+            isPaid: isPaid,
+            paymentStatus: paymentStatus.toUpperCase(),
+            payments: paymentList.isNotEmpty ? paymentList : existingLocal.payments,
+            shiftId: existingLocal.shiftId ?? activeShiftId,
+          );
+          await orderRepo.updateOrder(updated);
+        }
+        try {
+          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+        } catch (_) {}
+      } catch (err) {
+        print('Error updating local delivery payment in Drift: $err');
+      }
+    }
 
     if (rawOrderId.isNotEmpty && rawOrderId.length >= 20) {
       try {

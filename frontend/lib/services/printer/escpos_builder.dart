@@ -556,19 +556,23 @@ class EscPosBuilder {
       final qtyStr = item.isCancelled
           ? '-${item.quantity}'
           : '${item.quantity}';
-      final displayName = item.isCancelled ? '[CANCELLED] ${item.name}' : item.name;
+      final displayName = item.isCancelled ? '[CANCELLED] -- ${item.name} --' : item.name;
+
+      if (item.isCancelled) {
+        builder.writeLine('--------------------------------', align: EscPosAlign.left);
+      }
 
       final nameLines = _wrapText(displayName, nameColWidth);
       final firstLine = nameLines.isNotEmpty ? nameLines.first : displayName;
 
       builder.row([
-        EscPosColumn(text: firstLine, width: nameColWidth, align: EscPosAlign.left, isBold: false),
+        EscPosColumn(text: firstLine, width: nameColWidth, align: EscPosAlign.left, isBold: item.isCancelled),
         EscPosColumn(text: qtyStr, width: qtyColWidth, align: EscPosAlign.right, isBold: true),
       ]);
 
       for (int i = 1; i < nameLines.length; i++) {
         builder.row([
-          EscPosColumn(text: nameLines[i], width: nameColWidth, align: EscPosAlign.left, isBold: false),
+          EscPosColumn(text: nameLines[i], width: nameColWidth, align: EscPosAlign.left, isBold: item.isCancelled),
           EscPosColumn(text: '', width: qtyColWidth, align: EscPosAlign.right),
         ]);
       }
@@ -599,6 +603,10 @@ class EscPosBuilder {
             EscPosColumn(text: '', width: qtyColWidth, align: EscPosAlign.right),
           ]);
         }
+      }
+
+      if (item.isCancelled) {
+        builder.writeLine('--------------------------------', align: EscPosAlign.left);
       }
 
       builder.divider();

@@ -155,6 +155,20 @@ export class OrdersService {
     dto: CreateOrderDto,
     explicitOrderId?: string,
   ): Promise<OrderWithDetails> {
+    // 0. Idempotency guard: If order with this explicit ID already exists, return it immediately
+    if (explicitOrderId) {
+      const existingOrderById = await tx.order.findUnique({
+        where: { id: explicitOrderId },
+        include: ORDER_INCLUDE,
+      });
+      if (existingOrderById) {
+        this.logger.log(
+          `Order '${explicitOrderId}' already exists in database — returning existing record (idempotent).`,
+        );
+        return existingOrderById;
+      }
+    }
+
     // 1. Resolve customer snapshot for online / takeaway
     let customerName = dto.customer_name ?? '';
       let customerPhone = dto.customer_phone ?? '';
@@ -778,18 +792,15 @@ export class OrdersService {
             },
           });
 
-          // Free table if order completed/paid
-          if (dto.status === 'completed' || isPaid) {
-            await tx.restaurantTable.update({
-              where: { id: tableId },
-              data: { current_bill_amount: 0.0, status: 'available', active_order_id: null },
-            }).catch(() => {});
-          } else {
-            await tx.restaurantTable.update({
-              where: { id: tableId },
-              data: { current_bill_amount: grandTotal, status: 'occupied' },
-            }).catch(() => {});
-          }
+          // Update table with current bill and keep status as occupied.
+          // Tables remain occupied until staff explicitly clicks 'Free Table' or releases the table.
+          await tx.restaurantTable.update({
+            where: { id: tableId },
+            data: {
+              current_bill_amount: grandTotal,
+              status: 'occupied',
+            },
+          }).catch(() => {});
         }
       }
 

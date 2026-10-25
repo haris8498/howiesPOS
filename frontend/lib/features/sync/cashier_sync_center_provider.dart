@@ -347,9 +347,9 @@ class CashierSyncCenterNotifier extends StateNotifier<CashierSyncCenterState> {
     if (db == null) return;
     try {
 
-      // Query local orders matching shiftId OR within shift time window
+      // Query local orders matching shiftId OR unassigned shift
       final orders = await (db.select(db.localOrders)
-            ..where((t) => t.shiftId.equals(shiftId) & t.isDeleted.equals(false))
+            ..where((t) => (t.shiftId.equals(shiftId) | t.shiftId.isNull()) & t.isDeleted.equals(false))
             ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
           .get();
 
@@ -423,7 +423,7 @@ class CashierSyncCenterNotifier extends StateNotifier<CashierSyncCenterState> {
       // Also get any local orders not yet on server
 
       final localOrders = await (db.select(db.localOrders)
-            ..where((t) => t.shiftId.equals(shiftId) & t.isDeleted.equals(false)))
+            ..where((t) => (t.shiftId.equals(shiftId) | t.shiftId.isNull()) & t.isDeleted.equals(false)))
           .get();
 
       final serverOrderIds = {for (final o in serverOrders) o.id};
@@ -574,9 +574,21 @@ class CashierSyncCenterNotifier extends StateNotifier<CashierSyncCenterState> {
 
     // Type filter
     if (state.selectedTypeFilter != 'all') {
-      filtered = filtered.where((o) =>
-          o.rawOrderType.toLowerCase() == state.selectedTypeFilter.toLowerCase() ||
-          o.orderType.toLowerCase() == state.selectedTypeFilter.toLowerCase()).toList();
+      final f = state.selectedTypeFilter.toLowerCase();
+      filtered = filtered.where((o) {
+        final raw = o.rawOrderType.toLowerCase();
+        final disp = o.orderType.toLowerCase();
+        if (f == 'takeaway' || f == 'take_away') {
+          return raw.contains('take') || disp.contains('take');
+        }
+        if (f == 'delivery' || f == 'online') {
+          return raw.contains('deliv') || raw.contains('online') || disp.contains('deliv') || disp.contains('online');
+        }
+        if (f.contains('dine')) {
+          return raw.contains('dine') || disp.contains('dine');
+        }
+        return raw == f || disp == f;
+      }).toList();
     }
 
     // Status filter

@@ -256,6 +256,26 @@ export class SyncPushService {
           }
         }
       } catch (err: any) {
+        const isDuplicatePrimaryKey =
+          (err?.code === 'P2002' ||
+            (err.message && err.message.includes('Unique constraint failed'))) &&
+          mutation.operation_type === 'INSERT';
+
+        if (isDuplicatePrimaryKey) {
+          this.logger.log(
+            `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) already exists in database — resolving as DUPLICATE`,
+          );
+          completedInBatch.add(mutation.operation_id);
+          results.push({
+            operation_id: mutation.operation_id,
+            entity_id: mutation.entity_id,
+            status: 'DUPLICATE',
+            server_version: mutation.base_version ?? 1,
+            server_timestamp: new Date().toISOString(),
+          });
+          continue;
+        }
+
         this.logger.error(
           `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) failed: ${err.message}`,
         );

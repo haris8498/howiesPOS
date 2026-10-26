@@ -99,7 +99,24 @@ export class TablesService {
       const orderFromActiveId = isOccupied && t.active_order_id ? fallbackOrdersMap.get(t.active_order_id) : null;
       const activeOrder = isOccupied ? (orderFromActiveId || orderFromDineIn) : null;
 
-      const effectiveOccupied = isOccupied;
+      // SYNC-034: Self-heal table lockup if occupied but has no active unpaid order
+      if (isOccupied && !activeOrder) {
+        status = 'available';
+        this.prisma.restaurantTable
+          .update({
+            where: { id: t.id },
+            data: {
+              status: 'available',
+              active_order_id: null,
+              current_bill_amount: 0,
+              current_customer_count: 0,
+              occupied_since: null,
+            },
+          })
+          .catch((err) => this.logger.warn(`Failed to auto-heal table ${t.id}: ${err}`));
+      }
+
+      const effectiveOccupied = status === 'occupied';
 
       const activeItems =
         effectiveOccupied

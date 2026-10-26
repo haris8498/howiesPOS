@@ -152,6 +152,14 @@ describe('TablesService', () => {
     expect(result[0].table_number).toBe('T-01');
   });
 
+  it('should self-heal occupied table without active orders to available (SYNC-034)', async () => {
+    const result = await service.listTables();
+    const table2 = result.find((t) => t.id === 'tbl-2');
+    expect(table2).toBeDefined();
+    expect(table2.status).toBe('available');
+    expect(table2.current_order_items).toEqual([]);
+  });
+
   it('should list tables with search filter', async () => {
     const result = await service.listTables({ search: 'T-01' });
     expect(result).toHaveLength(2);

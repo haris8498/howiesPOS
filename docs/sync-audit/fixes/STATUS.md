@@ -8,4 +8,4 @@
 | `sync005-device-identity-shift` | SYNC-005 | done | 88e302b | Dynamic device identity & terminal-scoped shift active index |
 | `sync004-push-pull-sequencing` | SYNC-004 | done | 5e44673 | Mutex push-then-pull & state-aware delta application |
 | `sync006-audit-leftovers-fixer` | Various | done | b6e8689 | Leftovers backlog (56 cataloged: 24 resolved, 15 needs-decision, 17 skipped) |
-| `sync007-regression-verifier` | Verification | done | a06b134 | Full test suite, flag-OFF regression, S1-S7 validation - RECOMMENDATION: GO |
+| `sync007-regression-verifier` | Verification | done | cce4a22 | Full test suite, flag-OFF regression, S1-S7 validation - RECOMMENDATION: GO |

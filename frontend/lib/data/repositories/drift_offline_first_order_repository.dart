@@ -67,11 +67,15 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
       // ── ONE Atomic Drift Transaction (§5.2, §11, §12) ────────
       return await _db.transaction(() async {
+        // Resolve active shift first to bind business date and prevent midnight rollover resets (SYNC-038)
+        final activeShift = await _db.dailyCalculationsDao.getAnyActiveCalculation();
+        final businessDate = activeShift?.createdAt ?? DateTime.now();
+        final businessDateStr = DateFormat('yyyy-MM-dd').format(businessDate);
+
         // 1. Atomic receipt sequence increment from TerminalSequences (§4.3)
-        final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
         final seq = await _db.terminalSequencesDao.getNextSequence(
           'ORDER_NUMBER',
-          todayStr,
+          businessDateStr,
           start: 101,
           max: 999,
         );
@@ -84,7 +88,6 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
         String? resolvedShiftId = order.shiftId;
         if (resolvedShiftId == null || resolvedShiftId.isEmpty) {
-          final activeShift = await _db.dailyCalculationsDao.getAnyActiveCalculation();
           if (activeShift != null) {
             resolvedShiftId = activeShift.id;
           } else {

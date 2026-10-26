@@ -536,16 +536,42 @@ export class SyncPushService {
           `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) failed: ${err.message}`,
         );
 
+        const errMessage = (err.message || '').toLowerCase();
+
+        // SYNC-022: Classify transient database / connection errors as FAILED_RETRYABLE
+        const isTransientDbError =
+          ['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2034'].includes(err?.code) ||
+          errMessage.includes('timeout') ||
+          errMessage.includes('deadlock') ||
+          errMessage.includes('write conflict') ||
+          errMessage.includes('connection') ||
+          errMessage.includes('pool') ||
+          errMessage.includes('temporarily unavailable') ||
+          errMessage.includes('econnrefused') ||
+          errMessage.includes('etimedout') ||
+          errMessage.includes('closed');
+
         const isConflict =
-          err instanceof ConflictException ||
-          err?.code === 'P2002' ||
-          (err.message && err.message.toLowerCase().includes('already exists')) ||
-          (err.message && err.message.toLowerCase().includes('conflict'));
+          !isTransientDbError &&
+          (err instanceof ConflictException ||
+            err?.code === 'P2002' ||
+            errMessage.includes('already exists') ||
+            errMessage.includes('conflict') ||
+            errMessage.includes('version mismatch'));
+
+        let status: 'CONFLICT' | 'FAILED_RETRYABLE' | 'FAILED_FATAL';
+        if (isTransientDbError) {
+          status = 'FAILED_RETRYABLE';
+        } else if (isConflict) {
+          status = 'CONFLICT';
+        } else {
+          status = 'FAILED_FATAL';
+        }
 
         results.push({
           operation_id: mutation.operation_id,
           entity_id: mutation.entity_id,
-          status: isConflict ? 'CONFLICT' : 'FAILED_FATAL',
+          status,
           server_version: mutation.base_version ?? 1,
           server_timestamp: new Date().toISOString(),
           error_message: err.message || 'Transaction execution failed',

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
@@ -140,99 +141,143 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
     final health = ref.watch(rawSyncHealthProvider);
     final failedCount = health.failedCount;
 
+    final authState = ref.watch(authProvider);
+    final userRole = authState.currentUser.role;
+    final currentRoute = ModalRoute.of(context)?.settings.name ?? '';
+    final isOwner = userRole == UserRole.owner || currentRoute.contains('/owner');
+    final isManager = userRole == UserRole.manager || currentRoute.contains('/manager');
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryRed.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryRed.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.cloud_sync_rounded, color: AppColors.primaryRed, size: 24),
                   ),
-                  child: const Icon(Icons.cloud_sync_rounded, color: AppColors.primaryRed, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'DATA SYNC LEDGER',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.5,
-                    color: isDark ? Colors.white : AppColors.textPrimary,
+                  const SizedBox(width: 12),
+                  Text(
+                    'DATA SYNC LEDGER',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      color: isDark ? Colors.white : AppColors.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
-                          shape: BoxShape.circle,
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: (isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A)).withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        isOffline ? 'Offline - Local Mode' : 'Cloud Sync Active',
-                        style: TextStyle(
-                          color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
+                        const SizedBox(width: 6),
+                        Text(
+                          isOffline ? 'Offline - Local Mode' : 'Cloud Sync Active',
+                          style: TextStyle(
+                            color: isOffline ? const Color(0xFFD97706) : const Color(0xFF16A34A),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Store transaction ledger with live cloud synchronization status (🟢 Synced / 🔴 Pending)',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
-                fontWeight: FontWeight.w500,
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              Text(
+                'Store transaction ledger with live cloud synchronization status (🟢 Synced / 🔴 Pending)',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
+        const SizedBox(width: 16),
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             if (failedCount > 0) ...[
               ElevatedButton.icon(
+                key: const ValueKey('retry_failed_button'),
                 onPressed: () async {
-                  await syncNotifier.clearFailedErrors();
+                  final auth = ref.read(authProvider);
+                  final user = auth.currentUser;
+                  final db = ref.read(appDatabaseProvider);
+                  final resetCount = await db.outboxDao.resetFailedEntries(
+                    userId: user.id,
+                    userName: user.fullName,
+                    reason: 'User tapped Retry failed on DataSyncScreen',
+                  );
+                  final worker = ref.read(syncBackgroundWorkerProvider);
+                  await worker.triggerPush(force: true);
+                  await syncNotifier.loadData(silent: true);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Failed sync errors cleared. Sync light is now Healthy 🟢'),
-                        backgroundColor: Color(0xFF16A34A),
+                      SnackBar(
+                        content: Text(
+                          resetCount > 0
+                              ? 'Retrying $resetCount failed sync item${resetCount > 1 ? 's' : ''}...'
+                              : 'No failed items to retry.',
+                        ),
+                        backgroundColor: const Color(0xFF16A34A),
                       ),
                     );
                   }
                 },
-                icon: const Icon(Icons.cleaning_services_rounded, size: 18),
-                label: Text('Clear $failedCount Sync Error${failedCount > 1 ? 's' : ''}'),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Retry failed'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
+                  backgroundColor: const Color(0xFFD97706),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   elevation: 2,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            // Manager-only "Export / Report to support" action (Requirement 3)
+            if (isManager || isOwner) ...[
+              OutlinedButton.icon(
+                key: const ValueKey('export_support_button'),
+                onPressed: () => _showExportSupportDialog(context, ref, isDark),
+                icon: const Icon(Icons.support_agent_rounded, size: 18),
+                label: const Text('Export / Report to support'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                  side: BorderSide(
+                    color: isDark ? const Color(0xFF0284C7) : const Color(0xFF38BDF8),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
               ),
               const SizedBox(width: 10),
@@ -299,6 +344,116 @@ class _DataSyncScreenState extends ConsumerState<DataSyncScreen> {
           ],
         ),
       ],
+    );
+  }
+
+  Future<void> _showExportSupportDialog(
+    BuildContext context,
+    WidgetRef ref,
+    bool isDark,
+  ) async {
+    final db = ref.read(appDatabaseProvider);
+    final auth = ref.read(authProvider);
+    final user = auth.currentUser;
+
+    final entries = await db.outboxDao.getQuarantinedOrFailedEntries();
+    final exportJson = await db.outboxDao.exportQuarantinedJson();
+
+    await db.outboxDao.recordAuditLog(
+      action: 'EXPORT_REPORT_TO_SUPPORT',
+      userId: user.id,
+      userName: user.fullName,
+      entryIds: entries.map((e) => e.id).toList(),
+      details: 'Manager exported ${entries.length} items for tech support',
+    );
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+        title: Row(
+          children: [
+            const Icon(Icons.support_agent_rounded, color: Color(0xFF0284C7)),
+            const SizedBox(width: 10),
+            Text(
+              'Export / Report to support',
+              style: TextStyle(
+                color: isDark ? Colors.white : const Color(0xFF0F172A),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 550,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Quarantined & Failed Sync Entries: ${entries.length}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white70 : const Color(0xFF334155),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Diagnostic details are retained locally and never erased. You can copy the payload below and attach it to your support ticket.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                height: 180,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    exportJson,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            key: const ValueKey('copy_diagnostic_payload_button'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: exportJson));
+              Navigator.pop(dialogCtx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Support diagnostic bundle copied to clipboard.'),
+                  backgroundColor: Color(0xFF16A34A),
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy Diagnostic Payload'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0284C7),
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

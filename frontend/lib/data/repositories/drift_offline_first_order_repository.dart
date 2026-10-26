@@ -100,7 +100,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
         final finalOrder = order.copyWith(
           shiftId: resolvedShiftId,
           id: effectiveOrderId,
-          orderNumber: (order.orderNumber.isNotEmpty && !order.orderNumber.startsWith('ORD-')) ? order.orderNumber : receiptNumber,
+          orderNumber: (order.orderNumber.isNotEmpty && !order.orderNumber.startsWith('ORD-') && !order.orderNumber.startsWith('HH-TEMP')) ? order.orderNumber : receiptNumber,
         );
 
         // 2. Prepare LocalOrders row

@@ -393,21 +393,17 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       },
       data: { status: 'completed' },
     });
-    await tx.order.updateMany({
-      where: {
-        shift_id: existing.id,
-        status: { notIn: ['completed', 'cancelled', 'rejected'] },
-        is_paid: false,
-      },
-      data: { status: 'cancelled' },
-    });
+    // NOTE (SYNC-006): Do NOT auto-cancel unpaid orders (e.g. active dining tables, out-for-delivery).
+    // Open unpaid orders remain active so subsequent shifts/cashiers can collect payment and settle bills.
 
     // Compute financial totals from orders
+    // MNY-04: Only paid orders contribute to closed shift financial totals
     const shiftOrders = tx.order?.findMany
       ? await tx.order.findMany({
           where: {
             shift_id: existing.id,
             status: { notIn: ['cancelled', 'rejected'] },
+            is_paid: true,
           },
           include: { payments: true },
         })
@@ -448,11 +444,6 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
             totalOnlineSales += amt;
           }
         }
-        if (orderPaidSum < gTotal) {
-          totalCashSales += (gTotal - orderPaidSum);
-        }
-      } else {
-        totalCashSales += gTotal;
       }
     }
 

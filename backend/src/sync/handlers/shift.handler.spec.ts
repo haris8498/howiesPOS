@@ -434,5 +434,79 @@ describe('ShiftHandler (§7.3, §6.3, §8.3(3), §21 Decision 2)', () => {
         'shift:UPDATE:shift-1',
       ]);
     });
+    it('SYNC-006 & MNY-04: shift close does NOT cancel unpaid orders and does NOT count unpaid amounts as cash sales', async () => {
+      const updateManyCalls: any[] = [];
+      const mockTx = {
+        dailyCalculation: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'shift-open-orders',
+            status: 'ACTIVE',
+            version: 1,
+            starting_cash: 5000,
+            created_at: new Date('2026-10-17T08:00:00Z'),
+          }),
+          update: jest.fn().mockImplementation(({ data }) => ({
+            id: 'shift-open-orders',
+            ...data,
+          })),
+        },
+        order: {
+          updateMany: jest.fn().mockImplementation((args) => {
+            updateManyCalls.push(args);
+            return { count: 1 };
+          }),
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: 'order-paid-cash',
+              status: 'completed',
+              is_paid: true,
+              grand_total: 2000,
+              payments: [{ amount: 2000, payment_method: 'cash' }],
+            },
+          ]),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-shift-close-unpaid',
+          entity_type: 'shift',
+          entity_id: 'shift-open-orders',
+          operation_type: 'UPDATE',
+          dependency_order: 5,
+          payload: {
+            status: 'CLOSED',
+            actual_cash_counted: 7000,
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-shift-close-unpaid', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+
+      // Verify that NO updateMany call attempts to set status: 'cancelled' for unpaid orders (SYNC-006)
+      const cancelledUpdate = updateManyCalls.find(
+        (call) => call.data && call.data.status === 'cancelled',
+      );
+      expect(cancelledUpdate).toBeUndefined();
+
+      // Verify that completed update only applies to is_paid: true
+      const completedUpdate = updateManyCalls.find(
+        (call) => call.data && call.data.status === 'completed',
+      );
+      expect(completedUpdate).toBeDefined();
+      expect(completedUpdate.where.is_paid).toBe(true);
+
+      // Verify MNY-04: expected cash is starting_cash (5000) + actual cash payment (2000) = 7000
+      expect(mockTx.dailyCalculation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            expected_cash_in_hand: expect.anything(),
+          }),
+        }),
+      );
+    });
   });
 });
+

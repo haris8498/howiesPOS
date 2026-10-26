@@ -5791,7 +5791,7 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
   @override
   void initState() {
     super.initState();
-    _cashController = TextEditingController(text: '0.00');
+    _cashController = TextEditingController(text: widget.billAmount > 0 ? widget.billAmount.toStringAsFixed(2) : '0.00');
     _creditController = TextEditingController(text: '0.00');
     _bankAmountController = TextEditingController(text: '0.00');
     _easyPaisaAmountController = TextEditingController(text: '0.00');
@@ -5828,6 +5828,19 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
   }
 
   Future<void> _completePayment({bool printReceipt = true}) async {
+    // MNY-02: Guard against underpayment in bill settlement
+    if (widget.billAmount > 0.001 && _totalPayment < widget.billAmount - 0.01) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Total tendered (PKR ${_totalPayment.toStringAsFixed(2)}) is less than bill amount (PKR ${widget.billAmount.toStringAsFixed(2)})',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     final effectiveOrderId = widget.table.activeOrderId ?? (widget.orderId.length >= 20 ? widget.orderId : null);
 
     final cash = double.tryParse(_cashController.text) ?? 0.0;
@@ -5836,13 +5849,17 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
     final easyPaisa = double.tryParse(_easyPaisaAmountController.text) ?? 0.0;
     final jazzCash = double.tryParse(_jazzCashAmountController.text) ?? 0.0;
 
+    final changeDue = _change > 0 ? _change : 0.0;
+    // MNY-03: Scope change returned strictly to cash tendered so net cash matches physical drawer
+    final netCash = (cash - changeDue).clamp(0.0, cash);
+
     final List<Map<String, dynamic>> paymentsList = [];
     if (cash > 0) {
       paymentsList.add({
         'payment_method': 'cash',
-        'amount': cash > widget.billAmount ? widget.billAmount : cash,
+        'amount': netCash,
         'tendered_amount': cash,
-        'change_returned': _change > 0 ? _change : 0.0,
+        'change_returned': changeDue,
         'payment_status': 'COMPLETED',
         'received_by': 'Cashier',
       });

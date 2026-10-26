@@ -185,17 +185,9 @@ class CompleteOrderUseCase {
         await kitchenRepository!.addKitchenOrder(savedOrder);
       }
 
-      // 8. Deduct Inventory Ingredients (Solves Transaction Isolation Defect)
-      if (inventoryRepository != null) {
-        final requiredIngredients = stockDeductionEngine.calculateTotalIngredientRequirements(command.items);
-        for (final entry in requiredIngredients.entries) {
-          await inventoryRepository!.deductStockByItemName(
-            entry.key,
-            entry.value,
-            'Order $orderNumber Auto-Deduction',
-          );
-        }
-      }
+      // 8. Directive Q4.1: Inventory remains independent from order checkout (SYNC-040)
+      // Spec §Q4.1 mandates independent inventory management without automatic BOM ingredient depletion
+      // on order completion to prevent ghost stock discrepancies and offline/online divergence.
 
       return Result.success(savedOrder);
     } catch (e) {

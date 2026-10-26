@@ -94,6 +94,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const createDto: CreateOrderDto = {
       id: orderId,
       order_number: payload.order_number,
+      client_order_number: payload.client_order_number || payload.order_number,
       order_type: payload.order_type || 'dineIn',
       shift_id: payload.shift_id,
       status: payload.status ?? 'newOrder',
@@ -203,12 +204,18 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       false,
     );
 
+    const isReassigned = Boolean(
+      payload.order_number && createdOrder.order_number !== payload.order_number,
+    );
+
     return {
       operation_id: mutation.operation_id,
       entity_id: createdOrder.id,
-      status: 'SYNCED',
+      status: isReassigned ? 'APPLIED' : 'SYNCED',
       server_version: version,
       server_timestamp: updatedAt.toISOString(),
+      order_number: createdOrder.order_number,
+      client_order_number: payload.order_number,
     };
   }
 

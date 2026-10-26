@@ -262,6 +262,7 @@ export class OrdersService {
 
       // 5. Order number (Terminal-prefixed P<terminal>-<seq> or legacy 3-digit sequential 101-999)
       let orderNumber = dto.order_number;
+      let clientOrderNumber: string | null = dto.client_order_number || null;
       if (!orderNumber) {
         // Query recent orders to find latest pure 3-digit numeric order number
         const recentOrders: Array<{ order_number: string }> = tx.order.findMany
@@ -299,6 +300,7 @@ export class OrdersService {
         orderNumber = String(nextNum);
       } else {
         orderNumber = orderNumber.trim();
+        clientOrderNumber = dto.client_order_number || orderNumber;
         const existingOrderNum = await tx.order.findUnique({ where: { order_number: orderNumber } });
         if (existingOrderNum && (!explicitOrderId || existingOrderNum.id !== explicitOrderId)) {
           if (explicitOrderId) {
@@ -355,6 +357,7 @@ export class OrdersService {
         data: {
           ...(explicitOrderId ? { id: explicitOrderId } : {}),
           order_number: orderNumber,
+          client_order_number: clientOrderNumber,
           order_type: dto.order_type,
           shift_id: activeShiftId,
           status: dto.status ?? 'newOrder',

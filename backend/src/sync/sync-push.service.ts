@@ -155,11 +155,11 @@ export class SyncPushService {
           return await handler.handle(tx, mutation, context);
         });
         results.push(result);
-        if (result.status === "SYNCED" || result.status === "DUPLICATE") {
+        if (result.status === "SYNCED" || result.status === "DUPLICATE" || result.status === "APPLIED") {
           completedInBatch.add(mutation.operation_id);
         }
 
-        if (result.status === 'SYNCED') {
+        if (result.status === 'SYNCED' || result.status === 'APPLIED') {
           try {
             if (mutation.entity_type === 'shift') {
               if (mutation.operation_type === 'INSERT') {
@@ -214,7 +214,7 @@ export class SyncPushService {
         }
 
         // Post-commit realtime broadcast (§9.4)
-        if (result.status === 'SYNCED' && this.kitchenGateway) {
+        if ((result.status === 'SYNCED' || result.status === 'APPLIED') && this.kitchenGateway) {
           if (mutation.entity_type === 'order') {
             try {
               this.kitchenGateway.emitOrderCreated({
@@ -256,26 +256,156 @@ export class SyncPushService {
           }
         }
       } catch (err: any) {
-        const isDuplicatePrimaryKey =
-          (err?.code === 'P2002' ||
-            (err.message && err.message.includes('Unique constraint failed'))) &&
-          mutation.operation_type === 'INSERT';
+        const isUniqueConstraint =
+          err?.code === 'P2002' ||
+          (err.message && err.message.includes('Unique constraint failed'));
 
-        if (isDuplicatePrimaryKey) {
-          this.logger.log(
-            `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) already exists in database — resolving as DUPLICATE`,
+        if (isUniqueConstraint && mutation.operation_type === 'INSERT') {
+          const target = err?.meta?.target;
+          const targetStr = Array.isArray(target) ? target.join(',') : String(target || '');
+          const isTargetMatch = (field: string) =>
+            (Array.isArray(target) && target.some((t: any) => typeof t === 'string' && (t === field || t.toLowerCase().includes(field.toLowerCase())))) ||
+            (typeof target === 'string' && (target === field || target.toLowerCase().includes(field.toLowerCase()))) ||
+            (err.message && err.message.toLowerCase().includes(field.toLowerCase()));
+
+          const isPkCollision = isTargetMatch('id') || isTargetMatch('pkey') || isTargetMatch('primary');
+          const isOrderOrTokenNumberCollision = isTargetMatch('order_number') || isTargetMatch('token_number');
+
+          // Case 1: Primary Key / ID duplicate
+          if (isPkCollision) {
+            let existingEntity: any = null;
+            try {
+              if (mutation.entity_type === 'order' && this.prisma.order?.findUnique) {
+                existingEntity = await this.prisma.order.findUnique({ where: { id: mutation.entity_id } });
+              } else if (mutation.entity_type === 'shift' && this.prisma.dailyCalculation?.findUnique) {
+                existingEntity = await this.prisma.dailyCalculation.findUnique({ where: { id: mutation.entity_id } });
+              } else if ((mutation.entity_type === 'table' || mutation.entity_type === 'restaurant_table') && this.prisma.restaurantTable?.findUnique) {
+                existingEntity = await this.prisma.restaurantTable.findUnique({ where: { id: mutation.entity_id } });
+              }
+            } catch (queryErr: any) {
+              this.logger.warn(`Failed to verify existing row on PK collision: ${queryErr?.message}`);
+            }
+
+            if (existingEntity) {
+              this.logger.log(
+                `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) verified existing in database — resolving as DUPLICATE`,
+              );
+              completedInBatch.add(mutation.operation_id);
+              results.push({
+                operation_id: mutation.operation_id,
+                entity_id: mutation.entity_id,
+                status: 'DUPLICATE',
+                server_version: existingEntity.version ?? mutation.base_version ?? 1,
+                server_timestamp: (existingEntity.updated_at || existingEntity.created_at || new Date()).toISOString(),
+              });
+              continue;
+            } else {
+              this.logger.error(
+                `[SYNC-001] P2002 reported primary key collision for ${mutation.entity_id}, but row does not exist in database! Not acknowledging as DUPLICATE.`,
+              );
+              results.push({
+                operation_id: mutation.operation_id,
+                entity_id: mutation.entity_id,
+                status: 'FAILED_RETRYABLE',
+                server_version: mutation.base_version ?? 1,
+                server_timestamp: new Date().toISOString(),
+                error_message: 'Primary key conflict reported but existing row was not found',
+              });
+              continue;
+            }
+          }
+
+          // Case 2: order_number or token_number collision -> resolve collision with new server-assigned identifier
+          if (isOrderOrTokenNumberCollision && mutation.entity_type === 'order') {
+            this.logger.warn(
+              `[SYNC-001] Collision on unique constraint (${targetStr}) for order mutation ${mutation.operation_id} (device: ${device_id}, entity: ${mutation.entity_id}). Resolving collision with new server-assigned identifier...`,
+            );
+
+            let resolvedResult: any = null;
+            const originalOrderNumber = mutation.payload?.order_number;
+            const originalTokenNumber = mutation.payload?.token_number;
+
+            for (let attempt = 1; attempt <= 5; attempt++) {
+              try {
+                const retriedPayload = { ...mutation.payload };
+                if (originalOrderNumber) {
+                  retriedPayload.order_number = `${originalOrderNumber}-${attempt}`;
+                  retriedPayload.client_order_number = originalOrderNumber;
+                }
+                if (originalTokenNumber) {
+                  retriedPayload.token_number = `${originalTokenNumber}-${attempt}`;
+                }
+                const retriedMutation = { ...mutation, payload: retriedPayload };
+
+                resolvedResult = await this.prisma.$transaction(async (tx) => {
+                  return await handler.handle(tx, retriedMutation, context);
+                });
+
+                if (resolvedResult) {
+                  resolvedResult.status = 'APPLIED';
+                  resolvedResult.client_order_number = originalOrderNumber;
+                  break;
+                }
+              } catch (retryErr: any) {
+                this.logger.warn(
+                  `[SYNC-001] Retry attempt ${attempt} for mutation ${mutation.operation_id} failed: ${retryErr?.message}`,
+                );
+              }
+            }
+
+            if (resolvedResult) {
+              results.push(resolvedResult);
+              completedInBatch.add(mutation.operation_id);
+
+              if (this.kitchenGateway) {
+                try {
+                  this.kitchenGateway.emitOrderCreated({
+                    id: mutation.entity_id,
+                    order_number: resolvedResult.order_number || mutation.payload?.order_number,
+                    order_type: mutation.payload?.order_type,
+                    status: mutation.payload?.status || 'newOrder',
+                    grand_total: mutation.payload?.grand_total || 0,
+                    created_at: mutation.payload?.created_at || new Date(),
+                    device_id: device_id,
+                    order_items: mutation.payload?.items || [],
+                  });
+                } catch (wsErr: any) {
+                  this.logger.warn(`Could not emit kitchen event: ${wsErr?.message}`);
+                }
+              }
+              continue;
+            } else {
+              this.logger.error(
+                `[SYNC-001] Failed to automatically resolve unique collision for mutation ${mutation.operation_id} after 5 attempts`,
+              );
+              results.push({
+                operation_id: mutation.operation_id,
+                entity_id: mutation.entity_id,
+                status: 'FAILED_RETRYABLE',
+                server_version: mutation.base_version ?? 1,
+                server_timestamp: new Date().toISOString(),
+                error_message: 'Unique constraint collision resolution exceeded maximum retry attempts',
+              });
+              continue;
+            }
+          }
+
+          // Case 3: Unknown or unhandled P2002 target (e.g. phone, customer unique, etc.)
+          this.logger.warn(
+            `[SYNC-001] Unique constraint P2002 on unhandled target (${targetStr}) for mutation ${mutation.operation_id} (device: ${device_id}). Returning FAILED_RETRYABLE to prevent silent order loss.`,
           );
-          completedInBatch.add(mutation.operation_id);
           results.push({
             operation_id: mutation.operation_id,
             entity_id: mutation.entity_id,
-            status: 'DUPLICATE',
+            status: 'FAILED_RETRYABLE',
             server_version: mutation.base_version ?? 1,
             server_timestamp: new Date().toISOString(),
+            error_message: `Unique constraint failed on unhandled target: ${targetStr}`,
           });
           continue;
         }
 
+        // Standard error handling (non-P2002 or UPDATE/DELETE)
         this.logger.error(
           `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) failed: ${err.message}`,
         );

@@ -280,6 +280,7 @@ model DealComponent {
 model Order {
   id                   String   @id @default(uuid()) @db.VarChar(36)
   order_number         String   @unique @map("order_number") @db.VarChar(30)
+  client_order_number  String?  @map("client_order_number") @db.VarChar(30)
   order_type           String   @map("order_type") @db.VarChar(20) // 'online' | 'takeaway' | 'dineIn'
   status               String   @default("newOrder") @db.VarChar(30)
   // ---- Billing (universal) ----

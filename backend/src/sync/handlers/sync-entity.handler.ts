@@ -9,7 +9,7 @@ export interface SyncMutationContext {
   completedInBatch?: Set<string>;
 }
 
-export type SyncResultStatus = 'SYNCED' | 'CONFLICT' | 'FAILED_FATAL' | 'DUPLICATE' | 'FAILED_RETRYABLE';
+export type SyncResultStatus = 'SYNCED' | 'CONFLICT' | 'FAILED_FATAL' | 'DUPLICATE' | 'FAILED_RETRYABLE' | 'APPLIED';
 
 export interface SyncMutationResult {
   operation_id: string;
@@ -18,6 +18,8 @@ export interface SyncMutationResult {
   server_version: number;
   server_timestamp: string;
   error_message?: string;
+  order_number?: string;
+  client_order_number?: string;
   conflict_details?: any;
 }
 

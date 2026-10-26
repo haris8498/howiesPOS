@@ -96,6 +96,11 @@ export class CreateOrderDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(30)
+  client_order_number?: string;
+
+  @IsString()
+  @IsOptional()
   @MaxLength(20)
   token_number?: string;
 

@@ -28,11 +28,15 @@ export class DailyCalculationService {
   /**
    * Get active shift session for Cashier and persistent change cash baseline
    */
-  async getActiveSession(cashierId?: string) {
+  async getActiveSession(cashierId?: string, terminalId?: string, restaurantId?: string) {
     await this.autoCloseStaleSessions();
 
+    const whereClause: any = { status: 'ACTIVE' };
+    if (terminalId) whereClause.terminal_id = terminalId;
+    if (restaurantId) whereClause.restaurant_id = restaurantId;
+
     const session = await this.prisma.dailyCalculation.findFirst({
-      where: { status: 'ACTIVE' },
+      where: whereClause,
       orderBy: { created_at: 'desc' },
       include: { expense_items: true },
     });
@@ -109,9 +113,14 @@ export class DailyCalculationService {
       }
     }
 
-    // 3. Rule 1: Only ONE active shift at a time store-wide
+    const restaurantId = dto.restaurant_id || 'default';
+    const terminalId = dto.terminal_id ? String(dto.terminal_id) : '1';
+
+    // 3. Rule 1: Only ONE active shift per terminal at a time (SYNC-005)
     const existing = await this.prisma.dailyCalculation.findFirst({
       where: {
+        restaurant_id: restaurantId,
+        terminal_id: terminalId,
         status: 'ACTIVE',
       },
       orderBy: { created_at: 'desc' },
@@ -141,7 +150,7 @@ export class DailyCalculationService {
       // Reject duplicate/concurrent active shifts
       throw new ConflictException({
         success: false,
-        message: 'An active shift already exists. Close the current shift before opening a new shift.',
+        message: `An active shift already exists on terminal ${terminalId}. Close the current shift before opening a new shift.`,
         activeShift: {
           id: existing.id,
           shiftDate: existing.date,
@@ -163,6 +172,8 @@ export class DailyCalculationService {
       const created = await this.prisma.dailyCalculation.create({
         data: {
           date: shiftDate,
+          restaurant_id: restaurantId,
+          terminal_id: terminalId,
           shift_name: dto.shift_name || 'General Shift',
           cashier_id: cashierId,
           cashier_name: cashierName,

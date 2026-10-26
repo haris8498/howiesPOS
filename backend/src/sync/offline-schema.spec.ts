@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
 
-describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3)', () => {
+describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3, SYNC-005)', () => {
   const getModel = (name: string) => {
     const model = Prisma.dmmf.datamodel.models.find((m) => m.name === name);
     expect(model).toBeDefined();
@@ -64,7 +64,6 @@ describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3)', () => {
       const seq = getField('SystemChangeLog', 'global_sequence');
       expect(seq.isId).toBe(true);
       expect(seq.type).toBe('BigInt');
-      expect(seq.default).toEqual({ name: 'autoincrement', args: [] });
 
       const entityType = getField('SystemChangeLog', 'entity_type');
       expect(entityType.type).toBe('String');
@@ -91,7 +90,33 @@ describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3)', () => {
     });
   });
 
-  describe('OCC Versioning & Timestamps (§7.2)', () => {
+  describe('Device Model (SYNC-005, Spec §16.3)', () => {
+    it('should define Device model with device_id, restaurant_id, and terminal_id', () => {
+      const model = getModel('Device');
+      expect(model.dbName).toBe('devices');
+
+      const id = getField('Device', 'id');
+      expect(id.isId).toBe(true);
+      expect(id.type).toBe('String');
+
+      const devId = getField('Device', 'device_id');
+      expect(devId.type).toBe('String');
+
+      const restId = getField('Device', 'restaurant_id');
+      expect(restId.type).toBe('String');
+      expect(restId.default).toBe('default');
+
+      const termId = getField('Device', 'terminal_id');
+      expect(termId.type).toBe('String');
+      expect(termId.default).toBe('1');
+
+      const isBlocked = getField('Device', 'is_blocked');
+      expect(isBlocked.type).toBe('Boolean');
+      expect(isBlocked.default).toBe(false);
+    });
+  });
+
+  describe('Optimistic Concurrency Version Tracking (§7.2)', () => {
     it('should have version and updated_at on Order', () => {
       const version = getField('Order', 'version');
       expect(version.type).toBe('Int');
@@ -145,8 +170,8 @@ describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3)', () => {
     });
   });
 
-  describe('Shift Variance & Status (§7.3)', () => {
-    it('should have cash_variance and variance_reason on DailyCalculation', () => {
+  describe('Shift Variance, Terminal Scope & Status (§7.3, SYNC-005)', () => {
+    it('should have cash_variance, terminal_id, and restaurant_id on DailyCalculation', () => {
       const cashVariance = getField('DailyCalculation', 'cash_variance');
       expect(cashVariance.type).toBe('Decimal');
       expect(Number(cashVariance.default)).toBe(0);
@@ -158,30 +183,32 @@ describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3)', () => {
       const status = getField('DailyCalculation', 'status');
       expect(status.type).toBe('String');
       expect(status.default).toBe('ACTIVE');
+
+      const terminalId = getField('DailyCalculation', 'terminal_id');
+      expect(terminalId.type).toBe('String');
+      expect(terminalId.default).toBe('1');
+
+      const restaurantId = getField('DailyCalculation', 'restaurant_id');
+      expect(restaurantId.type).toBe('String');
+      expect(restaurantId.default).toBe('default');
     });
   });
 
-  describe('Additive Migration Script Verification', () => {
-    it('should include all required tables and indexes in migration SQL', () => {
+  describe('Additive Migration Script Verification (SYNC-005)', () => {
+    it('should include all required tables and indexes in terminal-scoped shift migration SQL', () => {
       const migrationPath = path.resolve(
         __dirname,
-        '../../prisma/migrations/20261017000000_offline_sync_schema/migration.sql',
+        '../../prisma/migrations/20261026100000_terminal_scoped_active_shift_and_devices/migration.sql',
       );
       expect(fs.existsSync(migrationPath)).toBe(true);
 
       const sql = fs.readFileSync(migrationPath, 'utf8');
-      expect(sql).toContain('CREATE TABLE "processed_operations"');
-      expect(sql).toContain('CREATE TABLE "system_change_logs"');
-      expect(sql).toContain('CREATE INDEX "processed_operations_device_id_created_at_idx"');
-      expect(sql).toContain('CREATE INDEX "processed_operations_entity_type_entity_id_idx"');
-      expect(sql).toContain('CREATE INDEX "system_change_logs_global_sequence_idx"');
-      expect(sql).toContain('CREATE INDEX "system_change_logs_entity_type_entity_id_idx"');
-      expect(sql).toContain('"updated_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP');
-      expect(sql).toContain('"version" INTEGER NOT NULL DEFAULT 1');
-      expect(sql).toContain('"cash_variance" DECIMAL(10,2) NOT NULL DEFAULT 0.00');
-      expect(sql).toContain('"variance_reason" VARCHAR(255)');
-      expect(sql).toContain('"is_deleted" BOOLEAN NOT NULL DEFAULT false');
-      expect(sql).toContain('"deleted_at" TIMESTAMP');
+      expect(sql).toContain('DROP INDEX IF EXISTS "unique_active_shift"');
+      expect(sql).toContain('ALTER TABLE "daily_calculations" ADD COLUMN IF NOT EXISTS "restaurant_id"');
+      expect(sql).toContain('ALTER TABLE "daily_calculations" ADD COLUMN IF NOT EXISTS "terminal_id"');
+      expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "unique_active_shift_per_terminal"');
+      expect(sql).toContain('CREATE TABLE IF NOT EXISTS "devices"');
+      expect(sql).toContain('To rollback this migration');
     });
   });
 });

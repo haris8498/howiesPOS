@@ -18,6 +18,7 @@ import '../network/api_client.dart';
 import '../network/kitchen_socket_service.dart';
 import '../security/token_storage.dart';
 import 'connectivity_notifier.dart';
+import 'device_identity.dart';
 
 export '../database/daos/retention_dao.dart' show RetentionPruneResult;
 
@@ -170,7 +171,7 @@ class SyncBackgroundWorker {
     this.httpClient,
     required this.connectivityNotifier,
     this.socketService,
-    this.deviceId = 'POS-P1',
+    String? deviceId,
     this.batchSize = 25,
     this.pollInterval = const Duration(seconds: 30),
     this.circuitBreakerPauseDuration = const Duration(seconds: 30),
@@ -179,7 +180,8 @@ class SyncBackgroundWorker {
     this.zombieTimeout = const Duration(seconds: 60),
     Random? random,
     this.syncUrlOverride,
-  }) : _random = random ?? Random();
+  })  : deviceId = deviceId ?? DeviceIdentityService.currentDeviceId,
+        _random = random ?? Random();
 
 
   SyncWorkerState get state => stateNotifier.currentState;

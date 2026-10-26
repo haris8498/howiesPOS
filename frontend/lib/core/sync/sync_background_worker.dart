@@ -269,8 +269,8 @@ class SyncBackgroundWorker {
     if (_isRunning || _isDisposed) return;
     _isRunning = true;
 
-    // 1. Startup Recovery: Reap orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3)
-    await recoverOrphanedOutboxTasks(olderThan: zombieTimeout);
+    // 1. Startup Recovery: Reap ALL orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3, SYNC-025)
+    await recoverOrphanedOutboxTasks(olderThan: Duration.zero);
 
     // 2. Watch local pending outbox entries
     _outboxSubscription = db.outboxDao.watchPendingCount().listen((count) {
@@ -361,7 +361,11 @@ class SyncBackgroundWorker {
   Future<int> recoverOrphanedOutboxTasks({Duration olderThan = const Duration(seconds: 60)}) async {
     final cutoff = DateTime.now().subtract(olderThan);
     final count = await (db.update(db.syncOutbox)
-          ..where((t) => t.status.equals(SyncOutboxStatus.inFlight) & t.sentAt.isSmallerThan(Variable(cutoff))))
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.inFlight) &
+              (olderThan == Duration.zero
+                  ? const Constant(true)
+                  : (t.sentAt.isNull() | t.sentAt.isSmallerOrEqual(Variable(cutoff))))))
         .write(const SyncOutboxCompanion(status: Value(SyncOutboxStatus.pending)));
     return count;
   }
@@ -419,6 +423,9 @@ class SyncBackgroundWorker {
   }
 
   void _onPeriodicTick() {
+    // SYNC-025: Periodically recover orphaned in-flight tasks exceeding zombieTimeout
+    recoverOrphanedOutboxTasks(olderThan: zombieTimeout);
+
     if (!state.isAuthPaused && !state.isCircuitBreakerTripped) {
       triggerSyncCycle();
     }

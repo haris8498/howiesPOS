@@ -1,3 +1,5 @@
+import '../config/feature_flags.dart';
+import '../core/sync/sync_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/network/api_client.dart';
 import '../core/network/realtime_socket_service.dart';
@@ -112,6 +114,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final StaffApiService _staffApiService;
   final IAuthRepository _fallbackRepository;
   final PermissionChecker _permissionChecker;
+  final Ref? _ref;
   PermissionChecker get permissionChecker => _permissionChecker;
 
   AuthNotifier({
@@ -120,7 +123,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
     StaffApiService? staffApiService,
     IAuthRepository? fallbackRepository,
     PermissionChecker? permissionChecker,
-  })  : _authApiService = authApiService ?? AuthApiService(),
+    Ref? ref,
+  })  : _ref = ref,
+        _authApiService = authApiService ?? AuthApiService(),
         _usersApiService = usersApiService ?? UsersApiService(),
         _staffApiService = staffApiService ?? StaffApiService(),
         _fallbackRepository = fallbackRepository ?? InMemoryAuthRepository(),
@@ -431,6 +436,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final token = loginData['token']?.toString() ?? loginData['accessToken']?.toString();
       RealtimeSocketService.instance.connect(explicitToken: token);
+
+      // SYNC-017: Resume sync outbox from AUTH_PAUSED immediately upon successful authentication
+      if (_ref != null && FeatureFlags.offlineFirstEnabled) {
+        try {
+          _ref.read(syncBackgroundWorkerProvider).resumeAuthPaused();
+        } catch (_) {}
+      }
 
       return true;
     } on UnauthorizedException catch (e) {
@@ -777,5 +789,6 @@ final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
     staffApiService: staffApi,
     fallbackRepository: repo,
     permissionChecker: checker,
+    ref: ref,
   );
 });

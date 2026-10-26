@@ -49,11 +49,22 @@ final activeOutboxEntriesProvider = StreamProvider<List<SyncOutboxEntry>>((ref) 
   return db.outboxDao.watchActiveOutboxEntries();
 });
 
+/// Periodic timer stream provider ensuring stuck-item (2-min threshold) is recomputed timely (§15.3, FLT-12)
+final syncHealthPeriodicTickerProvider = StreamProvider<int>((ref) {
+  if (!FeatureFlags.offlineFirstEnabled) {
+    return const Stream.empty();
+  }
+  return Stream.periodic(const Duration(seconds: 30), (i) => i);
+});
+
 /// Pure sync health computation combining connectivity, worker, and outbox state.
 final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   if (!FeatureFlags.offlineFirstEnabled) {
     return SyncHealthState.initial;
   }
+
+  // FLT-12: Watch periodic ticker so stuck in-flight items are evaluated timely even if outbox table is quiet
+  ref.watch(syncHealthPeriodicTickerProvider);
 
   final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
   final worker = ref.watch(syncBackgroundWorkerProvider);

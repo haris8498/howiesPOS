@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../config/feature_flags.dart';
 import '../../core/sync/sync_providers.dart';
 import '../../data/customer_repository.dart';
 import '../../data/daily_calculation_repository.dart';
@@ -43,10 +44,12 @@ class GlobalSyncController {
     bool syncSuccess = true;
     String? errorMessage;
 
-    // 0. Explicitly probe health so online status is freshly verified
-    try {
-      await ref.read(connectivityNotifierProvider.notifier).probeHealth();
-    } catch (_) {}
+    // 0. Explicitly probe health so online status is freshly verified (FLG-04)
+    if (FeatureFlags.offlineFirstEnabled) {
+      try {
+        await ref.read(connectivityNotifierProvider.notifier).probeHealth();
+      } catch (_) {}
+    }
 
     final isOnline = ref.read(connectivityNotifierProvider).isOnline;
 

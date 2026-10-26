@@ -198,6 +198,9 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
     _monitorTimer = null;
   }
 
+  /// Whether background periodic monitoring is currently active.
+  bool get isMonitoring => _monitorTimer != null;
+
   /// Manual transition for offline testing or manual override.
   void setOnlineManually({int latencyMs = 15}) {
     state = state.copyWith(

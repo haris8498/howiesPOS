@@ -39,6 +39,16 @@ export class SyncController {
    * POST /api/sync/push
    * Ingest offline mutations batch (§8.1.1)
    */
+
+  /**
+   * POST /api/sync/device/register (and alias /api/sync/register-device)
+   * Register or update POS terminal device identity (§16.3, SYNC-005)
+   */
+  @Post(['device/register', 'register-device'])
+  async registerDevice(@Body() dto: { device_id: string; restaurant_id?: string; terminal_id?: string; terminal_name?: string }) {
+    return this.syncPushService.registerDevice(dto);
+  }
+
   @Post('push')
   @UseInterceptors(IdempotencyInterceptor)
   async pushMutations(@Body() dto: SyncPushDto) {

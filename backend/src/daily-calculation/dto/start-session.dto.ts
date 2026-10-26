@@ -28,4 +28,12 @@ export class StartSessionDto {
   @IsOptional()
   @IsString()
   cashier_name?: string;
+
+  @IsOptional()
+  @IsString()
+  terminal_id?: string;
+
+  @IsOptional()
+  @IsString()
+  restaurant_id?: string;
 }

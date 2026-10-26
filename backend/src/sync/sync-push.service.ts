@@ -4,6 +4,7 @@ import {
   Logger,
   ConflictException,
   Optional,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HandlerRegistry } from './handlers/handler-registry.service';
@@ -34,8 +35,112 @@ export class SyncPushService {
    * Processes each mutation in its own isolated database transaction so that
    * one failed mutation does not poison the batch.
    */
+  /**
+   * Register or update POS device identity (§16.3, SYNC-005)
+   */
+  async registerDevice(dto: { device_id: string; restaurant_id?: string; terminal_id?: string; terminal_name?: string }) {
+    const restaurantId = dto.restaurant_id || 'default';
+    const terminalId = dto.terminal_id ? String(dto.terminal_id) : '1';
+    const terminalName = dto.terminal_name || `Register ${terminalId}`;
+
+    if (!dto.device_id) {
+      throw new ForbiddenException('device_id is required');
+    }
+
+    if (this.prisma.device) {
+      const device = await this.prisma.device.upsert({
+        where: {
+          restaurant_id_device_id: {
+            restaurant_id: restaurantId,
+            device_id: dto.device_id,
+          },
+        },
+        create: {
+          device_id: dto.device_id,
+          restaurant_id: restaurantId,
+          terminal_id: terminalId,
+          terminal_name: terminalName,
+          last_seen_at: new Date(),
+        },
+        update: {
+          terminal_id: terminalId,
+          terminal_name: terminalName,
+          last_seen_at: new Date(),
+        },
+      });
+
+      return {
+        success: true,
+        message: 'Device registered successfully',
+        data: device,
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Device registration received (in-memory mock)',
+      data: { device_id: dto.device_id, restaurant_id: restaurantId, terminal_id: terminalId },
+    };
+  }
+
   async pushMutations(dto: SyncPushDto) {
     const { device_id, batch_id, mutations = [] } = dto;
+    const restaurantId = (dto as any).restaurant_id || 'default';
+
+    // 0. Device Registration & Verification Guard (§16.3, SYNC-005)
+    const isLegacy = device_id === 'POS-P1';
+    if (isLegacy) {
+      this.logger.warn(`Push received from legacy deviceId 'POS-P1'; treating as legacy client.`);
+    }
+
+    if (this.prisma.device) {
+      try {
+        const device = await this.prisma.device.findUnique({
+          where: {
+            restaurant_id_device_id: {
+              restaurant_id: restaurantId,
+              device_id,
+            },
+          },
+        });
+
+        const isValidationEnabled = process.env.DEVICE_VALIDATION_ENABLED === 'true';
+        if (isValidationEnabled) {
+          if (device && device.is_blocked) {
+            throw new ForbiddenException(`Device '${device_id}' is blocked from synchronization.`);
+          }
+          if (!device && !isLegacy) {
+            throw new ForbiddenException(
+              `Device '${device_id}' is not registered for restaurant '${restaurantId}'.`,
+            );
+          }
+        }
+
+        if (device) {
+          if (device.is_blocked) {
+            throw new ForbiddenException(`Device '${device_id}' is blocked from synchronization.`);
+          }
+          await this.prisma.device.update({
+            where: { id: device.id },
+            data: { last_seen_at: new Date() },
+          });
+        } else if (!isValidationEnabled) {
+          // Upsert device on first push when validation flag is OFF (keep flag-off behavior unchanged)
+          await this.prisma.device.create({
+            data: {
+              restaurant_id: restaurantId,
+              device_id,
+              terminal_id: isLegacy ? '1' : undefined,
+              terminal_name: isLegacy ? 'Legacy Register 1' : undefined,
+              last_seen_at: new Date(),
+            },
+          }).catch(() => {});
+        }
+      } catch (err) {
+        if (err instanceof ForbiddenException) throw err;
+        this.logger.warn(`Device registration check warning for ${device_id}: ${err}`);
+      }
+    }
     const results: SyncMutationResult[] = [];
     const completedInBatch = new Set<string>();
 

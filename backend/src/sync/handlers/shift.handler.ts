@@ -128,11 +128,20 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
     const reqStatus = payload.status || 'ACTIVE';
     const isClosedStatus = reqStatus === 'OFFLINE_CLOSED' || reqStatus === 'CLOSED';
 
-    // 2B. Guard: Only one active shift at a time store-wide
+    const restaurantId = payload.restaurant_id || 'default';
+    const terminalId = payload.terminal_id ? String(payload.terminal_id) : '1';
+
+    if ((context && context.deviceId === 'POS-P1') || payload.device_id === 'POS-P1' || (mutation as any).device_id === 'POS-P1') {
+      this.logger.warn(`Legacy deviceId 'POS-P1' detected for shift ${shiftId}; treating as legacy client on terminal ${terminalId}`);
+    }
+
+    // 2B. Guard: Only one active shift per terminal at a time (SYNC-005)
     if (!isClosedStatus) {
       const activeShift = tx.dailyCalculation.findFirst
         ? await tx.dailyCalculation.findFirst({
             where: {
+              restaurant_id: restaurantId,
+              terminal_id: terminalId,
               status: 'ACTIVE',
               id: { not: shiftId },
             },
@@ -141,7 +150,7 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
 
       if (activeShift) {
         this.logger.warn(
-          `Conflict sync shift open ${shiftId}: Server already has active shift ${activeShift.id}. Preserving offline shift as OFFLINE_CLOSED.`,
+          `Conflict sync shift open ${shiftId}: Terminal ${terminalId} already has active shift ${activeShift.id}. Preserving offline shift as OFFLINE_CLOSED.`,
         );
         const startingCash = Number(payload.starting_cash ?? payload.opening_float ?? 0);
         const dateObj = payload.date ? new Date(payload.date) : new Date();
@@ -149,6 +158,8 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
           data: {
             id: shiftId,
             date: dateObj,
+            restaurant_id: restaurantId,
+            terminal_id: terminalId,
             shift_name: payload.shift_name || 'Full Day',
             cashier_id: payload.cashier_id || 'UNKNOWN',
             cashier_name: payload.cashier_name || 'Cashier',
@@ -156,7 +167,7 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
             opening_float: new Prisma.Decimal(startingCash),
             total_change_cash: new Prisma.Decimal(Number(payload.total_change_cash ?? startingCash)),
             status: 'OFFLINE_CLOSED',
-            closing_notes: `Conflict: opened offline while active shift ${activeShift.id} was open on server`,
+            closing_notes: `Conflict: opened offline while active shift ${activeShift.id} was open on terminal ${terminalId}`,
             version: 1,
             created_at: payload.created_at ? new Date(payload.created_at) : new Date(),
           },
@@ -172,6 +183,8 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
             id: createdConflict.id,
             status: 'OFFLINE_CLOSED',
             cashier_id: createdConflict.cashier_id,
+            restaurant_id: restaurantId,
+            terminal_id: terminalId,
             version: 1,
           },
           false,
@@ -185,8 +198,10 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
           server_timestamp: new Date().toISOString(),
           conflict_details: {
             code: 'ACTIVE_SHIFT_EXISTS',
-            message: `Cannot open active shift: Server already has active shift '${activeShift.id}'. Preserved offline shift as OFFLINE_CLOSED.`,
+            message: `Cannot open active shift: Terminal '${terminalId}' already has active shift '${activeShift.id}'. Preserved offline shift as OFFLINE_CLOSED.`,
             existing_active_shift_id: activeShift.id,
+            terminal_id: terminalId,
+            restaurant_id: restaurantId,
           },
         };
       }
@@ -200,6 +215,8 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       data: {
         id: shiftId,
         date: dateObj,
+        restaurant_id: restaurantId,
+        terminal_id: terminalId,
         shift_name: payload.shift_name || 'Full Day',
         cashier_id: payload.cashier_id || 'UNKNOWN',
         cashier_name: payload.cashier_name || 'Cashier',

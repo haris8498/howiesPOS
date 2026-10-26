@@ -669,9 +669,17 @@ class SyncBackgroundWorker {
     }
 
     if (response.statusCode >= 400 && response.statusCode < 500) {
-      // Client validation failure or bad request
-      await _handleFatalBatch(batch, 'Client error (HTTP ${response.statusCode}): ${response.body}');
-      return true;
+      // Client validation failure or bad request (SYNC-018: Invariant #3 No Batch Poisoning)
+      if (batch.length > 1) {
+        debugPrint('[SyncWorker] SYNC-018: HTTP ${response.statusCode} on batch of ${batch.length} items. Isolating poison pill via single-item dispatch...');
+        for (final singleEntry in batch) {
+          await _processPushBatch([singleEntry]);
+        }
+        return true;
+      } else {
+        await _handleFatalBatch(batch, 'Client error (HTTP ${response.statusCode}): ${response.body}');
+        return true;
+      }
     }
 
     // HTTP 200 OK: Process per-mutation results transactionally

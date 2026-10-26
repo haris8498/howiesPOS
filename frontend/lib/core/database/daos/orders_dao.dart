@@ -75,6 +75,14 @@ class OrdersDao extends DatabaseAccessor<AppDatabase> with _$OrdersDaoMixin {
     );
   }
 
+  Future<int> updateReassignedOrderNumber(String orderId, String newOrderNumber) {
+    return (update(localOrders)..where((t) => t.id.equals(orderId))).write(
+      LocalOrdersCompanion(
+        orderNumber: Value(newOrderNumber),
+      ),
+    );
+  }
+
   Future<int> markOrderConflict(String orderId) {
     return (update(localOrders)..where((t) => t.id.equals(orderId))).write(
       const LocalOrdersCompanion(

@@ -419,6 +419,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       server_timestamp: this.toIsoString(updatedAt),
       order_number: createdOrder.order_number,
       client_order_number: payload.order_number,
+      reassigned_order_number: isReassigned ? createdOrder.order_number : undefined,
+      reassigned_token_number: isReassigned ? createdOrder.takeaway_detail?.token_number : undefined,
       token_number: createdOrder.takeaway_detail?.token_number,
     };
   }

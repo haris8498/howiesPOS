@@ -752,12 +752,22 @@ class SyncBackgroundWorker {
           final errorMessage = result['error_message']?.toString();
           final conflictDetails = result['conflict_details'];
 
-          if (status == 'SYNCED' || status == 'DUPLICATE') {
+          if (status == 'SYNCED' || status == 'DUPLICATE' || status == 'APPLIED') {
             await db.outboxDao.markSynced(entry.id, serverTimestamp);
 
             // Stamp replicated operational tables (§3.3 Tier 4)
             if (entry.entityType == 'order') {
               await db.ordersDao.markOrderSynced(entry.entityId, serverVersion, serverTimestamp);
+
+              // SYNC-020: If server reassigned order_number due to collision, update local SQLite row
+              final reassignedOrderNumber = result['reassigned_order_number'] ?? (status == 'APPLIED' ? result['order_number'] : null);
+              if (reassignedOrderNumber is String && reassignedOrderNumber.isNotEmpty) {
+                final localOrder = await db.ordersDao.getOrderById(entry.entityId);
+                if (localOrder != null && localOrder.orderNumber != reassignedOrderNumber) {
+                  debugPrint('[SyncWorker] SYNC-020: Updating local order ${entry.entityId} orderNumber from ${localOrder.orderNumber} to reassigned $reassignedOrderNumber');
+                  await db.ordersDao.updateReassignedOrderNumber(entry.entityId, reassignedOrderNumber);
+                }
+              }
             } else if (entry.entityType == 'shift') {
               await db.dailyCalculationsDao.markCalculationSynced(entry.entityId, serverVersion);
               if (entry.operationType == 'UPDATE') {

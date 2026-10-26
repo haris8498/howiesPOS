@@ -20,6 +20,8 @@ export interface SyncMutationResult {
   error_message?: string;
   order_number?: string;
   client_order_number?: string;
+  reassigned_order_number?: string;
+  reassigned_token_number?: string;
   token_number?: string;
   conflict_details?: any;
 }

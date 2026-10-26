@@ -269,44 +269,7 @@ class SyncBackgroundWorker {
     if (_isRunning || _isDisposed) return;
     _isRunning = true;
 
-    // 1. Startup Recovery: Reap ALL orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3, SYNC-025)
-    await recoverOrphanedOutboxTasks(olderThan: Duration.zero);
-
-    // 2. Watch local pending outbox entries
-    _outboxSubscription = db.outboxDao.watchPendingCount().listen((count) {
-      if (!_isDisposed) {
-        stateNotifier.updateState(state.copyWith(pendingCount: count));
-        if (count > 0 && connectivityNotifier.isOnline && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
-          triggerSyncCycle();
-        }
-      }
-    });
-
-    // 3. Listen to connectivity state changes (Reconnection Flow §13)
-    _connectivityListenerRemover = connectivityNotifier.addListener((connState) {
-      if (!_isDisposed && connState.isOnline) {
-        // Just came online: drain outbox immediately then pull deltas
-        reconnect();
-      }
-    });
-
-    // 4. Wire Real-Time "Poke" via Socket.IO (§9.1 & §4.4)
-    if (socketService != null) {
-      _socketPokeCallback = (payload) {
-        if (!_isDisposed && connectivityNotifier.isOnline) {
-          triggerSyncCycle();
-        }
-      };
-      socketService!.on('*', _socketPokeCallback!);
-    }
-
-    // 5. Check if initial cold-start bootstrap is required (§8.1.3)
-    final initialCursor = await db.syncCursorsDao.getLastPulledSequence('GLOBAL_PULL_CURSOR');
-    if (initialCursor == 0 && connectivityNotifier.isOnline) {
-      await bootstrapInitialData();
-    }
-
-    // 6. Start periodic polling timer (Fallback per §4.4 + retries)
+    // FLT-11: Start periodic polling timer FIRST so periodic ticks are never aborted by startup exceptions
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(pollInterval, (_) {
       if (!_isDisposed && connectivityNotifier.isOnline) {
@@ -314,8 +277,69 @@ class SyncBackgroundWorker {
       }
     });
 
-    // 7. 30-Day Retention Pruning Job on Startup (§3.3, §18 Phase 7, Directive Q9.2)
-    await pruneOldSyncedData();
+    // 1. Startup Recovery: Reap ALL orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3, SYNC-025)
+    try {
+      await recoverOrphanedOutboxTasks(olderThan: Duration.zero);
+    } catch (e) {
+      debugPrint('[SyncWorker] Startup task recovery error: $e');
+    }
+
+    // 2. Watch local pending outbox entries
+    try {
+      _outboxSubscription = db.outboxDao.watchPendingCount().listen((count) {
+        if (!_isDisposed) {
+          stateNotifier.updateState(state.copyWith(pendingCount: count));
+          if (count > 0 && connectivityNotifier.isOnline && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
+            triggerSyncCycle();
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('[SyncWorker] Outbox watch error: $e');
+    }
+
+    // 3. Listen to connectivity state changes (Reconnection Flow §13)
+    try {
+      _connectivityListenerRemover = connectivityNotifier.addListener((connState) {
+        if (!_isDisposed && connState.isOnline) {
+          // Just came online: drain outbox immediately then pull deltas
+          reconnect();
+        }
+      });
+    } catch (e) {
+      debugPrint('[SyncWorker] Connectivity listener error: $e');
+    }
+
+    // 4. Wire Real-Time "Poke" via Socket.IO (§9.1 & §4.4)
+    if (socketService != null) {
+      try {
+        _socketPokeCallback = (payload) {
+          if (!_isDisposed && connectivityNotifier.isOnline) {
+            triggerSyncCycle();
+          }
+        };
+        socketService!.on('*', _socketPokeCallback!);
+      } catch (e) {
+        debugPrint('[SyncWorker] Socket wire error: $e');
+      }
+    }
+
+    // 5. Check if initial cold-start bootstrap is required (§8.1.3)
+    try {
+      final initialCursor = await db.syncCursorsDao.getLastPulledSequence('GLOBAL_PULL_CURSOR');
+      if (initialCursor == 0 && connectivityNotifier.isOnline) {
+        await bootstrapInitialData();
+      }
+    } catch (e) {
+      debugPrint('[SyncWorker] Bootstrap error: $e');
+    }
+
+    // 6. 30-Day Retention Pruning Job on Startup (§3.3, §18 Phase 7, Directive Q9.2)
+    try {
+      await pruneOldSyncedData();
+    } catch (e) {
+      debugPrint('[SyncWorker] Startup retention prune error: $e');
+    }
   }
 
   /// Stops background activities without disposing.

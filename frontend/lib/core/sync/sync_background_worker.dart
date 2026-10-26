@@ -1664,35 +1664,10 @@ class SyncBackgroundWorker {
   // ───────────────────────────────────────────────────────────────────────────
 
   Future<String?> trySilentReauth([String? explicitUsername]) async {
-    try {
-      final session = await TokenStorage.getUserSession();
-      String? username = explicitUsername ?? session?['username'] as String?;
-      if (username == null || username.isEmpty) {
-        try {
-          final activeCalc = await db.dailyCalculationsDao.getAnyActiveCalculation();
-          username = activeCalc?.cashierName;
-        } catch (_) {}
-      }
-      if (username == null || username.isEmpty) return null;
-
-      final client = httpClient ?? http.Client();
-      final password = username.toLowerCase() == 'noman' ? 'Noman123' : '${username}123';
-      final res = await client.post(
-        Uri.parse('$_baseUrl/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
-      ).timeout(const Duration(seconds: 15));
-
-      if (res.statusCode == 200 || res.statusCode == 201) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final realToken = data['data']?['accessToken'] ?? data['token'] ?? data['accessToken'];
-        if (realToken != null) {
-          final tokenStr = realToken.toString();
-          await TokenStorage.saveToken(tokenStr);
-          return tokenStr;
-        }
-      }
-    } catch (_) {}
+    // SYNC-008: Plaintext password guessing ('username123' or 'Noman123') removed.
+    // Silent reauth without a valid refresh token endpoint is unsafe.
+    // Returning null allows the sync worker to safely pause (AUTH_PAUSED) until
+    // a user explicitly authenticates.
     return null;
   }
 

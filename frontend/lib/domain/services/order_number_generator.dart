@@ -27,6 +27,7 @@ class OrderNumberGenerator implements IOrderNumberGenerator {
   final String terminalId;
   final TerminalSequencesDao? _terminalSequencesDao;
   final Uuid _uuid;
+  final bool useLegacyFormat;
 
   int _currentSequence = 100;
   String? _lastBusinessDate;
@@ -37,8 +38,11 @@ class OrderNumberGenerator implements IOrderNumberGenerator {
     int initialSequence = 100,
     String? businessDate,
     Uuid? uuid,
+    this.useLegacyFormat = false,
   })  : _terminalSequencesDao = terminalSequencesDao,
-        _currentSequence = initialSequence,
+        _currentSequence = (useLegacyFormat && initialSequence == 100)
+            ? (((DateTime.now().millisecondsSinceEpoch ~/ 1000) % 9000) + 1000)
+            : initialSequence,
         _lastBusinessDate = businessDate ?? DateFormat('yyyy-MM-dd').format(DateTime.now()),
         _uuid = uuid ?? const Uuid();
 
@@ -48,18 +52,22 @@ class OrderNumberGenerator implements IOrderNumberGenerator {
     return _uuid.v7();
   }
 
-  /// Generates a terminal-prefixed receipt number (e.g. P1-101) per Spec §4.3.
-  /// Cycles from 101 to 999 and resets daily.
+  /// Generates a terminal-prefixed receipt number (e.g. P1-101) per Spec §4.3,
+  /// or legacy pre-offline format 'HH-yyMMdd-seq' when useLegacyFormat is true (SYNC-009).
   @override
   String generateOrderNumber() {
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
     if (_lastBusinessDate != today) {
       _lastBusinessDate = today;
-      _currentSequence = 100;
+      _currentSequence = useLegacyFormat ? 1000 : 100;
     }
     _currentSequence++;
-    if (_currentSequence > 999) {
+    if (!useLegacyFormat && _currentSequence > 999) {
       _currentSequence = 101;
+    }
+    if (useLegacyFormat) {
+      final datePrefix = DateFormat('yyMMdd').format(DateTime.now());
+      return 'HH-$datePrefix-$_currentSequence';
     }
     return formatReceiptNumber(terminalId, _currentSequence);
   }

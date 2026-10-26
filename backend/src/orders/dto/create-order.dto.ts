@@ -20,6 +20,10 @@ export class CreateOrderItemDto {
   @IsOptional()
   id?: string;
 
+  @IsDateString()
+  @IsOptional()
+  created_at?: string;
+
   @IsString()
   @IsOptional()
   menu_item_id?: string;
@@ -84,6 +88,10 @@ export class CreateOrderDto {
   @IsString()
   @IsOptional()
   id?: string;
+
+  @IsDateString()
+  @IsOptional()
+  created_at?: string;
 
   @IsString()
   @IsOptional()
@@ -254,6 +262,10 @@ export class CreateOrderPaymentDto {
   @IsString()
   @IsOptional()
   id?: string;
+
+  @IsDateString()
+  @IsOptional()
+  created_at?: string;
 
   @IsString()
   @IsNotEmpty({ message: 'Payment method is required' })

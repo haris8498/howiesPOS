@@ -49,11 +49,22 @@ final activeOutboxEntriesProvider = StreamProvider<List<SyncOutboxEntry>>((ref) 
   return db.outboxDao.watchActiveOutboxEntries();
 });
 
+/// Periodic timer stream provider ensuring stuck-item (2-min threshold) is recomputed timely (§15.3, FLT-12)
+final syncHealthPeriodicTickerProvider = StreamProvider<int>((ref) {
+  if (!FeatureFlags.offlineFirstEnabled) {
+    return const Stream.empty();
+  }
+  return Stream.periodic(const Duration(seconds: 30), (i) => i);
+});
+
 /// Pure sync health computation combining connectivity, worker, and outbox state.
 final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   if (!FeatureFlags.offlineFirstEnabled) {
     return SyncHealthState.initial;
   }
+
+  // FLT-12: Watch periodic ticker so stuck in-flight items are evaluated timely even if outbox table is quiet
+  ref.watch(syncHealthPeriodicTickerProvider);
 
   final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
   final worker = ref.watch(syncBackgroundWorkerProvider);
@@ -65,7 +76,8 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   final pendingEntries = entries.where((e) =>
       e.status == SyncOutboxStatus.pending ||
       e.status == SyncOutboxStatus.inFlight ||
-      e.status == SyncOutboxStatus.failedRetryable).toList();
+      e.status == SyncOutboxStatus.failedRetryable ||
+      e.status == SyncOutboxStatus.authPaused).toList();
   final pendingCount = pendingEntries.length;
 
   final failedEntries = entries.where((e) =>
@@ -78,6 +90,9 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   final hasStuckItem = isOnline && entries.any((e) =>
       e.status == SyncOutboxStatus.inFlight &&
       now.difference(e.sentAt ?? e.createdAt).inMinutes >= 2);
+
+  final isAuthPaused = worker.state.isAuthPaused ||
+      entries.any((e) => e.status == SyncOutboxStatus.authPaused);
 
   // RED CONDITIONS (Strict 2-color policy per spec)
   if (!isOnline) {
@@ -99,6 +114,17 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
       failedCount: failedCount,
       tooltipText: 'Sync worker stopped',
       semanticsLabel: 'Sync status: Worker is stopped.',
+    );
+  }
+
+  if (isAuthPaused) {
+    return SyncHealthState(
+      status: SyncHealthStatus.red,
+      isPulsing: false,
+      pendingCount: pendingCount,
+      failedCount: failedCount,
+      tooltipText: 'Auth paused - sign in required',
+      semanticsLabel: 'Sync status: Authentication paused. Sign in required.',
     );
   }
 

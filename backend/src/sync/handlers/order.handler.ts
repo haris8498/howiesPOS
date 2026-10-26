@@ -115,6 +115,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       payment_status: p.payment_status || p.paymentStatus || 'COMPLETED',
       notes: p.notes,
       received_by: p.received_by || p.receivedBy,
+      created_at: p.created_at || p.createdAt,
     }));
   }
 
@@ -363,6 +364,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       customer_phone: payload.customer_phone,
       delivery_address: payload.delivery_address,
       token_number: payload.token_number,
+      created_at: payload.created_at || payload.createdAt,
       items: this.mapItems(payload.items),
       payments: this.mapPayments(payload.payments),
     };
@@ -417,6 +419,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       server_timestamp: this.toIsoString(updatedAt),
       order_number: createdOrder.order_number,
       client_order_number: payload.order_number,
+      reassigned_order_number: isReassigned ? createdOrder.order_number : undefined,
+      reassigned_token_number: isReassigned ? createdOrder.takeaway_detail?.token_number : undefined,
       token_number: createdOrder.takeaway_detail?.token_number,
     };
   }
@@ -761,20 +765,29 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }
 
     // 5. Update Base Order
-    const isPaid = isPaidRequested
-      ? effectivePaymentTotal >= orderTotal
-      : payload.is_paid !== undefined
-      ? payload.is_paid
-      : existingOrder.is_paid;
+    // SYNC-013: Terminal and Paid Order Immutability Invariant
+    // Once an order is marked paid or completed on the server, a stale offline update cannot downgrade it back to unpaid or accepted.
+    let isPaid = existingOrder.is_paid;
+    if (!existingOrder.is_paid) {
+      isPaid = isPaidRequested
+        ? effectivePaymentTotal >= orderTotal
+        : payload.is_paid !== undefined
+        ? payload.is_paid
+        : false;
+    }
 
     const paymentStatus = isPaid
       ? 'PAID'
-      : payload.payment_status || existingOrder.payment_status;
+      : (existingOrder.payment_status === 'PAID' ? 'PAID' : (payload.payment_status || existingOrder.payment_status));
 
-    const status =
-      isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
+    let status = existingOrder.status;
+    if (existingOrder.status === 'completed') {
+      status = 'completed';
+    } else {
+      status = isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
         ? payload.status
         : payload.status ?? existingOrder.status;
+    }
 
     const orderUpdateData: any = {
       ...(status ? { status } : {}),

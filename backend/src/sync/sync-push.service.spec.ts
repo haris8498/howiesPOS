@@ -198,4 +198,60 @@ describe('SyncPushService', () => {
     expect(result.results[0].status).toBe('FAILED_FATAL');
     expect(result.results[0].error_message).toContain('No sync entity handler registered');
   });
+
+
+  it('should classify transient DB errors (deadlock, pool timeout) as FAILED_RETRYABLE (SYNC-022)', async () => {
+    const mockHandler = {
+      entityType: 'order',
+      handle: jest.fn().mockImplementation(async (tx, mutation) => {
+        if (mutation.operation_id === 'deadlock-op') {
+          const deadlockErr: any = new Error('Transaction failed due to a write conflict or deadlock');
+          deadlockErr.code = 'P2034';
+          throw deadlockErr;
+        }
+        if (mutation.operation_id === 'timeout-op') {
+          const timeoutErr: any = new Error('Timed out fetching connection from pool');
+          timeoutErr.code = 'P2024';
+          throw timeoutErr;
+        }
+        return {
+          operation_id: mutation.operation_id,
+          entity_id: mutation.entity_id,
+          status: 'SYNCED',
+          server_version: 1,
+          server_timestamp: new Date().toISOString(),
+        };
+      }),
+    };
+    mockRegistry.register(mockHandler as any);
+
+    const result = await service.pushMutations({
+      device_id: 'POS-P1',
+      batch_id: 'batch-transient-1',
+      mutations: [
+        {
+          operation_id: 'deadlock-op',
+          entity_type: 'order',
+          entity_id: 'ord-dl',
+          operation_type: 'INSERT',
+          dependency_order: 1,
+          payload: {},
+        },
+        {
+          operation_id: 'timeout-op',
+          entity_type: 'order',
+          entity_id: 'ord-to',
+          operation_type: 'INSERT',
+          dependency_order: 2,
+          payload: {},
+        },
+      ] as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.results[0].status).toBe('FAILED_RETRYABLE');
+    expect(result.results[0].operation_id).toBe('deadlock-op');
+    expect(result.results[1].status).toBe('FAILED_RETRYABLE');
+    expect(result.results[1].operation_id).toBe('timeout-op');
+  });
 });

@@ -324,6 +324,8 @@ export class OrdersService {
 
       // 5B. Resolve Active Shift Session
       let activeShiftId: string | null = dto.shift_id || null;
+      const hadExplicitShiftId = Boolean(dto.shift_id);
+
       if (activeShiftId) {
         try {
           const shiftExists = await tx.dailyCalculation.findUnique({
@@ -331,7 +333,9 @@ export class OrdersService {
             select: { id: true },
           });
           if (!shiftExists) {
-            this.logger.warn(`Shift ID '${activeShiftId}' does not exist yet. Linking order without shift_id.`);
+            this.logger.warn(
+              `Shift ID '${activeShiftId}' does not exist yet. Linking order without shift_id (OBX-07 / MNY-07).`,
+            );
             activeShiftId = null;
           }
         } catch (err) {
@@ -339,7 +343,9 @@ export class OrdersService {
           activeShiftId = null;
         }
       }
-      if (!activeShiftId) {
+
+      // OBX-07 / MNY-07: Do not arbitrarily attach offline order to an unrelated active shift if its own shift was specified
+      if (!activeShiftId && !hadExplicitShiftId) {
         try {
           const activeShift = await tx.dailyCalculation.findFirst({
             where: { status: 'ACTIVE' },
@@ -358,6 +364,7 @@ export class OrdersService {
       const createdOrder = await tx.order.create({
         data: {
           ...(explicitOrderId ? { id: explicitOrderId } : {}),
+          ...(dto.created_at ? { created_at: new Date(dto.created_at) } : {}),
           order_number: orderNumber,
           client_order_number: clientOrderNumber,
           order_type: dto.order_type,
@@ -482,6 +489,7 @@ export class OrdersService {
         await tx.orderPayment.createMany({
           data: dto.payments.map((p) => ({
             ...(p.id ? { id: p.id } : {}),
+            ...(p.created_at ? { created_at: new Date(p.created_at) } : dto.created_at ? { created_at: new Date(dto.created_at) } : {}),
             order_id: createdOrder.id,
             payment_method: p.payment_method,
             amount: p.amount,
@@ -498,6 +506,7 @@ export class OrdersService {
       } else if (dto.is_paid || dto.payment_status === 'PAID') {
         await tx.orderPayment.create({
           data: {
+            ...(dto.created_at ? { created_at: new Date(dto.created_at) } : {}),
             order_id: createdOrder.id,
             payment_method: dto.payment_method || 'cash',
             amount: grandTotal,

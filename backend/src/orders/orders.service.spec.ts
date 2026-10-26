@@ -477,4 +477,53 @@ describe('OrdersService', () => {
       expect(mockKitchenGateway.emitOrderCreated).not.toHaveBeenCalled();
     });
   });
+
+  it('should not attach offline order to an unrelated active shift if its own shift is pending (OBX-07 / MNY-07)', async () => {
+    const mockTx: any = {
+      order: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...mockOrder, ...data })),
+      },
+      orderItem: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      takeawayOrderDetail: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'tk-1', token_number: '101' }),
+      },
+      dailyCalculation: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue({ id: 'unrelated-active-shift' }),
+      },
+      storeSetting: {
+        findFirst: jest.fn().mockResolvedValue(mockStoreSettings),
+      },
+    };
+
+    await service.createOrderInTx(
+      mockTx,
+      {
+        order_type: 'takeaway',
+        shift_id: 'pending-offline-shift-id',
+        items: [
+          {
+            item_name: 'Cheese Pizza',
+            quantity: 1,
+            unit_price: 20,
+          },
+        ],
+      },
+      'ord-new-1',
+    );
+
+    expect(mockTx.order.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shift_id: null,
+        }),
+      }),
+    );
+    expect(mockTx.dailyCalculation.findFirst).not.toHaveBeenCalled();
+  });
 });

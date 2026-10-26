@@ -25,7 +25,10 @@ final connectivityNotifierProvider =
     StateNotifierProvider<ConnectivityNotifier, ConnectivityState>((ref) {
   final apiClient = ref.watch(apiClientProvider);
   final notifier = ConnectivityNotifier(apiClient: apiClient);
-  notifier.startMonitoring();
+  // FLG-04: Only start active polling when offline-first mode is enabled
+  if (FeatureFlags.offlineFirstEnabled) {
+    notifier.startMonitoring();
+  }
   ref.onDispose(() {
     notifier.dispose();
   });

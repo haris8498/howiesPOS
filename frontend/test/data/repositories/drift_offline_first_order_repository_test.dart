@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hungry_howies_pos/core/database/app_database.dart';
 import 'package:hungry_howies_pos/core/database/tables/offline_print_jobs_table.dart';
@@ -177,6 +179,32 @@ void main() {
       expect(o1.orderNumber, equals('P1-101'));
       expect(o2.orderNumber, equals('P1-102'));
       expect(o3.orderNumber, equals('P1-103'));
+    });
+
+    test('3b. Midnight rollover prevention: active shift createdAt binds sequence business date (SYNC-038)', () async {
+      final shiftDate = DateTime.now().subtract(const Duration(days: 1));
+      final shiftDateStr = DateFormat('yyyy-MM-dd').format(shiftDate);
+
+      // Seed an active shift started yesterday
+      await db.into(db.localDailyCalculations).insert(
+        LocalDailyCalculationsCompanion(
+          id: Value(const Uuid().v7()),
+          cashierId: const Value('emp-1'),
+          cashierName: const Value('Alice'),
+          startingCash: const Value(500.0),
+          status: const Value('ACTIVE'),
+          createdAt: Value(shiftDate),
+        ),
+      );
+
+      // Set sequence to 150 for yesterday\'s shiftDate
+      await db.terminalSequencesDao.getNextSequence('ORDER_NUMBER', shiftDateStr, start: 150, max: 999);
+
+      // Save order now (which is a different calendar day than the shift start)
+      final o = await repository.saveOrder(createSampleOrder());
+
+      // Sequence must continue from yesterday\'s shift sequence (151) instead of resetting to 101 for today
+      expect(o.orderNumber, equals('P1-151'));
     });
 
     test('4. Tier 2 Duplicate Protection (§15.2): Resubmitting same UUID v7 returns existing order without creating duplicate rows', () async {

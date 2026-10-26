@@ -23,9 +23,27 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
   /// - Only 'PENDING' or due 'FAILED_RETRYABLE' (next_retry_at IS NULL or <= now).
   /// - Excludes 'AUTH_PAUSED' (Deviation #3), 'IN_FLIGHT', 'SYNCED', 'FAILED_FATAL', 'CONFLICT'.
   /// - Strictly ordered by `dependency_order ASC, created_at ASC LIMIT 25`.
-  Future<List<SyncOutboxEntry>> getPushBatch({int limit = 25, DateTime? now}) {
+  Future<List<SyncOutboxEntry>> getPushBatch({int limit = 25, DateTime? now}) async {
     final effectiveNow = now ?? DateTime.now();
-    return (select(syncOutbox)
+
+    // OBX-03: Block later mutations if an earlier mutation for the same entity is in retry backoff, in-flight, or auth-paused
+    final blockedEntityRows = await (selectOnly(syncOutbox, distinct: true)
+          ..addColumns([syncOutbox.entityType, syncOutbox.entityId])
+          ..where(
+            (syncOutbox.status.equals(SyncOutboxStatus.failedRetryable) &
+                syncOutbox.nextRetryAt.isBiggerThanValue(effectiveNow)) |
+            syncOutbox.status.equals(SyncOutboxStatus.inFlight) |
+            syncOutbox.status.equals(SyncOutboxStatus.authPaused),
+          ))
+        .get();
+
+    final blockedKeys = blockedEntityRows.map((r) {
+      final type = r.read(syncOutbox.entityType) ?? '';
+      final id = r.read(syncOutbox.entityId) ?? '';
+      return '$type:$id';
+    }).toSet();
+
+    final query = select(syncOutbox)
       ..where((t) {
         final isPending = t.status.equals(SyncOutboxStatus.pending);
         final isDueRetryable = t.status.equals(SyncOutboxStatus.failedRetryable) &
@@ -35,9 +53,22 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
       ..orderBy([
         (t) => OrderingTerm.asc(t.dependencyOrder),
         (t) => OrderingTerm.asc(t.createdAt),
-      ])
-      ..limit(limit))
-      .get();
+      ]);
+
+    if (blockedKeys.isEmpty) {
+      return (query..limit(limit)).get();
+    }
+
+    final candidates = await query.get();
+    final result = <SyncOutboxEntry>[];
+    for (final candidate in candidates) {
+      final key = '${candidate.entityType}:${candidate.entityId}';
+      if (!blockedKeys.contains(key)) {
+        result.add(candidate);
+        if (result.length >= limit) break;
+      }
+    }
+    return result;
   }
 
   Future<SyncOutboxEntry?> getEntryByOperationId(String operationId) {
@@ -348,6 +379,7 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
           t.status.equals(SyncOutboxStatus.failedRetryable) |
           t.status.equals(SyncOutboxStatus.failedFatal) |
           t.status.equals(SyncOutboxStatus.conflict) |
+          t.status.equals(SyncOutboxStatus.authPaused) |
           t.status.equals(statusQuarantined) |
           t.status.equals(statusDeadLetter))
       ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))

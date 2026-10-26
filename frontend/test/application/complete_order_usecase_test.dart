@@ -4,6 +4,7 @@ import 'package:hungry_howies_pos/data/repositories/in_memory_inventory_reposito
 import 'package:hungry_howies_pos/data/repositories/in_memory_kitchen_repository.dart';
 import 'package:hungry_howies_pos/data/repositories/in_memory_order_repository.dart';
 import 'package:hungry_howies_pos/data/repositories/in_memory_table_repository.dart';
+import 'package:hungry_howies_pos/domain/models/inventory_item.dart';
 import 'package:hungry_howies_pos/domain/models/menu_item.dart';
 import 'package:hungry_howies_pos/domain/models/order_model.dart';
 import 'package:hungry_howies_pos/domain/models/restaurant_table.dart';
@@ -88,9 +89,10 @@ void main() {
       expect(updatedTable?.status, equals(TableStatus.available));
       expect(updatedTable?.activeOrderId, isNull);
 
-      // 4. Verify Inventory stock movement was recorded
-      final movements = await inventoryRepo.getStockMovements();
-      expect(movements, isNotEmpty);
+      // 4. Verify Inventory stock movement is NOT coupled to order completion (Directive Q4.1, SYNC-040)
+      final autoDeductions = (await inventoryRepo.getStockMovements())
+          .where((m) => m.type == StockMovementType.saleAutoDeduction);
+      expect(autoDeductions, isEmpty);
     });
 
     test('fails gracefully when cart is empty', () async {

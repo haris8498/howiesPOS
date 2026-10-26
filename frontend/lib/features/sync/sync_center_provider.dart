@@ -5,6 +5,7 @@ import '../../core/database/app_database.dart';
 import '../../core/database/tables/sync_outbox_table.dart';
 import '../../core/network/realtime_socket_service.dart';
 import '../../core/sync/connectivity_notifier.dart';
+import '../../config/feature_flags.dart';
 import '../../core/sync/sync_background_worker.dart';
 import '../../core/sync/sync_providers.dart';
 import '../../data/role_rights_repository.dart';
@@ -150,11 +151,11 @@ class SyncCenterState {
 }
 
 class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
-  final AppDatabase _db;
+  final AppDatabase? _db;
   final SyncApiService _syncApi;
   final ConnectivityNotifier _connectivity;
   final RealtimeSocketService _socket;
-  final SyncBackgroundWorker _worker;
+  final SyncBackgroundWorker? _worker;
   final RoleRightsState _roleRights;
   final UserRole _userRole;
 
@@ -162,11 +163,11 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
   StreamSubscription<bool>? _socketSub;
 
   SyncCenterNotifier({
-    required AppDatabase db,
+    AppDatabase? db,
     required SyncApiService syncApi,
     required ConnectivityNotifier connectivity,
     required RealtimeSocketService socket,
-    required SyncBackgroundWorker worker,
+    SyncBackgroundWorker? worker,
     required RoleRightsState roleRights,
     required UserRole userRole,
   })  : _db = db,
@@ -176,7 +177,7 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
         _worker = worker,
         _roleRights = roleRights,
         _userRole = userRole,
-        super(const SyncCenterState()) {
+        super(SyncCenterState(databaseConnected: db != null)) {
     _init();
   }
 
@@ -185,12 +186,13 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
     state = state.copyWith(
       isOnline: _connectivity.isOnline,
       socketConnected: _socket.isConnected,
-      databaseConnected: true,
-      lastSyncTime: _worker.lastSuccessAt ?? DateTime.now(),
+      databaseConnected: _db != null,
+      lastSyncTime: _worker?.lastSuccessAt ?? DateTime.now(),
     );
 
-    // 2. Listen to Outbox Changes from SQLite Drift
-    _outboxSub = _db.outboxDao.watchActiveOutboxEntries().listen((entries) {
+    // 2. Listen to Outbox Changes from SQLite Drift if active
+    if (_db != null) {
+      _outboxSub = _db!.outboxDao.watchActiveOutboxEntries().listen((entries) {
       final pending = entries.where((e) =>
           e.status == SyncOutboxStatus.pending ||
           e.status == SyncOutboxStatus.inFlight ||
@@ -207,6 +209,7 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
       );
       _recalculateHealth();
     });
+    }
 
     // 3. Listen to Socket Connection
     _socketSub = _socket.connectionStream.listen((connected) {
@@ -269,16 +272,16 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
 
   Future<void> loadModules() async {
     // 1. Fetch Local Drift Database counts using select(table).get()
-    final localOrders = await _safeCount(() => _db.select(_db.localOrders).get().then((v) => v.length));
-    final localItems = await _safeCount(() => _db.select(_db.localOrderItems).get().then((v) => v.length));
-    final localTables = await _safeCount(() => _db.select(_db.localRestaurantTables).get().then((v) => v.length));
-    final localMenu = await _safeCount(() => _db.select(_db.localMenuItems).get().then((v) => v.length));
-    final localCats = await _safeCount(() => _db.select(_db.localMenuCategories).get().then((v) => v.length));
-    final localDeals = await _safeCount(() => _db.select(_db.localDeals).get().then((v) => v.length));
-    final localStaff = await _safeCount(() => _db.select(_db.localStaffUsers).get().then((v) => v.length));
-    final localSettings = await _safeCount(() => _db.select(_db.localStoreSettings).get().then((v) => v.length));
-    final localShifts = await _safeCount(() => _db.select(_db.localDailyCalculations).get().then((v) => v.length));
-    final localPayments = await _safeCount(() => _db.select(_db.localOrderPayments).get().then((v) => v.length));
+    final localOrders = _db != null ? await _safeCount(() => _db!.select(_db!.localOrders).get().then((v) => v.length)) : 0;
+    final localItems = _db != null ? await _safeCount(() => _db!.select(_db!.localOrderItems).get().then((v) => v.length)) : 0;
+    final localTables = _db != null ? await _safeCount(() => _db!.select(_db!.localRestaurantTables).get().then((v) => v.length)) : 0;
+    final localMenu = _db != null ? await _safeCount(() => _db!.select(_db!.localMenuItems).get().then((v) => v.length)) : 0;
+    final localCats = _db != null ? await _safeCount(() => _db!.select(_db!.localMenuCategories).get().then((v) => v.length)) : 0;
+    final localDeals = _db != null ? await _safeCount(() => _db!.select(_db!.localDeals).get().then((v) => v.length)) : 0;
+    final localStaff = _db != null ? await _safeCount(() => _db!.select(_db!.localStaffUsers).get().then((v) => v.length)) : 0;
+    final localSettings = _db != null ? await _safeCount(() => _db!.select(_db!.localStoreSettings).get().then((v) => v.length)) : 0;
+    final localShifts = _db != null ? await _safeCount(() => _db!.select(_db!.localDailyCalculations).get().then((v) => v.length)) : 0;
+    final localPayments = _db != null ? await _safeCount(() => _db!.select(_db!.localOrderPayments).get().then((v) => v.length)) : 0;
 
     // 2. Fetch Server counts if online
     List<Map<String, dynamic>> serverModules = [];
@@ -317,7 +320,7 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
       modules: filtered,
       isOnline: _connectivity.isOnline,
       backendConnected: _connectivity.isOnline,
-      lastSyncTime: _worker.lastSuccessAt ?? state.lastSyncTime ?? DateTime.now(),
+      lastSyncTime: _worker?.lastSuccessAt ?? state.lastSyncTime ?? DateTime.now(),
     );
     _recalculateHealth();
   }
@@ -395,8 +398,12 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
     final targetSearch = search ?? state.historySearchQuery;
 
     if (!_connectivity.isOnline) {
+      if (_db == null) {
+        state = state.copyWith(history: [], historyTotal: 0);
+        return;
+      }
       // Local fallback: read all outbox history from Drift SQLite
-      final allOutbox = await _db.outboxDao.getAllEntries();
+      final allOutbox = await _db!.outboxDao.getAllEntries();
       final mapped = allOutbox.map((e) => {
         'id': e.operationId,
         'action': e.operationType,
@@ -445,8 +452,12 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
       final serverConflicts = await _syncApi.getSyncConflicts();
       state = state.copyWith(conflicts: serverConflicts);
     } else {
+      if (_db == null) {
+        state = state.copyWith(conflicts: []);
+        return;
+      }
       // Local SQLite Drift conflicts
-      final localConflicts = await (_db.select(_db.syncConflicts)).get();
+      final localConflicts = await (_db!.select(_db!.syncConflicts)).get();
       final mapped = localConflicts.map((c) => {
         'id': c.id,
         'entity': c.entityType,
@@ -462,8 +473,10 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
     if (state.isSyncingNow) return;
     state = state.copyWith(isSyncingNow: true);
     try {
-      await _worker.triggerPush(force: true);
-      await _worker.triggerPull();
+      if (_worker != null) {
+        await _worker!.triggerPush(force: true);
+        await _worker!.triggerPull();
+      }
       await loadAll();
     } catch (e) {
       state = state.copyWith(errorMessage: 'Sync error: $e');
@@ -475,8 +488,12 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
 
   Future<void> retrySingleOutbox(int id) async {
     try {
-      await _db.outboxDao.resetSingleEntry(id);
-      await _worker.triggerPush(force: true);
+      if (_db != null) {
+        await _db!.outboxDao.resetSingleEntry(id);
+      }
+      if (_worker != null) {
+        await _worker!.triggerPush(force: true);
+      }
       await loadAll();
     } catch (e) {
       state = state.copyWith(errorMessage: 'Retry failed: $e');
@@ -485,8 +502,12 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
 
   Future<void> retryAllFailed() async {
     try {
-      await _db.outboxDao.resetFailedEntries();
-      await _worker.triggerPush(force: true);
+      if (_db != null) {
+        await _db!.outboxDao.resetFailedEntries();
+      }
+      if (_worker != null) {
+        await _worker!.triggerPush(force: true);
+      }
       await loadAll();
     } catch (e) {
       state = state.copyWith(errorMessage: 'Failed to reset all: $e');
@@ -535,11 +556,12 @@ class SyncCenterNotifier extends StateNotifier<SyncCenterState> {
 }
 
 final syncCenterProvider = StateNotifierProvider.autoDispose<SyncCenterNotifier, SyncCenterState>((ref) {
-  final db = ref.watch(appDatabaseProvider);
+  // SYNC-039: Guard Drift DB and sync worker behind FeatureFlags.offlineFirstEnabled to prevent leak when OFF
+  final db = FeatureFlags.offlineFirstEnabled ? ref.watch(appDatabaseProvider) : null;
   final syncApi = ref.watch(syncApiServiceProvider);
   final connectivity = ref.watch(connectivityNotifierProvider.notifier);
   final socket = ref.watch(realtimeSocketServiceProvider);
-  final worker = ref.watch(syncBackgroundWorkerProvider);
+  final worker = FeatureFlags.offlineFirstEnabled ? ref.watch(syncBackgroundWorkerProvider) : null;
   final roleRights = ref.watch(roleRightsProvider);
   final userRole = ref.watch(authProvider).currentUser.role;
 

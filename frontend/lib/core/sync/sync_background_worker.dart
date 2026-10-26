@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../config/api_config.dart';
@@ -268,44 +269,7 @@ class SyncBackgroundWorker {
     if (_isRunning || _isDisposed) return;
     _isRunning = true;
 
-    // 1. Startup Recovery: Reap orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3)
-    await recoverOrphanedOutboxTasks(olderThan: zombieTimeout);
-
-    // 2. Watch local pending outbox entries
-    _outboxSubscription = db.outboxDao.watchPendingCount().listen((count) {
-      if (!_isDisposed) {
-        stateNotifier.updateState(state.copyWith(pendingCount: count));
-        if (count > 0 && connectivityNotifier.isOnline && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
-          triggerSyncCycle();
-        }
-      }
-    });
-
-    // 3. Listen to connectivity state changes (Reconnection Flow §13)
-    _connectivityListenerRemover = connectivityNotifier.addListener((connState) {
-      if (!_isDisposed && connState.isOnline) {
-        // Just came online: drain outbox immediately then pull deltas
-        reconnect();
-      }
-    });
-
-    // 4. Wire Real-Time "Poke" via Socket.IO (§9.1 & §4.4)
-    if (socketService != null) {
-      _socketPokeCallback = (payload) {
-        if (!_isDisposed && connectivityNotifier.isOnline) {
-          triggerSyncCycle();
-        }
-      };
-      socketService!.on('*', _socketPokeCallback!);
-    }
-
-    // 5. Check if initial cold-start bootstrap is required (§8.1.3)
-    final initialCursor = await db.syncCursorsDao.getLastPulledSequence('GLOBAL_PULL_CURSOR');
-    if (initialCursor == 0 && connectivityNotifier.isOnline) {
-      await bootstrapInitialData();
-    }
-
-    // 6. Start periodic polling timer (Fallback per §4.4 + retries)
+    // FLT-11: Start periodic polling timer FIRST so periodic ticks are never aborted by startup exceptions
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(pollInterval, (_) {
       if (!_isDisposed && connectivityNotifier.isOnline) {
@@ -313,8 +277,69 @@ class SyncBackgroundWorker {
       }
     });
 
-    // 7. 30-Day Retention Pruning Job on Startup (§3.3, §18 Phase 7, Directive Q9.2)
-    await pruneOldSyncedData();
+    // 1. Startup Recovery: Reap ALL orphaned IN_FLIGHT mutations left by unexpected crashes (§15.3, SYNC-025)
+    try {
+      await recoverOrphanedOutboxTasks(olderThan: Duration.zero);
+    } catch (e) {
+      debugPrint('[SyncWorker] Startup task recovery error: $e');
+    }
+
+    // 2. Watch local pending outbox entries
+    try {
+      _outboxSubscription = db.outboxDao.watchPendingCount().listen((count) {
+        if (!_isDisposed) {
+          stateNotifier.updateState(state.copyWith(pendingCount: count));
+          if (count > 0 && connectivityNotifier.isOnline && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
+            triggerSyncCycle();
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('[SyncWorker] Outbox watch error: $e');
+    }
+
+    // 3. Listen to connectivity state changes (Reconnection Flow §13)
+    try {
+      _connectivityListenerRemover = connectivityNotifier.addListener((connState) {
+        if (!_isDisposed && connState.isOnline) {
+          // Just came online: drain outbox immediately then pull deltas
+          reconnect();
+        }
+      });
+    } catch (e) {
+      debugPrint('[SyncWorker] Connectivity listener error: $e');
+    }
+
+    // 4. Wire Real-Time "Poke" via Socket.IO (§9.1 & §4.4)
+    if (socketService != null) {
+      try {
+        _socketPokeCallback = (payload) {
+          if (!_isDisposed && connectivityNotifier.isOnline) {
+            triggerSyncCycle();
+          }
+        };
+        socketService!.on('*', _socketPokeCallback!);
+      } catch (e) {
+        debugPrint('[SyncWorker] Socket wire error: $e');
+      }
+    }
+
+    // 5. Check if initial cold-start bootstrap is required (§8.1.3)
+    try {
+      final initialCursor = await db.syncCursorsDao.getLastPulledSequence('GLOBAL_PULL_CURSOR');
+      if (initialCursor == 0 && connectivityNotifier.isOnline) {
+        await bootstrapInitialData();
+      }
+    } catch (e) {
+      debugPrint('[SyncWorker] Bootstrap error: $e');
+    }
+
+    // 6. 30-Day Retention Pruning Job on Startup (§3.3, §18 Phase 7, Directive Q9.2)
+    try {
+      await pruneOldSyncedData();
+    } catch (e) {
+      debugPrint('[SyncWorker] Startup retention prune error: $e');
+    }
   }
 
   /// Stops background activities without disposing.
@@ -360,7 +385,11 @@ class SyncBackgroundWorker {
   Future<int> recoverOrphanedOutboxTasks({Duration olderThan = const Duration(seconds: 60)}) async {
     final cutoff = DateTime.now().subtract(olderThan);
     final count = await (db.update(db.syncOutbox)
-          ..where((t) => t.status.equals(SyncOutboxStatus.inFlight) & t.sentAt.isSmallerThan(Variable(cutoff))))
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.inFlight) &
+              (olderThan == Duration.zero
+                  ? const Constant(true)
+                  : (t.sentAt.isNull() | t.sentAt.isSmallerOrEqual(Variable(cutoff))))))
         .write(const SyncOutboxCompanion(status: Value(SyncOutboxStatus.pending)));
     return count;
   }
@@ -418,6 +447,9 @@ class SyncBackgroundWorker {
   }
 
   void _onPeriodicTick() {
+    // SYNC-025: Periodically recover orphaned in-flight tasks exceeding zombieTimeout
+    recoverOrphanedOutboxTasks(olderThan: zombieTimeout);
+
     if (!state.isAuthPaused && !state.isCircuitBreakerTripped) {
       triggerSyncCycle();
     }
@@ -603,6 +635,12 @@ class SyncBackgroundWorker {
     );
   }
 
+  /// Computes deterministic batch_id from SHA-256 of sorted operation IDs (SYNC-024)
+  static String computeBatchId(Iterable<SyncOutboxEntry> entries) {
+    final sortedOpIds = entries.map((e) => e.operationId).toList()..sort();
+    return sha256.convert(utf8.encode(sortedOpIds.join(':'))).toString();
+  }
+
   Future<bool> _processPushBatch(List<SyncOutboxEntry> batch) async {
     final now = DateTime.now();
     final batchIds = batch.map((e) => e.id).toList();
@@ -610,7 +648,8 @@ class SyncBackgroundWorker {
     // Mark batch IN_FLIGHT (Tier 3 Anti-duplicate defense §15.2)
     await db.outboxDao.markInFlight(batchIds, now);
 
-    final batchId = const Uuid().v7();
+    // SYNC-024: Deterministic batch_id from SHA-256 of sorted operation IDs
+    final batchId = computeBatchId(batch);
     final mutations = batch.map((entry) {
       dynamic parsedPayload;
       try {
@@ -669,9 +708,17 @@ class SyncBackgroundWorker {
     }
 
     if (response.statusCode >= 400 && response.statusCode < 500) {
-      // Client validation failure or bad request
-      await _handleFatalBatch(batch, 'Client error (HTTP ${response.statusCode}): ${response.body}');
-      return true;
+      // Client validation failure or bad request (SYNC-018: Invariant #3 No Batch Poisoning)
+      if (batch.length > 1) {
+        debugPrint('[SyncWorker] SYNC-018: HTTP ${response.statusCode} on batch of ${batch.length} items. Isolating poison pill via single-item dispatch...');
+        for (final singleEntry in batch) {
+          await _processPushBatch([singleEntry]);
+        }
+        return true;
+      } else {
+        await _handleFatalBatch(batch, 'Client error (HTTP ${response.statusCode}): ${response.body}');
+        return true;
+      }
     }
 
     // HTTP 200 OK: Process per-mutation results transactionally
@@ -705,12 +752,22 @@ class SyncBackgroundWorker {
           final errorMessage = result['error_message']?.toString();
           final conflictDetails = result['conflict_details'];
 
-          if (status == 'SYNCED' || status == 'DUPLICATE') {
+          if (status == 'SYNCED' || status == 'DUPLICATE' || status == 'APPLIED') {
             await db.outboxDao.markSynced(entry.id, serverTimestamp);
 
             // Stamp replicated operational tables (§3.3 Tier 4)
             if (entry.entityType == 'order') {
               await db.ordersDao.markOrderSynced(entry.entityId, serverVersion, serverTimestamp);
+
+              // SYNC-020: If server reassigned order_number due to collision, update local SQLite row
+              final reassignedOrderNumber = result['reassigned_order_number'] ?? (status == 'APPLIED' ? result['order_number'] : null);
+              if (reassignedOrderNumber is String && reassignedOrderNumber.isNotEmpty) {
+                final localOrder = await db.ordersDao.getOrderById(entry.entityId);
+                if (localOrder != null && localOrder.orderNumber != reassignedOrderNumber) {
+                  debugPrint('[SyncWorker] SYNC-020: Updating local order ${entry.entityId} orderNumber from ${localOrder.orderNumber} to reassigned $reassignedOrderNumber');
+                  await db.ordersDao.updateReassignedOrderNumber(entry.entityId, reassignedOrderNumber);
+                }
+              }
             } else if (entry.entityType == 'shift') {
               await db.dailyCalculationsDao.markCalculationSynced(entry.entityId, serverVersion);
               if (entry.operationType == 'UPDATE') {
@@ -1656,35 +1713,10 @@ class SyncBackgroundWorker {
   // ───────────────────────────────────────────────────────────────────────────
 
   Future<String?> trySilentReauth([String? explicitUsername]) async {
-    try {
-      final session = await TokenStorage.getUserSession();
-      String? username = explicitUsername ?? session?['username'] as String?;
-      if (username == null || username.isEmpty) {
-        try {
-          final activeCalc = await db.dailyCalculationsDao.getAnyActiveCalculation();
-          username = activeCalc?.cashierName;
-        } catch (_) {}
-      }
-      if (username == null || username.isEmpty) return null;
-
-      final client = httpClient ?? http.Client();
-      final password = username.toLowerCase() == 'noman' ? 'Noman123' : '${username}123';
-      final res = await client.post(
-        Uri.parse('$_baseUrl/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
-      ).timeout(const Duration(seconds: 15));
-
-      if (res.statusCode == 200 || res.statusCode == 201) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final realToken = data['data']?['accessToken'] ?? data['token'] ?? data['accessToken'];
-        if (realToken != null) {
-          final tokenStr = realToken.toString();
-          await TokenStorage.saveToken(tokenStr);
-          return tokenStr;
-        }
-      }
-    } catch (_) {}
+    // SYNC-008: Plaintext password guessing ('username123' or 'Noman123') removed.
+    // Silent reauth without a valid refresh token endpoint is unsafe.
+    // Returning null allows the sync worker to safely pause (AUTH_PAUSED) until
+    // a user explicitly authenticates.
     return null;
   }
 

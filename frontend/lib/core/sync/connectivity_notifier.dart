@@ -128,14 +128,22 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
       final latency = stopwatch.elapsedMilliseconds;
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        bool serviceHealthy = true;
+        // SYNC-035: Captive portals return HTTP 200 with HTML login pages.
+        // Health probe requires valid JSON body to avoid false-online loops.
+        bool serviceHealthy = false;
         try {
           final decoded = jsonDecode(response.body);
-          if (decoded is Map<String, dynamic> && decoded.containsKey('success')) {
-            serviceHealthy = decoded['success'] == true;
+          if (decoded is Map<String, dynamic>) {
+            if (decoded.containsKey('success')) {
+              serviceHealthy = decoded['success'] == true;
+            } else if (decoded.containsKey('status')) {
+              serviceHealthy = decoded['status'] == 'ok' || decoded['status'] == 200;
+            } else {
+              serviceHealthy = true;
+            }
           }
         } catch (_) {
-          // Response body is not JSON but status is 200 OK
+          serviceHealthy = false;
         }
 
         if (serviceHealthy) {
@@ -189,6 +197,9 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
     _monitorTimer?.cancel();
     _monitorTimer = null;
   }
+
+  /// Whether background periodic monitoring is currently active.
+  bool get isMonitoring => _monitorTimer != null;
 
   /// Manual transition for offline testing or manual override.
   void setOnlineManually({int latencyMs = 15}) {

@@ -170,7 +170,8 @@ final orderNumberGeneratorProvider = Provider<IOrderNumberGenerator>((ref) {
     final db = ref.watch(appDatabaseProvider);
     return OrderNumberGenerator(terminalSequencesDao: db.terminalSequencesDao);
   }
-  return OrderNumberGenerator();
+  // SYNC-009: In legacy online mode (flag OFF), use collision-resistant legacy order numbering
+  return OrderNumberGenerator(useLegacyFormat: true);
 });
 
 final completeOrderUseCaseProvider = Provider<CompleteOrderUseCase>((ref) {

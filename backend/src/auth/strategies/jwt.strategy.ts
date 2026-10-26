@@ -30,6 +30,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         username: true,
         role: true,
         is_default: true,
+        is_active: true,
       },
     });
 
@@ -37,6 +38,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('User no longer exists or session is invalid');
     }
 
-    return user;
+    if (user.is_active === false) {
+      throw new UnauthorizedException('User account is deactivated');
+    }
+
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      is_default: user.is_default,
+    };
   }
 }

@@ -58,6 +58,10 @@ class TableNotifier extends StateNotifier<TableState> {
     loadTables();
   }
 
+  void setTablesForTesting(List<RestaurantTable> tables) {
+    state = state.copyWith(tables: tables);
+  }
+
   Future<void> loadTables({bool silent = false}) async {
     if (!silent && state.tables.isEmpty) {
       state = state.copyWith(isLoading: true);
@@ -68,7 +72,24 @@ class TableNotifier extends StateNotifier<TableState> {
       final tables = jsonList.map((j) => RestaurantTable.fromBackendJson(j)).toList();
       final currentMap = {for (final t in state.tables) t.id: t};
       final mergedTables = await Future.wait(tables.map((st) async {
-        final local = currentMap[st.id];
+        var local = currentMap[st.id];
+        // SYNC-031: On cold restart / app reload, check local SQLite table cache if state.tables was empty
+        if (local == null && FeatureFlags.offlineFirstEnabled && localDb != null) {
+          try {
+            final dbTable = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(st.id))).getSingleOrNull();
+            if (dbTable != null && (dbTable.status == 'occupied' || dbTable.status == 'reserved')) {
+              local = RestaurantTable(
+                id: dbTable.id,
+                tableNumber: dbTable.tableNumber,
+                name: dbTable.name,
+                capacity: dbTable.capacity,
+                status: dbTable.status == 'occupied' ? TableStatus.occupied : TableStatus.reserved,
+                activeOrderId: dbTable.activeOrderId,
+                section: st.section,
+              );
+            }
+          } catch (_) {}
+        }
         if (local != null) {
           if (local.status == TableStatus.occupied) {
             if (st.status == TableStatus.available) {
@@ -409,7 +430,76 @@ class TableNotifier extends StateNotifier<TableState> {
       await _tablesApiService.transferTable(fromTableId: fromTableId, toTableId: toTableId);
       await loadTables();
     } catch (_) {
-      final fromTable = state.tables.firstWhere((t) => t.id == fromTableId);
+      // SYNC-029 (TBL-03): Persist offline table transfer in local Drift and queue outbox mutations
+      final localDb = db;
+      if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+        try {
+          final fromLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(fromTableId))).getSingleOrNull();
+          final toLocal = await (localDb.select(localDb.localRestaurantTables)..where((t) => t.id.equals(toTableId))).getSingleOrNull();
+
+          final fromVer = fromLocal?.version ?? 1;
+          final toVer = toLocal?.version ?? 1;
+
+          await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(fromTableId))).write(
+            LocalRestaurantTablesCompanion(
+              status: const Value('available'),
+              activeOrderId: const Value(null),
+              version: Value(fromVer + 1),
+            ),
+          );
+
+          await (localDb.update(localDb.localRestaurantTables)..where((t) => t.id.equals(toTableId))).write(
+            LocalRestaurantTablesCompanion(
+              status: const Value('occupied'),
+              activeOrderId: Value(fromLocal?.activeOrderId),
+              version: Value(toVer + 1),
+            ),
+          );
+
+          final opIdFrom = const Uuid().v7();
+          await localDb.outboxDao.insertEntry(
+            SyncOutboxCompanion(
+              operationId: Value(opIdFrom),
+              deviceId: const Value('POS-P1'),
+              entityType: const Value('table'),
+              entityId: Value(fromTableId),
+              operationType: const Value('UPDATE'),
+              baseVersion: Value(fromVer),
+              dependencyOrder: const Value(3),
+              status: const Value(SyncOutboxStatus.pending),
+              payload: Value(jsonEncode({
+                'id': fromTableId,
+                'status': 'available',
+                'active_order_id': null,
+              })),
+              createdAt: Value(DateTime.now()),
+            ),
+          );
+
+          final opIdTo = const Uuid().v7();
+          await localDb.outboxDao.insertEntry(
+            SyncOutboxCompanion(
+              operationId: Value(opIdTo),
+              deviceId: const Value('POS-P1'),
+              entityType: const Value('table'),
+              entityId: Value(toTableId),
+              operationType: const Value('UPDATE'),
+              baseVersion: Value(toVer),
+              dependencyOrder: const Value(3),
+              status: const Value(SyncOutboxStatus.pending),
+              payload: Value(jsonEncode({
+                'id': toTableId,
+                'status': 'occupied',
+                'active_order_id': fromLocal?.activeOrderId,
+              })),
+              createdAt: Value(DateTime.now()),
+            ),
+          );
+        } catch (_) {}
+      }
+
+      final fromTable = state.tables.where((t) => t.id == fromTableId).firstOrNull;
+      if (fromTable == null) return;
       final updated = state.tables.map((table) {
         if (table.id == fromTableId) {
           return table.copyWith(

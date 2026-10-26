@@ -79,6 +79,13 @@ class AppDatabase extends _$AppDatabase {
         beforeOpen: (OpeningDetails details) async {
           // Guarantee foreign key constraints are enforced
           await customStatement('PRAGMA foreign_keys = ON;');
+          // SYNC-021: Composite indexes on sync_outbox for high performance queue drainage
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_sync_outbox_queue ON sync_outbox (status, dependency_order, created_at);',
+          );
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox (entity_type, entity_id);',
+          );
         },
       );
 

@@ -305,10 +305,12 @@ export class OrdersService {
         if (existingOrderNum && (!explicitOrderId || existingOrderNum.id !== explicitOrderId)) {
           if (explicitOrderId) {
             let suffix = 1;
-            let candidate = `${orderNumber}-${suffix}`;
+            const maxBaseLen = 30 - (String(suffix).length + 1);
+            let candidate = `${orderNumber.slice(0, maxBaseLen)}-${suffix}`;
             while (await tx.order.findUnique({ where: { order_number: candidate } })) {
               suffix++;
-              candidate = `${orderNumber}-${suffix}`;
+              const curMaxBaseLen = 30 - (String(suffix).length + 1);
+              candidate = `${orderNumber.slice(0, curMaxBaseLen)}-${suffix}`;
             }
             this.logger.warn(
               `Order number collision for offline order ${explicitOrderId}. Reassigned from '${orderNumber}' to '${candidate}'`,
@@ -409,7 +411,18 @@ export class OrdersService {
           where: { token_number: tokenNumber },
         });
         if (existingToken) {
-          tokenNumber = `${tokenNumber}-${Date.now().toString().slice(-4)}`;
+          let suffix = 1;
+          const maxBaseLen = 20 - (String(suffix).length + 1);
+          let candidate = `${tokenNumber.slice(0, maxBaseLen)}-${suffix}`;
+          while (await tx.takeawayOrderDetail.findUnique({ where: { token_number: candidate } })) {
+            suffix++;
+            const curMaxBaseLen = 20 - (String(suffix).length + 1);
+            candidate = `${tokenNumber.slice(0, curMaxBaseLen)}-${suffix}`;
+          }
+          this.logger.warn(
+            `Takeaway token collision for order ${explicitOrderId || createdOrder.id}. Reassigned from '${tokenNumber}' to '${candidate}'`,
+          );
+          tokenNumber = candidate;
         }
 
         await tx.takeawayOrderDetail.create({

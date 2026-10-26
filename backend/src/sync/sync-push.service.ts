@@ -263,13 +263,32 @@ export class SyncPushService {
         if (isUniqueConstraint && mutation.operation_type === 'INSERT') {
           const target = err?.meta?.target;
           const targetStr = Array.isArray(target) ? target.join(',') : String(target || '');
-          const isTargetMatch = (field: string) =>
-            (Array.isArray(target) && target.some((t: any) => typeof t === 'string' && (t === field || t.toLowerCase().includes(field.toLowerCase())))) ||
-            (typeof target === 'string' && (target === field || target.toLowerCase().includes(field.toLowerCase()))) ||
-            (err.message && err.message.toLowerCase().includes(field.toLowerCase()));
 
-          const isPkCollision = isTargetMatch('id') || isTargetMatch('pkey') || isTargetMatch('primary');
-          const isOrderOrTokenNumberCollision = isTargetMatch('order_number') || isTargetMatch('token_number');
+          const targets: string[] = Array.isArray(target)
+            ? target.map((t: any) => String(t).toLowerCase().trim())
+            : typeof target === 'string'
+              ? [target.toLowerCase().trim()]
+              : [];
+
+          const isPkCollision =
+            targets.some((t) => t === 'id' || t.endsWith('_pkey') || t === 'primary') ||
+            (err.message &&
+              (err.message.toLowerCase().includes('fields: (id)') ||
+                err.message.toLowerCase().includes('fields: (`' + 'id`' + ')') ||
+                err.message.toLowerCase().includes('target: `' + 'id`' + ')') ||
+                err.message.toLowerCase().includes('_pkey')));
+
+          const isOrderOrTokenNumberCollision =
+            targets.some(
+              (t) =>
+                t === 'order_number' ||
+                t.includes('order_number') ||
+                t === 'token_number' ||
+                t.includes('token_number')
+            ) ||
+            (err.message &&
+              (err.message.toLowerCase().includes('order_number') ||
+                err.message.toLowerCase().includes('token_number')));
 
           // Case 1: Primary Key / ID duplicate
           if (isPkCollision) {
@@ -287,8 +306,8 @@ export class SyncPushService {
             }
 
             if (existingEntity) {
-              this.logger.log(
-                `Mutation ${mutation.operation_id} (${mutation.entity_type}:${mutation.entity_id}) verified existing in database — resolving as DUPLICATE`,
+              this.logger.warn(
+                `[SYNC-001] Verified duplicate primary key in DB for mutation ${mutation.operation_id} (device: ${device_id}, entity: ${mutation.entity_id}, target: ${targetStr}) — resolving as DUPLICATE`,
               );
               completedInBatch.add(mutation.operation_id);
               results.push({
@@ -301,7 +320,7 @@ export class SyncPushService {
               continue;
             } else {
               this.logger.error(
-                `[SYNC-001] P2002 reported primary key collision for ${mutation.entity_id}, but row does not exist in database! Not acknowledging as DUPLICATE.`,
+                `[SYNC-001] P2002 reported primary key collision for mutation ${mutation.operation_id} (device: ${device_id}, entity: ${mutation.entity_id}, target: ${targetStr}), but row does not exist in database! Not acknowledging as DUPLICATE.`,
               );
               results.push({
                 operation_id: mutation.operation_id,
@@ -329,11 +348,13 @@ export class SyncPushService {
               try {
                 const retriedPayload = { ...mutation.payload };
                 if (originalOrderNumber) {
-                  retriedPayload.order_number = `${originalOrderNumber}-${attempt}`;
+                  const maxOrderLen = 30 - (String(attempt).length + 1);
+                  retriedPayload.order_number = `${originalOrderNumber.slice(0, maxOrderLen)}-${attempt}`;
                   retriedPayload.client_order_number = originalOrderNumber;
                 }
                 if (originalTokenNumber) {
-                  retriedPayload.token_number = `${originalTokenNumber}-${attempt}`;
+                  const maxTokenLen = 20 - (String(attempt).length + 1);
+                  retriedPayload.token_number = `${originalTokenNumber.slice(0, maxTokenLen)}-${attempt}`;
                 }
                 const retriedMutation = { ...mutation, payload: retriedPayload };
 

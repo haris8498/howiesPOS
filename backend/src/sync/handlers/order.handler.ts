@@ -205,7 +205,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     );
 
     const isReassigned = Boolean(
-      payload.order_number && createdOrder.order_number !== payload.order_number,
+      (payload.order_number && createdOrder.order_number !== payload.order_number) ||
+      (payload.token_number && createdOrder.takeaway_detail?.token_number !== payload.token_number),
     );
 
     return {
@@ -216,6 +217,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       server_timestamp: updatedAt.toISOString(),
       order_number: createdOrder.order_number,
       client_order_number: payload.order_number,
+      token_number: createdOrder.takeaway_detail?.token_number,
     };
   }
 

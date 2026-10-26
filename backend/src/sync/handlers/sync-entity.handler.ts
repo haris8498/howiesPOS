@@ -20,6 +20,7 @@ export interface SyncMutationResult {
   error_message?: string;
   order_number?: string;
   client_order_number?: string;
+  token_number?: string;
   conflict_details?: any;
 }
 

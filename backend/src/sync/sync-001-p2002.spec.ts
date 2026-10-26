@@ -14,12 +14,12 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
   let mockChangeLogService: any;
   let mockDbOrders: Map<string, any>;
   let mockDbOrderNumbers: Map<string, string>;
-  let mockDbTokens: Set<string>;
+  let mockDbTokens: Map<string, string>;
 
   beforeEach(() => {
     mockDbOrders = new Map();
     mockDbOrderNumbers = new Map();
-    mockDbTokens = new Set();
+    mockDbTokens = new Map();
 
     mockPrisma = {
       order: {
@@ -65,7 +65,7 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
           takeawayOrderDetail: {
             findUnique: jest.fn().mockImplementation(({ where }) => {
               if (mockDbTokens.has(where.token_number)) {
-                return Promise.resolve({ token_number: where.token_number });
+                return Promise.resolve({ token_number: where.token_number, order_id: mockDbTokens.get(where.token_number) });
               }
               return Promise.resolve(null);
             }),
@@ -76,7 +76,7 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
                 err.meta = { target: ['token_number'] };
                 throw err;
               }
-              mockDbTokens.add(data.token_number);
+              mockDbTokens.set(data.token_number, data.order_id);
               return Promise.resolve(data);
             }),
           },
@@ -97,7 +97,8 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
           }
           orderNum = `${dto.order_number}-${suffix}`;
         }
-        return await tx.order.create({
+
+        const created = await tx.order.create({
           data: {
             id: explicitId || 'auto-id',
             order_number: orderNum,
@@ -111,6 +112,30 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
             version: 1,
           },
         });
+
+        let takeawayDetail: any = null;
+        if (dto.order_type === 'takeaway' || dto.token_number) {
+          let token = dto.token_number || 'TK-100';
+          const existingToken = await tx.takeawayOrderDetail.findUnique({ where: { token_number: token } });
+          if (existingToken) {
+            let suffix = 1;
+            while (await tx.takeawayOrderDetail.findUnique({ where: { token_number: `${dto.token_number}-${suffix}` } })) {
+              suffix++;
+            }
+            token = `${dto.token_number}-${suffix}`;
+          }
+          takeawayDetail = await tx.takeawayOrderDetail.create({
+            data: {
+              token_number: token,
+              order_id: created.id,
+            },
+          });
+        }
+
+        return {
+          ...created,
+          takeaway_detail: takeawayDetail,
+        };
       }),
     };
 
@@ -204,7 +229,61 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
     expect(orderB.order_number).toBe('P1-101-1');
   });
 
-  it('3. Unknown P2002 target -> not acknowledged as success or DUPLICATE', async () => {
+  it('3. Same collision for takeaway token -> both persisted, distinct final tokens, nothing lost', async () => {
+    const mutTk1 = {
+      operation_id: 'op-tk-1',
+      entity_type: 'order',
+      entity_id: 'ord-tk-1',
+      operation_type: 'INSERT',
+      dependency_order: 1,
+      payload: {
+        order_number: 'P1-201',
+        order_type: 'takeaway',
+        token_number: 'TK-101',
+        grand_total: 15,
+      },
+    };
+    const mutTk2 = {
+      operation_id: 'op-tk-2',
+      entity_type: 'order',
+      entity_id: 'ord-tk-2',
+      operation_type: 'INSERT',
+      dependency_order: 1,
+      payload: {
+        order_number: 'P2-202',
+        order_type: 'takeaway',
+        token_number: 'TK-101',
+        grand_total: 22,
+      },
+    };
+
+    // Device 1 pushes takeaway order with token TK-101
+    const res1 = await pushService.pushMutations({
+      device_id: 'POS-01',
+      batch_id: 'batch-tk-1',
+      mutations: [mutTk1 as any],
+    });
+    expect(res1.results[0].status).toBe('SYNCED');
+    expect(mockDbTokens.has('TK-101')).toBe(true);
+
+    // Device 2 pushes another takeaway order with same token TK-101
+    const res2 = await pushService.pushMutations({
+      device_id: 'POS-02',
+      batch_id: 'batch-tk-2',
+      mutations: [mutTk2 as any],
+    });
+
+    // Must NOT be DUPLICATE! Both orders must be persisted with distinct tokens
+    expect(res2.results[0].status).toBe('APPLIED');
+    expect(res2.results[0].token_number).toBe('TK-101-1');
+    expect(mockDbOrders.size).toBe(2);
+    expect(mockDbOrders.has('ord-tk-1')).toBe(true);
+    expect(mockDbOrders.has('ord-tk-2')).toBe(true);
+    expect(mockDbTokens.has('TK-101')).toBe(true);
+    expect(mockDbTokens.has('TK-101-1')).toBe(true);
+  });
+
+  it('4. Unknown P2002 target -> not acknowledged as success or DUPLICATE', async () => {
     // Handler that throws P2002 on an unknown field, e.g. 'phone'
     const unknownP2002Handler = {
       entityType: 'order',
@@ -239,7 +318,7 @@ describe('SYNC-001: P2002 Unique Constraint Handling', () => {
     expect(res.results[0].status).toBe('FAILED_RETRYABLE');
   });
 
-  it('4. Concurrent pushes (Promise.all) do not lose orders', async () => {
+  it('5. Concurrent pushes (Promise.all) do not lose orders', async () => {
     const mut1 = {
       operation_id: 'op-conc-1',
       entity_type: 'order',

@@ -58,36 +58,26 @@ class ApiOrderRepository implements IOrderRepository {
 
   @override
   Future<OrderModel> saveOrder(OrderModel order) async {
-    try {
-      final dto = order.toCreateOrderDto();
-      final res = await _ordersApiService.createOrder(dto);
-      final created = OrderModel.fromBackendJson(res);
-      _localCache.insert(0, created);
-      return created;
-    } catch (_) {
-      _localCache.insert(0, order);
-      return order;
-    }
+    // SYNC-009: In online-only mode, do not catch & swallow errors.
+    // Propagate API / network exceptions so checkout handles failures truthfully.
+    final dto = order.toCreateOrderDto();
+    final res = await _ordersApiService.createOrder(dto);
+    final created = OrderModel.fromBackendJson(res);
+    _localCache.insert(0, created);
+    return created;
   }
 
   @override
   Future<OrderModel> updateOrder(OrderModel order) async {
-    try {
-      final dto = order.toCreateOrderDto();
-      final res = await _ordersApiService.updateOrder(order.id, dto);
-      final updated = OrderModel.fromBackendJson(res);
-      final index = _localCache.indexWhere((o) => o.id == order.id);
-      if (index >= 0) {
-        _localCache[index] = updated;
-      }
-      return updated;
-    } catch (_) {
-      final index = _localCache.indexWhere((o) => o.id == order.id);
-      if (index >= 0) {
-        _localCache[index] = order;
-      }
-      return order;
+    // SYNC-009: In online-only mode, do not catch & swallow errors.
+    final dto = order.toCreateOrderDto();
+    final res = await _ordersApiService.updateOrder(order.id, dto);
+    final updated = OrderModel.fromBackendJson(res);
+    final index = _localCache.indexWhere((o) => o.id == order.id);
+    if (index >= 0) {
+      _localCache[index] = updated;
     }
+    return updated;
   }
 
   @override

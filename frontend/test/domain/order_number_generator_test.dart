@@ -81,5 +81,14 @@ void main() {
         await db.close();
       }
     });
+
+    test('SYNC-009: useLegacyFormat generates HH-yyMMdd-seq without terminal prefix', () {
+      final gen = OrderNumberGenerator(useLegacyFormat: true, initialSequence: 1000);
+      final num1 = gen.generateOrderNumber();
+      final num2 = gen.generateOrderNumber();
+
+      expect(num1, matches(RegExp(r'^HH-\d{6}-1001$')));
+      expect(num2, matches(RegExp(r'^HH-\d{6}-1002$')));
+    });
   });
 }

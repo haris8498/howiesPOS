@@ -22,6 +22,60 @@ import 'device_identity.dart';
 
 export '../database/daos/retention_dao.dart' show RetentionPruneResult;
 
+/// Result of a single-flight sync cycle (SYNC-004).
+class SyncCycleResult {
+  final int pushedCount;
+  final int pulledCount;
+  final int skippedForPendingCount;
+  final bool pushSuccess;
+  final bool pullSuccess;
+  final bool networkOrAuthError;
+
+  const SyncCycleResult({
+    this.pushedCount = 0,
+    this.pulledCount = 0,
+    this.skippedForPendingCount = 0,
+    this.pushSuccess = true,
+    this.pullSuccess = true,
+    this.networkOrAuthError = false,
+  });
+
+  @override
+  String toString() =>
+      'SyncCycleResult(pushed: $pushedCount, pulled: $pulledCount, skipped_for_pending: $skippedForPendingCount, pushSuccess: $pushSuccess, pullSuccess: $pullSuccess)';
+}
+
+/// Result of applying a single pull change delta (SYNC-004).
+enum PullApplyResult {
+  applied,
+  ignoredStale,
+  skippedPending,
+}
+
+class PushBatchDrainResult {
+  final int pushedCount;
+  final bool success;
+  final bool networkOrAuthError;
+
+  const PushBatchDrainResult({
+    required this.pushedCount,
+    required this.success,
+    required this.networkOrAuthError,
+  });
+}
+
+class PullStreamResult {
+  final int pulledCount;
+  final int skippedForPendingCount;
+  final bool success;
+
+  const PullStreamResult({
+    required this.pulledCount,
+    required this.skippedForPendingCount,
+    required this.success,
+  });
+}
+
 
 /// Worker operational status
 enum SyncWorkerStatus {
@@ -157,6 +211,12 @@ class SyncBackgroundWorker {
   bool _isRunning = false;
   bool _isPushing = false;
   bool _isPulling = false;
+  bool _isCycleRunning = false;
+  bool _queuedCycle = false;
+  bool _queuedForcePush = false;
+  Completer<SyncCycleResult>? _activeCycleCompleter;
+  Completer<SyncCycleResult>? _queuedCycleCompleter;
+  SyncCycleResult? lastCycleResult;
   int _mutationsProcessedSinceLastWalCheckpoint = 0;
 
   Timer? _periodicTimer;
@@ -187,7 +247,7 @@ class SyncBackgroundWorker {
   SyncWorkerState get state => stateNotifier.currentState;
 
   bool get isRunning => _isRunning && !_isDisposed;
-  bool get isDraining => _isPushing || _isPulling;
+  bool get isDraining => _isPushing || _isPulling || _isCycleRunning;
   DateTime? get lastSuccessAt => state.lastSuccessfulPush ?? state.lastSuccessfulPull;
   String? get lastError => state.lastError;
 
@@ -216,7 +276,7 @@ class SyncBackgroundWorker {
       if (!_isDisposed) {
         stateNotifier.updateState(state.copyWith(pendingCount: count));
         if (count > 0 && connectivityNotifier.isOnline && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
-          triggerPush();
+          triggerSyncCycle();
         }
       }
     });
@@ -233,7 +293,7 @@ class SyncBackgroundWorker {
     if (socketService != null) {
       _socketPokeCallback = (payload) {
         if (!_isDisposed && connectivityNotifier.isOnline) {
-          triggerPull();
+          triggerSyncCycle();
         }
       };
       socketService!.on('*', _socketPokeCallback!);
@@ -285,6 +345,13 @@ class SyncBackgroundWorker {
     if (socketService != null && _socketPokeCallback != null) {
       socketService!.off('*', _socketPokeCallback);
       _socketPokeCallback = null;
+    }
+
+    if (_activeCycleCompleter != null && !_activeCycleCompleter!.isCompleted) {
+      _activeCycleCompleter!.complete(const SyncCycleResult());
+    }
+    if (_queuedCycleCompleter != null && !_queuedCycleCompleter!.isCompleted) {
+      _queuedCycleCompleter!.complete(const SyncCycleResult());
     }
   }
 
@@ -347,14 +414,12 @@ class SyncBackgroundWorker {
       consecutiveTimeouts: 0,
       lastError: null,
     ));
-    await triggerPush();
-    await triggerPull();
+    await triggerSyncCycle(force: true);
   }
 
   void _onPeriodicTick() {
     if (!state.isAuthPaused && !state.isCircuitBreakerTripped) {
-      triggerPush();
-      triggerPull();
+      triggerSyncCycle();
     }
 
     // Check retention pruning cadence (§3.3, §18 Phase 7, Directive Q9.2)
@@ -364,13 +429,121 @@ class SyncBackgroundWorker {
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // 3. SINGLE-FLIGHT SYNC CYCLE (SYNC-004)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /// Runs a single-flight sync cycle: one mutex around a cycle that runs
+  /// strictly in order PUSH (drain outbox) -> PULL (apply deltas).
+  /// Overlapping triggers are coalesced into one queued run, never run in parallel.
+  Future<SyncCycleResult> triggerSyncCycle({bool force = false}) async {
+    if (_isDisposed) {
+      return const SyncCycleResult();
+    }
+
+    if (_isCycleRunning) {
+      _queuedCycle = true;
+      if (force) {
+        _queuedForcePush = true;
+      }
+      _queuedCycleCompleter ??= Completer<SyncCycleResult>();
+      return _queuedCycleCompleter!.future;
+    }
+
+    _isCycleRunning = true;
+    _activeCycleCompleter = Completer<SyncCycleResult>();
+
+    var currentForce = force;
+    SyncCycleResult lastResult = const SyncCycleResult();
+
+    try {
+      while (!_isDisposed) {
+        lastResult = await _executeSyncCycle(force: currentForce);
+
+        if (_activeCycleCompleter != null && !_activeCycleCompleter!.isCompleted) {
+          _activeCycleCompleter!.complete(lastResult);
+        }
+
+        if (_queuedCycle && !_isDisposed) {
+          _queuedCycle = false;
+          currentForce = _queuedForcePush;
+          _queuedForcePush = false;
+
+          _activeCycleCompleter = _queuedCycleCompleter ?? Completer<SyncCycleResult>();
+          _queuedCycleCompleter = null;
+        } else {
+          break;
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('[SyncWorker] Unexpected error in sync cycle loop: $e\n$stack');
+      if (_activeCycleCompleter != null && !_activeCycleCompleter!.isCompleted) {
+        _activeCycleCompleter!.completeError(e, stack);
+      }
+      if (_queuedCycleCompleter != null && !_queuedCycleCompleter!.isCompleted) {
+        _queuedCycleCompleter!.completeError(e, stack);
+      }
+    } finally {
+      _isCycleRunning = false;
+      _activeCycleCompleter = null;
+      _queuedCycleCompleter = null;
+      _queuedCycle = false;
+      _queuedForcePush = false;
+    }
+
+    return lastResult;
+  }
+
+  /// Triggers a push synchronization cycle (runs under single-flight mutex: push then pull).
+  Future<void> triggerPush({bool force = false}) => triggerSyncCycle(force: force);
+
+  /// Triggers a delta pull replication stream (runs under single-flight mutex: push then pull).
+  Future<void> triggerPull() => triggerSyncCycle();
+
+  Future<SyncCycleResult> _executeSyncCycle({bool force = false}) async {
+    // 1. PUSH: drain outbox
+    final pushResult = await _drainPushOutbox(force: force);
+
+    int pulledCount = 0;
+    int skippedForPendingCount = 0;
+    bool pullSuccess = true;
+
+    // 2. PULL: only run if push did NOT fail with auth or network error (§5)
+    if (!pushResult.networkOrAuthError &&
+        !_isDisposed &&
+        !state.isAuthPaused &&
+        !state.isCircuitBreakerTripped) {
+      final pullResult = await _pullDeltas();
+      pulledCount = pullResult.pulledCount;
+      skippedForPendingCount = pullResult.skippedForPendingCount;
+      pullSuccess = pullResult.success;
+    } else {
+      pullSuccess = !pushResult.networkOrAuthError;
+    }
+
+    // 3. Short log line per cycle (counts pushed/pulled/skipped-for-pending) (§6)
+    debugPrint(
+      '[SyncWorker] Cycle finished: pushed=${pushResult.pushedCount}, pulled=$pulledCount, skipped_for_pending=$skippedForPendingCount',
+    );
+
+    final cycleResult = SyncCycleResult(
+      pushedCount: pushResult.pushedCount,
+      pulledCount: pulledCount,
+      skippedForPendingCount: skippedForPendingCount,
+      pushSuccess: pushResult.success,
+      pullSuccess: pullSuccess,
+      networkOrAuthError: pushResult.networkOrAuthError,
+    );
+
+    lastCycleResult = cycleResult;
+    return cycleResult;
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
-  // 3. PUSH PIPELINE (Spec §6.1-§6.4, §8.1.1)
+  // 4. PUSH PIPELINE (Spec §6.1-§6.4, §8.1.1)
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// Triggers a push synchronization cycle.
-  Future<void> triggerPush({bool force = false}) async {
+  Future<PushBatchDrainResult> _drainPushOutbox({bool force = false}) async {
     if (force) {
       if (state.isCircuitBreakerTripped || state.isAuthPaused) {
         stateNotifier.updateState(state.copyWith(
@@ -384,12 +557,20 @@ class SyncBackgroundWorker {
         await db.outboxDao.resetFailedEntries();
       } catch (_) {}
     }
-    if (_isPushing || _isDisposed || (!force && (state.isAuthPaused || state.isCircuitBreakerTripped))) {
-      return;
+    if (_isDisposed || (!force && (state.isAuthPaused || state.isCircuitBreakerTripped))) {
+      return PushBatchDrainResult(
+        pushedCount: 0,
+        success: false,
+        networkOrAuthError: state.isAuthPaused || state.isCircuitBreakerTripped,
+      );
     }
 
     _isPushing = true;
     stateNotifier.updateState(state.copyWith(status: SyncWorkerStatus.pushing));
+
+    int pushedCount = 0;
+    bool success = true;
+    bool networkOrAuthError = false;
 
     try {
       while (!_isDisposed && !state.isAuthPaused && !state.isCircuitBreakerTripped) {
@@ -401,7 +582,11 @@ class SyncBackgroundWorker {
 
         final inFlightSuccess = await _processPushBatch(batch);
         if (!inFlightSuccess) {
+          networkOrAuthError = true;
+          success = false;
           break; // Stop loop on network error, circuit breaker, or auth pause
+        } else {
+          pushedCount += batch.length;
         }
       }
     } finally {
@@ -410,6 +595,12 @@ class SyncBackgroundWorker {
         stateNotifier.updateState(state.copyWith(status: SyncWorkerStatus.idle));
       }
     }
+
+    return PushBatchDrainResult(
+      pushedCount: pushedCount,
+      success: success,
+      networkOrAuthError: networkOrAuthError,
+    );
   }
 
   Future<bool> _processPushBatch(List<SyncOutboxEntry> batch) async {
@@ -804,20 +995,39 @@ class SyncBackgroundWorker {
   // 6. PULL PIPELINE (§8.1.2, §8.1.3, §10.2)
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// Triggers a delta pull replication stream.
-  Future<void> triggerPull() async {
-    if (_isPulling || _isDisposed || state.isAuthPaused || state.isCircuitBreakerTripped) {
-      return;
+  /// Checks if the target entity has any pending or in-flight outbox entries (SYNC-004 §2).
+  Future<bool> _hasPendingOutbox(String entityId) async {
+    if (entityId.isEmpty) return false;
+    final pending = await (db.select(db.syncOutbox)
+          ..where((t) =>
+              t.entityId.equals(entityId) &
+              (t.status.equals(SyncOutboxStatus.pending) |
+                  t.status.equals(SyncOutboxStatus.inFlight) |
+                  t.status.equals(SyncOutboxStatus.failedRetryable) |
+                  t.status.equals(SyncOutboxStatus.authPaused)))
+          ..limit(1))
+        .get();
+    return pending.isNotEmpty;
+  }
+
+  /// Internal delta pull replication stream (runs strictly after push under single-flight mutex).
+  Future<PullStreamResult> _pullDeltas() async {
+    if (_isDisposed || state.isAuthPaused || state.isCircuitBreakerTripped) {
+      return const PullStreamResult(pulledCount: 0, skippedForPendingCount: 0, success: false);
     }
 
     _isPulling = true;
     stateNotifier.updateState(state.copyWith(status: SyncWorkerStatus.pulling));
 
+    int pulledCount = 0;
+    int skippedForPendingCount = 0;
+    bool success = true;
+
     try {
       final currentCursor = await db.syncCursorsDao.getLastPulledSequence('GLOBAL_PULL_CURSOR');
       if (currentCursor == 0) {
         await bootstrapInitialData();
-        return;
+        return const PullStreamResult(pulledCount: 0, skippedForPendingCount: 0, success: true);
       }
 
       var cursor = currentCursor;
@@ -835,6 +1045,7 @@ class SyncBackgroundWorker {
         final response = await client.get(uri, headers: headers).timeout(const Duration(seconds: 15));
 
         if (response.statusCode != 200) {
+          success = false;
           break;
         }
 
@@ -844,17 +1055,53 @@ class SyncBackgroundWorker {
         hasMore = decoded['has_more'] == true;
 
         if (changes.isNotEmpty) {
+          int? lastAppliedSeq;
+          bool hadPendingSkip = false;
+
           await db.transaction(() async {
             for (final change in changes.whereType<Map<String, dynamic>>()) {
-              await _applyPullChange(change);
+              final entityId = change['entity_id']?.toString() ?? '';
+              final changeSeq = (change['sequence'] as num?)?.toInt();
+
+              // Check if entity has pending/in-flight outbox entries (§2)
+              if (entityId.isNotEmpty && await _hasPendingOutbox(entityId)) {
+                hadPendingSkip = true;
+                skippedForPendingCount++;
+                break; // Do not apply; skip and re-pull later from lastAppliedSeq
+              }
+
+              final applyResult = await _applyPullChange(change);
+              if (applyResult == PullApplyResult.applied) {
+                pulledCount++;
+                if (changeSeq != null) lastAppliedSeq = changeSeq;
+              } else if (applyResult == PullApplyResult.ignoredStale) {
+                if (changeSeq != null) lastAppliedSeq = changeSeq;
+              } else if (applyResult == PullApplyResult.skippedPending) {
+                hadPendingSkip = true;
+                skippedForPendingCount++;
+                break;
+              }
             }
-            await db.syncCursorsDao.setCursor(
-              'GLOBAL_PULL_CURSOR',
-              nextCursor,
-              lastSyncAttempt: DateTime.now(),
-              lastSuccessfulSync: DateTime.now(),
-            );
+
+            // Advance cursor only after batch changes processed inside transaction (§4)
+            final targetCursor = hadPendingSkip
+                ? (lastAppliedSeq ?? cursor)
+                : nextCursor;
+
+            if (targetCursor > cursor) {
+              await db.syncCursorsDao.setCursor(
+                'GLOBAL_PULL_CURSOR',
+                targetCursor,
+                lastSyncAttempt: DateTime.now(),
+                lastSuccessfulSync: DateTime.now(),
+              );
+              cursor = targetCursor;
+            }
           });
+
+          if (hadPendingSkip) {
+            hasMore = false; // Stop further paging in this cycle; wait for push to drain
+          }
         } else {
           await db.syncCursorsDao.setCursor(
             'GLOBAL_PULL_CURSOR',
@@ -862,22 +1109,28 @@ class SyncBackgroundWorker {
             lastSyncAttempt: DateTime.now(),
             lastSuccessfulSync: DateTime.now(),
           );
+          cursor = nextCursor;
         }
-
-        cursor = nextCursor;
       }
 
       stateNotifier.updateState(state.copyWith(
         lastSuccessfulPull: DateTime.now(),
       ));
-    } catch (_) {
-      // Pull errors silently log and rely on subsequent polling or poke
+    } catch (e, stack) {
+      debugPrint('[SyncWorker] Pull replication error: $e\n$stack');
+      success = false;
     } finally {
       _isPulling = false;
       if (!_isDisposed && state.status == SyncWorkerStatus.pulling) {
         stateNotifier.updateState(state.copyWith(status: SyncWorkerStatus.idle));
       }
     }
+
+    return PullStreamResult(
+      pulledCount: pulledCount,
+      skippedForPendingCount: skippedForPendingCount,
+      success: success,
+    );
   }
 
   /// Cold-start bootstrap catalog hydration (§8.1.3).
@@ -1071,26 +1324,33 @@ class SyncBackgroundWorker {
         final shift = data['active_shift'] as Map<String, dynamic>;
         final shiftId = shift['id']?.toString();
         if (shiftId != null && shiftId.isNotEmpty) {
-          final startingCash = (shift['starting_cash'] as num?)?.toDouble() ??
-              (shift['opening_float'] as num?)?.toDouble() ?? 0.0;
-          final status = shift['status']?.toString() ?? DailyCalculationStatus.active;
-          final createdAt = shift['created_at'] != null
-              ? DateTime.tryParse(shift['created_at'].toString()) ?? DateTime.now()
-              : DateTime.now();
+          final existingShift = await db.dailyCalculationsDao.getCalculationById(shiftId);
+          final isLocallyClosed = existingShift != null &&
+              (existingShift.status.toUpperCase() == DailyCalculationStatus.closed ||
+               existingShift.status.toUpperCase() == DailyCalculationStatus.offlineClosed);
 
-          await db.dailyCalculationsDao.upsertCalculation(
-            LocalDailyCalculationsCompanion(
-              id: Value(shiftId),
-              cashierId: Value(shift['cashier_id']?.toString() ?? 'UNKNOWN'),
-              cashierName: Value(shift['cashier_name']?.toString() ?? 'Cashier'),
-              startingCash: Value(startingCash),
-              expectedCashDrawer: Value(startingCash),
-              status: Value(status),
-              createdAt: Value(createdAt),
-              syncStatus: const Value('synced'),
-              serverVersion: Value((shift['version'] as num?)?.toInt() ?? 1),
-            ),
-          );
+          if (!isLocallyClosed) {
+            final startingCash = (shift['starting_cash'] as num?)?.toDouble() ??
+                (shift['opening_float'] as num?)?.toDouble() ?? 0.0;
+            final status = shift['status']?.toString() ?? DailyCalculationStatus.active;
+            final createdAt = shift['created_at'] != null
+                ? DateTime.tryParse(shift['created_at'].toString()) ?? DateTime.now()
+                : DateTime.now();
+
+            await db.dailyCalculationsDao.upsertCalculation(
+              LocalDailyCalculationsCompanion(
+                id: Value(shiftId),
+                cashierId: Value(shift['cashier_id']?.toString() ?? 'UNKNOWN'),
+                cashierName: Value(shift['cashier_name']?.toString() ?? 'Cashier'),
+                startingCash: Value(startingCash),
+                expectedCashDrawer: Value(startingCash),
+                status: Value(status),
+                createdAt: Value(createdAt),
+                syncStatus: const Value('synced'),
+                serverVersion: Value((shift['version'] as num?)?.toInt() ?? 1),
+              ),
+            );
+          }
         }
       }
 
@@ -1123,7 +1383,10 @@ class SyncBackgroundWorker {
     });
   }
 
-  Future<void> _applyPullChange(Map<String, dynamic> change) async {
+  @visibleForTesting
+  Future<PullApplyResult> applyPullChange(Map<String, dynamic> change) => _applyPullChange(change);
+
+  Future<PullApplyResult> _applyPullChange(Map<String, dynamic> change) async {
     final entityType = (change['entity_type'] as String? ?? '').toLowerCase().trim();
     final entityId = change['entity_id']?.toString() ?? '';
     final recordVersion = (change['record_version'] as num?)?.toInt() ?? 1;
@@ -1132,30 +1395,36 @@ class SyncBackgroundWorker {
         ? change['payload'] as Map<String, dynamic>
         : (change['data'] is Map<String, dynamic> ? change['data'] as Map<String, dynamic> : <String, dynamic>{});
 
+    // 1. Ignore echo of own writes (§10.1 & Phase 5)
+    final changeDeviceId = payload['origin_device_id'] ?? payload['device_id'];
+    if (changeDeviceId != null && changeDeviceId.toString() == deviceId) {
+      return PullApplyResult.ignoredStale; // Ignore echo of own writes
+    }
+    final changeOpId = payload['operation_id']?.toString();
+    if (changeOpId != null) {
+      final ownEntry = await db.outboxDao.getEntryByOperationId(changeOpId);
+      if (ownEntry != null) {
+        return PullApplyResult.ignoredStale; // Ignore echo of own writes via operation_id match
+      }
+    }
+
+    // 2. Pending outbox guard (§2): Do not apply pull delta for an entity that still has pending/in-flight outbox entries.
+    if (entityId.isNotEmpty && await _hasPendingOutbox(entityId)) {
+      return PullApplyResult.skippedPending;
+    }
+
     switch (entityType) {
       case 'restaurant_table':
       case 'table':
-        // Ignore echo of own writes (§10.1 & Phase 5)
-        final changeDeviceId = payload['origin_device_id'] ?? payload['device_id'];
-        if (changeDeviceId != null && changeDeviceId.toString() == deviceId) {
-          return; // Ignore echo of own writes
-        }
-        final changeOpId = payload['operation_id']?.toString();
-        if (changeOpId != null) {
-          final ownEntry = await db.outboxDao.getEntryByOperationId(changeOpId);
-          if (ownEntry != null) {
-            return; // Ignore echo of own writes via operation_id match
-          }
-        }
-
         final existing = await db.catalogDao.getTableById(entityId);
         // Apply table changes only when version is newer (§10 OCC)
         if (existing != null && existing.version >= recordVersion) {
-          return;
+          return PullApplyResult.ignoredStale;
         }
 
         if (isDeleted) {
           await (db.delete(db.localRestaurantTables)..where((t) => t.id.equals(entityId))).go();
+          return PullApplyResult.applied;
         } else {
           // Hospitality Operational Priority (§10.2):
           // If local table is occupied by an active local order, physical seated guest wins!
@@ -1180,37 +1449,79 @@ class SyncBackgroundWorker {
               version: Value(recordVersion),
             ),
           ]);
+          return PullApplyResult.applied;
         }
-        break;
 
       case 'shift':
       case 'daily_calculation':
         final existingShift = await db.dailyCalculationsDao.getCalculationById(entityId);
-        if (existingShift != null && existingShift.serverVersion >= recordVersion) {
-          return;
+        final isLocallyClosed = existingShift != null &&
+            (existingShift.status.toUpperCase() == DailyCalculationStatus.closed ||
+             existingShift.status.toUpperCase() == DailyCalculationStatus.offlineClosed);
+
+        if (existingShift != null && existingShift.serverVersion >= recordVersion && !isLocallyClosed) {
+          return PullApplyResult.ignoredStale;
         }
 
         if (isDeleted) {
           await (db.delete(db.localDailyCalculations)..where((t) => t.id.equals(entityId))).go();
+          return PullApplyResult.applied;
         } else {
-          final serverStatus = payload['status']?.toString() ?? DailyCalculationStatus.active;
+          final serverStatus = (payload['status']?.toString() ?? DailyCalculationStatus.active).toUpperCase();
+
+          // Terminal closure guard: A locally CLOSED or OFFLINE_CLOSED shift must NEVER revert to ACTIVE.
+          String finalStatus;
+          if (isLocallyClosed) {
+            if (serverStatus == DailyCalculationStatus.closed) {
+              finalStatus = DailyCalculationStatus.closed;
+            } else {
+              // Stale server delta says ACTIVE; keep local closed status!
+              finalStatus = existingShift.status;
+            }
+          } else {
+            finalStatus = serverStatus;
+          }
+
           final startingCash = (payload['starting_cash'] as num?)?.toDouble() ??
               (payload['opening_float'] as num?)?.toDouble() ??
               existingShift?.startingCash ??
               0.0;
-          final actualCash = (payload['actual_cash_counted'] as num?)?.toDouble() ??
-              (payload['cash_submitted'] as num?)?.toDouble() ??
-              existingShift?.actualCashCounted;
-          final cashVariance = (payload['cash_variance'] as num?)?.toDouble() ??
-              existingShift?.cashVariance ??
-              0.0;
-          final closingNotes = payload['closing_notes']?.toString() ?? existingShift?.closingNotes;
-          final submittedAt = payload['submitted_at'] != null
-              ? DateTime.tryParse(payload['submitted_at'].toString()) ?? existingShift?.submittedAt
-              : existingShift?.submittedAt;
+          final serverActualCash = (payload['actual_cash_counted'] as num?)?.toDouble() ??
+              (payload['cash_submitted'] as num?)?.toDouble();
+          final serverCashVariance = (payload['cash_variance'] as num?)?.toDouble();
+
+          // Merge counted cash and variance from local if locally closed
+          final double? finalActualCash;
+          final double finalCashVariance;
+          if (isLocallyClosed && existingShift.actualCashCounted != null) {
+            finalActualCash = existingShift.actualCashCounted;
+            finalCashVariance = existingShift.cashVariance;
+          } else {
+            finalActualCash = serverActualCash ?? existingShift?.actualCashCounted;
+            finalCashVariance = serverCashVariance ?? existingShift?.cashVariance ?? 0.0;
+          }
+
+          final closingNotes = (isLocallyClosed && existingShift.closingNotes != null)
+              ? existingShift.closingNotes
+              : (payload['closing_notes']?.toString() ?? existingShift?.closingNotes);
+
+          final submittedAt = (isLocallyClosed && existingShift.submittedAt != null)
+              ? existingShift.submittedAt
+              : (payload['submitted_at'] != null
+                  ? DateTime.tryParse(payload['submitted_at'].toString()) ?? existingShift?.submittedAt
+                  : existingShift?.submittedAt);
+
           final createdAt = payload['created_at'] != null
               ? DateTime.tryParse(payload['created_at'].toString()) ?? DateTime.now()
               : (existingShift?.createdAt ?? DateTime.now());
+
+          final syncStatus = isLocallyClosed && finalStatus != DailyCalculationStatus.closed
+              ? existingShift.syncStatus
+              : 'synced';
+
+          final effectiveVersion = recordVersion > (existingShift?.serverVersion ?? 0)
+              ? recordVersion
+              : (existingShift?.serverVersion ?? recordVersion);
 
           await db.dailyCalculationsDao.upsertCalculation(
             LocalDailyCalculationsCompanion(
@@ -1219,27 +1530,28 @@ class SyncBackgroundWorker {
               cashierName: Value(payload['cashier_name']?.toString() ?? existingShift?.cashierName ?? 'Cashier'),
               startingCash: Value(startingCash),
               expectedCashDrawer: Value(startingCash),
-              actualCashCounted: actualCash != null ? Value(actualCash) : const Value.absent(),
-              cashVariance: Value(cashVariance),
-              status: Value(serverStatus),
+              actualCashCounted: finalActualCash != null ? Value(finalActualCash) : const Value.absent(),
+              cashVariance: Value(finalCashVariance),
+              status: Value(finalStatus),
               closingNotes: Value(closingNotes),
               submittedAt: Value(submittedAt),
               createdAt: Value(createdAt),
-              syncStatus: const Value('synced'),
-              serverVersion: Value(recordVersion),
+              syncStatus: Value(syncStatus),
+              serverVersion: Value(effectiveVersion),
             ),
           );
+          return PullApplyResult.applied;
         }
-        break;
 
       case 'order':
         final existingOrder = await db.ordersDao.getOrderById(entityId);
         if (existingOrder != null && existingOrder.serverVersion >= recordVersion) {
-          return; // Ignore stale or duplicate
+          return PullApplyResult.ignoredStale; // Ignore stale or duplicate
         }
 
         if (isDeleted) {
           await db.ordersDao.deleteOrder(entityId);
+          return PullApplyResult.applied;
         } else if (existingOrder != null) {
           final serverUpdatedAt = change['created_at'] != null
               ? DateTime.tryParse(change['created_at'].toString()) ?? DateTime.now()
@@ -1255,8 +1567,9 @@ class SyncBackgroundWorker {
               syncStatus: const Value('synced'),
             ),
           );
+          return PullApplyResult.applied;
         }
-        break;
+        return PullApplyResult.ignoredStale;
 
       case 'menu_category':
       case 'category':
@@ -1272,7 +1585,7 @@ class SyncBackgroundWorker {
             ),
           ]);
         }
-        break;
+        return PullApplyResult.applied;
 
       case 'menu_item':
       case 'item':
@@ -1291,7 +1604,7 @@ class SyncBackgroundWorker {
             ),
           ]);
         }
-        break;
+        return PullApplyResult.applied;
 
       case 'floor_zone':
         if (isDeleted) {
@@ -1305,7 +1618,7 @@ class SyncBackgroundWorker {
             ),
           ]);
         }
-        break;
+        return PullApplyResult.applied;
 
       case 'staff_user':
         if (isDeleted) {
@@ -1321,7 +1634,7 @@ class SyncBackgroundWorker {
             ),
           ]);
         }
-        break;
+        return PullApplyResult.applied;
 
       case 'store_setting':
       case 'setting':
@@ -1333,8 +1646,9 @@ class SyncBackgroundWorker {
           storePhone: Value(payload['store_phone']?.toString() ?? ''),
           taxPercentage: Value((payload['tax_percentage'] as num?)?.toDouble() ?? 0.0),
         ));
-        break;
+        return PullApplyResult.applied;
     }
+    return PullApplyResult.ignoredStale;
   }
 
   // ───────────────────────────────────────────────────────────────────────────

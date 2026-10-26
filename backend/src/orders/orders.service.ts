@@ -324,6 +324,8 @@ export class OrdersService {
 
       // 5B. Resolve Active Shift Session
       let activeShiftId: string | null = dto.shift_id || null;
+      const hadExplicitShiftId = Boolean(dto.shift_id);
+
       if (activeShiftId) {
         try {
           const shiftExists = await tx.dailyCalculation.findUnique({
@@ -331,7 +333,9 @@ export class OrdersService {
             select: { id: true },
           });
           if (!shiftExists) {
-            this.logger.warn(`Shift ID '${activeShiftId}' does not exist yet. Linking order without shift_id.`);
+            this.logger.warn(
+              `Shift ID '${activeShiftId}' does not exist yet. Linking order without shift_id (OBX-07 / MNY-07).`,
+            );
             activeShiftId = null;
           }
         } catch (err) {
@@ -339,7 +343,9 @@ export class OrdersService {
           activeShiftId = null;
         }
       }
-      if (!activeShiftId) {
+
+      // OBX-07 / MNY-07: Do not arbitrarily attach offline order to an unrelated active shift if its own shift was specified
+      if (!activeShiftId && !hadExplicitShiftId) {
         try {
           const activeShift = await tx.dailyCalculation.findFirst({
             where: { status: 'ACTIVE' },

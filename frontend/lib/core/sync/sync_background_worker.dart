@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../config/api_config.dart';
@@ -603,6 +604,12 @@ class SyncBackgroundWorker {
     );
   }
 
+  /// Computes deterministic batch_id from SHA-256 of sorted operation IDs (SYNC-024)
+  static String computeBatchId(Iterable<SyncOutboxEntry> entries) {
+    final sortedOpIds = entries.map((e) => e.operationId).toList()..sort();
+    return sha256.convert(utf8.encode(sortedOpIds.join(':'))).toString();
+  }
+
   Future<bool> _processPushBatch(List<SyncOutboxEntry> batch) async {
     final now = DateTime.now();
     final batchIds = batch.map((e) => e.id).toList();
@@ -610,7 +617,8 @@ class SyncBackgroundWorker {
     // Mark batch IN_FLIGHT (Tier 3 Anti-duplicate defense §15.2)
     await db.outboxDao.markInFlight(batchIds, now);
 
-    final batchId = const Uuid().v7();
+    // SYNC-024: Deterministic batch_id from SHA-256 of sorted operation IDs
+    final batchId = computeBatchId(batch);
     final mutations = batch.map((entry) {
       dynamic parsedPayload;
       try {

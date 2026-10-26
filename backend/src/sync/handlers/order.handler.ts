@@ -761,20 +761,29 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }
 
     // 5. Update Base Order
-    const isPaid = isPaidRequested
-      ? effectivePaymentTotal >= orderTotal
-      : payload.is_paid !== undefined
-      ? payload.is_paid
-      : existingOrder.is_paid;
+    // SYNC-013: Terminal and Paid Order Immutability Invariant
+    // Once an order is marked paid or completed on the server, a stale offline update cannot downgrade it back to unpaid or accepted.
+    let isPaid = existingOrder.is_paid;
+    if (!existingOrder.is_paid) {
+      isPaid = isPaidRequested
+        ? effectivePaymentTotal >= orderTotal
+        : payload.is_paid !== undefined
+        ? payload.is_paid
+        : false;
+    }
 
     const paymentStatus = isPaid
       ? 'PAID'
-      : payload.payment_status || existingOrder.payment_status;
+      : (existingOrder.payment_status === 'PAID' ? 'PAID' : (payload.payment_status || existingOrder.payment_status));
 
-    const status =
-      isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
+    let status = existingOrder.status;
+    if (existingOrder.status === 'completed') {
+      status = 'completed';
+    } else {
+      status = isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
         ? payload.status
         : payload.status ?? existingOrder.status;
+    }
 
     const orderUpdateData: any = {
       ...(status ? { status } : {}),

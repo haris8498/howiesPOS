@@ -405,32 +405,35 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
   @override
   Future<void> updateOrderStatus(String orderId, OrderStatus status) async {
-    await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
-      LocalOrdersCompanion(
-        status: Value(status.name),
-        syncStatus: const Value('pending_update'),
-        clientUpdatedAt: Value(DateTime.now()),
-      ),
-    );
+    // SYNC-026: Atomic local write and outbox mutation inside transaction
+    await _db.transaction(() async {
+      await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
+        LocalOrdersCompanion(
+          status: Value(status.name),
+          syncStatus: const Value('pending_update'),
+          clientUpdatedAt: Value(DateTime.now()),
+        ),
+      );
 
-    // Enqueue outbox mutation
-    final opId = _uuid.v7();
-    await _db.outboxDao.insertEntry(
-      SyncOutboxCompanion(
-        operationId: Value(opId),
-        deviceId: Value(_deviceId),
-        entityType: const Value('order'),
-        entityId: Value(orderId),
-        operationType: const Value('UPDATE'),
-        dependencyOrder: const Value(2),
-        status: const Value(SyncOutboxStatus.pending),
-        payload: Value(jsonEncode({
-          'id': orderId,
-          'status': status.name,
-        })),
-        createdAt: Value(DateTime.now()),
-      ),
-    );
+      // Enqueue outbox mutation
+      final opId = _uuid.v7();
+      await _db.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: Value(_deviceId),
+          entityType: const Value('order'),
+          entityId: Value(orderId),
+          operationType: const Value('UPDATE'),
+          dependencyOrder: const Value(2),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode({
+            'id': orderId,
+            'status': status.name,
+          })),
+          createdAt: Value(DateTime.now()),
+        ),
+      );
+    });
   }
 
   @override
@@ -440,30 +443,33 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
   @override
   Future<void> deleteHeldOrder(String orderId) async {
-    await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
-      LocalOrdersCompanion(
-        isDeleted: const Value(true),
-        syncStatus: const Value('pending_update'),
-        clientUpdatedAt: Value(DateTime.now()),
-      ),
-    );
+    // SYNC-026: Atomic local write and outbox mutation inside transaction
+    await _db.transaction(() async {
+      await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
+        LocalOrdersCompanion(
+          isDeleted: const Value(true),
+          syncStatus: const Value('pending_update'),
+          clientUpdatedAt: Value(DateTime.now()),
+        ),
+      );
 
-    final opId = _uuid.v7();
-    await _db.outboxDao.insertEntry(
-      SyncOutboxCompanion(
-        operationId: Value(opId),
-        deviceId: Value(_deviceId),
-        entityType: const Value('order'),
-        entityId: Value(orderId),
-        operationType: const Value('DELETE'),
-        dependencyOrder: const Value(2),
-        status: const Value(SyncOutboxStatus.pending),
-        payload: Value(jsonEncode({
-          'id': orderId,
-        })),
-        createdAt: Value(DateTime.now()),
-      ),
-    );
+      final opId = _uuid.v7();
+      await _db.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: Value(_deviceId),
+          entityType: const Value('order'),
+          entityId: Value(orderId),
+          operationType: const Value('DELETE'),
+          dependencyOrder: const Value(2),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode({
+            'id': orderId,
+          })),
+          createdAt: Value(DateTime.now()),
+        ),
+      );
+    });
   }
 
   /// Reactive stream of all orders from local SQLite WAL

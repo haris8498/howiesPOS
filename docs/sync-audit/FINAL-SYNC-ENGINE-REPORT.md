@@ -1624,3 +1624,77 @@ The following matrix cross-references every unified `SYNC-xxx` finding ID to its
 | **SYNC-038** | Midnight Rollover Resets Receipt Number Mid-Shift | High | `FLT-10` |
 | **SYNC-039** | Owner Sync Center Leaks Drift Instance When OFF | High | `FLG-03` |
 | **SYNC-040** | Order Completion Decoupled from Stock Deduction | High | `ARCH-04`, `MNY-09` |
+
+
+---
+
+# 11. Remediation Status (Post-Audit Multi-Agent Execution)
+
+> **Remediation Completed:** October 26, 2026  
+> **Final Gate Recommendation:** **GO** (Authorized by `sync007-regression-verifier` in Commit `cce4a22`)  
+> **Remediation Branch:** `main`  
+> **Test Status:** 59 Backend Suites Passed (409/409 tests), 3 Backend E2E Suites Passed (15/15 tests), Frontend Suite Passed (208/208 tests, 0 failures), 0 Flutter Analysis Errors.
+
+---
+
+### 11.1 Core Blocker Remediation Summary (SYNC-001 through SYNC-005)
+
+| Issue ID | Agent | Status | Commit Ref | Remediation Summary |
+|---|---|---|---|---|
+| **SYNC-001** | `sync001-p2002-order-loss` | **DONE** | `669e8e5` | P2002 collision on `order_number` or takeaway token dynamically allocates new server-assigned identifier (`P1-101-1`), preserves `client_order_number`, returns `APPLIED`, and updates local Drift client receipt. Eliminates silent order loss. |
+| **SYNC-002** | `sync002-clear-errors-purge` | **DONE** | `80d9cc4` | Removed destructive outbox purge button. Replaced with safe "Retry failed" mechanism resetting failed entries to `PENDING`. Server acknowledgement is strictly required to mark `SYNCED`. Quarantine isolates unrecoverable failures with manager-only JSON export and audit logging. |
+| **SYNC-003** | `sync003-table-update-payments` | **DONE** | `5d944ff` | Offline dine-in table `UPDATE` mutations persist payments, cash/card tenders, discounts, taxes, and line items atomically. Enforces OCC version checking and validates that total payments match order grand total. |
+| **SYNC-004** | `sync004-push-pull-sequencing` | **DONE** | `5e44673` | Implemented single-flight sync cycle mutex enforcing strict **PUSH (drain outbox) -> PULL (apply deltas)** ordering. Delta application is state-aware: locally closed shifts cannot revert to `ACTIVE`, freed tables respect local mutations, and pull pauses on push failures. |
+| **SYNC-005** | `sync005-device-identity-shift` | **DONE** | `88e302b` | Replaced hardcoded `POS-P1` with persistent UUID hardware identity stored via Windows DPAPI. Replaced store-wide `unique_active_shift` with terminal-scoped partial unique index `unique_active_shift_per_terminal`, enabling concurrent multi-terminal active shifts. |
+
+---
+
+### 11.2 Leftovers Remediation Summary (SYNC-006)
+
+A dedicated leftovers remediation pass cataloged all 56 remaining audit findings into [`docs/sync-audit/fixes/leftovers-backlog.md`](file:///D:/HOWIES%20TEST/howiesPOS/docs/sync-audit/fixes/leftovers-backlog.md).
+
+- **Total Audit Findings Cataloged:** 56
+- **Resolved & Committed (High & Medium):** **24 findings** across 22 atomic commits
+  - `SYNC-006`: Shift close no longer auto-cancels open unpaid orders; cash sales scoped to cash tender (`51a974a`)
+  - `SYNC-007`: Deactivated staff instantly rejected in JWT strategy (`ae0eaf5`)
+  - `SYNC-008`: Removed plaintext password guessing in silent re-authentication (`a40be49`)
+  - `SYNC-009`: Flag-OFF collision-safe legacy receipt numbering and API error propagation (`9236a7f`)
+  - `SYNC-013`: Preserved completed/paid state against stale offline overwrites (`0b98e38`)
+  - `SYNC-014`: Preserved client `created_at` timestamp on order & payment ingestion (`5503563`)
+  - `SYNC-017`: Resumed outbox from `AUTH_PAUSED` upon user re-login (`9401030`)
+  - `SYNC-018`: Split HTTP 4xx batch mutations to isolate poison pills and prevent batch drops (`1aec81d`)
+  - `SYNC-019`: Red sync health indicator displayed during auth pause (`e75da07`)
+  - `SYNC-020`: Synchronized server reallocated order number back to local Drift orders (`3c15975`)
+  - `SYNC-021`: Added composite queue & entity indexes to `sync_outbox` (`a861aef`)
+  - `SYNC-022`: Classified transient DB exceptions as `FAILED_RETRYABLE` (`8e6db66`)
+  - `SYNC-024`: Deterministic batch ID computed from SHA-256 for controller idempotency (`6a680b0`)
+  - `SYNC-025`: Unconditional in-flight task recovery on startup and periodic tick (`e5334dd`)
+  - `SYNC-026`: Atomic transaction for local order status updates and deletions (`c9e309d`)
+  - `SYNC-029` & `SYNC-031`: Persisted offline table transfers and preserved occupied tables on restart (`eb5c0b5`)
+  - `SYNC-034`: Auto-healed occupied table status when active orders are absent (`cde850c`)
+  - `SYNC-035`: Enforced valid JSON check on health probe to prevent captive portal loop (`956b43c`)
+  - `SYNC-038`: Prevented sequence reset across midnight rollover mid-shift (`0bccc7a`)
+  - `SYNC-039`: Guarded Sync Center Drift DB instantiation behind feature flag (`d682493`)
+  - `SYNC-040`: Decoupled stock deduction from order checkout per Directive Q4.1 (`5345051`)
+  - `OBX-03`: Enforced causal entity ordering in `getPushBatch` during retry backoff (`48dc8fe`)
+  - `OBX-07`: Prevented linking offline orders to unrelated active shifts (`9b71004`)
+  - `MNY-02` & `MNY-03`: Blocked underpayment in tender dialog & scoped cash change to cash tender (`d668601`)
+  - `FLG-04` & `FLT-11`: Gated background polling timer behind flag and added startup resilience (`1ab1325`, `6a47698`)
+- **Needs Product Decision:** **15 items** documented with trade-off analysis and recommendations
+- **Skipped (Low / Non-Critical Polish):** **17 items** documented with justification
+
+---
+
+### 11.3 Final Verification Gate (SYNC-007)
+
+- **Verification Report:** [`docs/sync-audit/fixes/VERIFICATION-REPORT.md`](file:///D:/HOWIES%20TEST/howiesPOS/docs/sync-audit/fixes/VERIFICATION-REPORT.md)
+- **Outcome:** **RECOMMENDATION: GO**
+- **Scenario Suite Validation:**
+  - **S1 (SYNC-001):** Simultaneous duplicate `order_number` pushes safely reallocated without loss -> **PASS**
+  - **S2 (SYNC-002):** Unsent outbox entries retried cleanly without purge capability -> **PASS**
+  - **S3 (SYNC-003):** Offline split tender dine-in settlement preserves full financial ledger -> **PASS**
+  - **S4 (SYNC-004):** Offline closed shift & freed table immune to stale delta overwrites -> **PASS**
+  - **S5 (SYNC-005):** Multi-terminal active shifts operate concurrently without cross-echo dropping -> **PASS**
+  - **S6 (Crash Resilience):** In-flight zombie tasks reaped on reboot without duplication -> **PASS**
+  - **S7 (Idempotency):** 3x push replay yields zero duplicates across database tables -> **PASS**
+- **Flag-OFF Equivalence:** Byte-for-byte behavioral parity confirmed when `OFFLINE_FIRST_ENABLED = false`.

@@ -348,6 +348,7 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
           t.status.equals(SyncOutboxStatus.failedRetryable) |
           t.status.equals(SyncOutboxStatus.failedFatal) |
           t.status.equals(SyncOutboxStatus.conflict) |
+          t.status.equals(SyncOutboxStatus.authPaused) |
           t.status.equals(statusQuarantined) |
           t.status.equals(statusDeadLetter))
       ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))

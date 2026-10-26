@@ -65,7 +65,8 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   final pendingEntries = entries.where((e) =>
       e.status == SyncOutboxStatus.pending ||
       e.status == SyncOutboxStatus.inFlight ||
-      e.status == SyncOutboxStatus.failedRetryable).toList();
+      e.status == SyncOutboxStatus.failedRetryable ||
+      e.status == SyncOutboxStatus.authPaused).toList();
   final pendingCount = pendingEntries.length;
 
   final failedEntries = entries.where((e) =>
@@ -78,6 +79,9 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
   final hasStuckItem = isOnline && entries.any((e) =>
       e.status == SyncOutboxStatus.inFlight &&
       now.difference(e.sentAt ?? e.createdAt).inMinutes >= 2);
+
+  final isAuthPaused = worker.state.isAuthPaused ||
+      entries.any((e) => e.status == SyncOutboxStatus.authPaused);
 
   // RED CONDITIONS (Strict 2-color policy per spec)
   if (!isOnline) {
@@ -99,6 +103,17 @@ final rawSyncHealthProvider = Provider<SyncHealthState>((ref) {
       failedCount: failedCount,
       tooltipText: 'Sync worker stopped',
       semanticsLabel: 'Sync status: Worker is stopped.',
+    );
+  }
+
+  if (isAuthPaused) {
+    return SyncHealthState(
+      status: SyncHealthStatus.red,
+      isPulsing: false,
+      pendingCount: pendingCount,
+      failedCount: failedCount,
+      tooltipText: 'Auth paused - sign in required',
+      semanticsLabel: 'Sync status: Authentication paused. Sign in required.',
     );
   }
 

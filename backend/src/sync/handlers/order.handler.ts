@@ -115,6 +115,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       payment_status: p.payment_status || p.paymentStatus || 'COMPLETED',
       notes: p.notes,
       received_by: p.received_by || p.receivedBy,
+      created_at: p.created_at || p.createdAt,
     }));
   }
 
@@ -363,6 +364,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       customer_phone: payload.customer_phone,
       delivery_address: payload.delivery_address,
       token_number: payload.token_number,
+      created_at: payload.created_at || payload.createdAt,
       items: this.mapItems(payload.items),
       payments: this.mapPayments(payload.payments),
     };

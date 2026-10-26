@@ -119,6 +119,64 @@ describe('OrderHandler', () => {
         false,
       );
     });
+
+    it('should forward client created_at on order and payments to createOrderInTx (SYNC-014)', async () => {
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+      };
+
+      const clientCreatedAt = '2026-10-25T14:30:00.000Z';
+      const createdOrder = {
+        id: 'ord-uuid-sync014',
+        order_number: 'P1-105',
+        order_type: 'takeaway',
+        status: 'completed',
+        subtotal: 30,
+        grand_total: 30,
+        payment_status: 'PAID',
+        is_paid: true,
+        shift_id: 'shift-1',
+        version: 1,
+        created_at: new Date(clientCreatedAt),
+        updated_at: new Date(clientCreatedAt),
+        order_items: [],
+        payments: [],
+      };
+      mockOrdersService.createOrderInTx.mockResolvedValue(createdOrder);
+
+      await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-sync014',
+          entity_type: 'order',
+          entity_id: 'ord-uuid-sync014',
+          operation_type: 'INSERT',
+          payload: {
+            order_number: 'P1-105',
+            order_type: 'takeaway',
+            created_at: clientCreatedAt,
+            items: [{ item_name: 'Burger', quantity: 1, unit_price: 30 }],
+            payments: [{ payment_method: 'cash', amount: 30, created_at: clientCreatedAt }],
+          },
+        },
+        { deviceId: 'POS-P1', operationId: 'op-sync014', receivedAt: new Date() },
+      );
+
+      expect(mockOrdersService.createOrderInTx).toHaveBeenCalledWith(
+        mockTx,
+        expect.objectContaining({
+          created_at: clientCreatedAt,
+          payments: [
+            expect.objectContaining({
+              created_at: clientCreatedAt,
+            }),
+          ],
+        }),
+        'ord-uuid-sync014',
+      );
+    });
   });
 
   describe('handle UPDATE (SYNC-003)', () => {

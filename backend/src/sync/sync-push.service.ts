@@ -579,11 +579,27 @@ export class SyncPushService {
       }
     }
 
+    const allTableReassigned: Array<{
+      orderId: string;
+      fromTableId: string;
+      toTableId: string;
+      toLabel: string;
+    }> = [];
+
+    for (const res of results) {
+      if (Array.isArray((res as any).tableReassigned)) {
+        allTableReassigned.push(...(res as any).tableReassigned);
+      } else if ((res as any).table_reassigned) {
+        allTableReassigned.push((res as any).table_reassigned);
+      }
+    }
+
     return {
       success: true,
       batch_id,
       processed_count: results.length,
       results,
+      tableReassigned: allTableReassigned,
     };
   }
 }

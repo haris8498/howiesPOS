@@ -26,6 +26,18 @@ export interface SyncMutationResult {
   conflict_details?: any;
   warning_code?: string;
   warnings?: string[];
+  table_reassigned?: {
+    orderId: string;
+    fromTableId: string;
+    toTableId: string;
+    toLabel: string;
+  };
+  tableReassigned?: Array<{
+    orderId: string;
+    fromTableId: string;
+    toTableId: string;
+    toLabel: string;
+  }>;
 }
 
 export interface SyncEntityHandler {

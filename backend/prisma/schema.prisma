@@ -156,13 +156,22 @@ model RestaurantTable {
   is_deleted             Boolean           @default(false) @map("is_deleted")
   deleted_at             DateTime?         @map("deleted_at") @db.Timestamp()
   deleted_by             String?           @map("deleted_by") @db.VarChar(100)
+  is_overflow            Boolean           @default(false) @map("is_overflow")
+  parent_table_id        String?           @map("parent_table_id") @db.VarChar(36)
+  overflow_suffix        String?           @map("overflow_suffix") @db.VarChar(10)
   version                Int               @default(1) @map("version")
   updated_at             DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
 
   // Relationships — table only appears in Dine-In orders
   zone                   FloorZone?        @relation(fields: [zone_id], references: [id], onDelete: SetNull)
   dine_in_orders         DineInOrderDetail[]
+  parent_table           RestaurantTable?  @relation("TableOverflow", fields: [parent_table_id], references: [id], onDelete: SetNull)
+  overflow_tables        RestaurantTable[] @relation("TableOverflow")
 
+  @@index([zone_id])
+  @@index([is_deleted])
+  @@index([parent_table_id])
+  @@index([is_overflow])
   @@map("restaurant_tables")
 }
 

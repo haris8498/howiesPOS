@@ -24,6 +24,9 @@ describe('TablesService', () => {
     is_deleted: false,
     deleted_at: null,
     deleted_by: null,
+    is_overflow: false,
+    parent_table_id: null,
+    overflow_suffix: null,
     version: 1,
     updated_at: new Date(),
   };
@@ -45,6 +48,9 @@ describe('TablesService', () => {
     is_deleted: false,
     deleted_at: null,
     deleted_by: null,
+    is_overflow: false,
+    parent_table_id: null,
+    overflow_suffix: null,
     version: 1,
     updated_at: new Date(),
   };

@@ -162,6 +162,9 @@ export class TablesService {
         reserved_customer_name: reservedCustomerName,
         reservation_time: reservationTime,
         current_order_items: activeItems,
+        is_overflow: (t as any).is_overflow ?? false,
+        parent_table_id: (t as any).parent_table_id ?? null,
+        overflow_suffix: (t as any).overflow_suffix ?? null,
       };
     });
   }
@@ -261,6 +264,9 @@ export class TablesService {
       reserved_customer_name: reservedCustomerName,
       reservation_time: reservationTime,
       current_order_items: activeItems,
+      is_overflow: (table as any).is_overflow ?? false,
+      parent_table_id: (table as any).parent_table_id ?? null,
+      overflow_suffix: (table as any).overflow_suffix ?? null,
     };
   }
 

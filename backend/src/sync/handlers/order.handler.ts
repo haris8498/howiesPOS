@@ -310,6 +310,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       include: {
         order_items: true,
         payments: true,
+        dine_in_detail: true,
       },
     });
 
@@ -319,12 +320,38 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       const ts = this.toIsoString(
         (existingOrder as any).updated_at || existingOrder.created_at,
       );
+
+      // Check if existing order was assigned/reassigned to an overflow table
+      let duplicateReassigned: any = undefined;
+      const originalTableId = payload.table_id || payload.dine_in_detail?.table_id;
+      if (existingOrder.dine_in_detail?.table_id && tx.restaurantTable?.findUnique) {
+        try {
+          const assignedTable = await tx.restaurantTable.findUnique({
+            where: { id: existingOrder.dine_in_detail.table_id },
+          });
+          if (
+            assignedTable &&
+            (assignedTable.is_overflow ||
+              (originalTableId && assignedTable.id !== originalTableId && assignedTable.table_number !== originalTableId))
+          ) {
+            duplicateReassigned = {
+              orderId: existingOrder.id,
+              fromTableId: assignedTable.parent_table_id || originalTableId || assignedTable.id,
+              toTableId: assignedTable.id,
+              toLabel: assignedTable.table_number,
+            };
+          }
+        } catch (_) {}
+      }
+
       return {
         operation_id: mutation.operation_id,
         entity_id: existingOrder.id,
         status: 'DUPLICATE',
         server_version: v,
         server_timestamp: ts,
+        table_reassigned: duplicateReassigned,
+        tableReassigned: duplicateReassigned ? [duplicateReassigned] : undefined,
       };
     }
 
@@ -369,34 +396,224 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       customer_phone: payload.customer_phone,
       delivery_address: payload.delivery_address,
       token_number: payload.token_number,
-      created_at: payload.created_at || payload.createdAt,
+      created_at:
+        payload.created_at ||
+        payload.createdAt ||
+        payload.seated_at ||
+        payload.seatedAt ||
+        mutation.created_at,
       items: this.mapItems(payload.items),
       payments: this.mapPayments(payload.payments),
     };
 
-    // 2.5 Check if referenced table is soft-deleted
+    // 2.5 Row lock & conflict detection on claimed table (§10.2, D-01)
     const targetTableId = payload.table_id || payload.dine_in_detail?.table_id;
     let isTableDeleted = false;
-    if (targetTableId && tx.restaurantTable?.findFirst) {
-      try {
-        const tbl = await tx.restaurantTable.findFirst({
-          where: {
-            OR: [
-              { id: targetTableId },
-              { table_number: targetTableId },
-              { name: targetTableId },
-            ],
-          },
-          select: { id: true, is_deleted: true },
-        });
-        if (tbl && tbl.is_deleted) {
+    let tableReassignedInfo: {
+      orderId: string;
+      fromTableId: string;
+      toTableId: string;
+      toLabel: string;
+    } | undefined = undefined;
+
+    if (targetTableId) {
+      let lockedTable: any = null;
+      if (typeof (tx as any).$queryRaw === 'function') {
+        try {
+          const rows: any[] = await (tx as any).$queryRaw`
+            SELECT id, table_number, name, status, active_order_id, capacity, section, zone_id, current_bill_amount, is_deleted, is_overflow, parent_table_id, overflow_suffix, version
+            FROM restaurant_tables
+            WHERE id = ${targetTableId} OR table_number = ${targetTableId} OR name = ${targetTableId}
+            LIMIT 1
+            FOR UPDATE
+          `;
+          if (rows && rows.length > 0) {
+            lockedTable = rows[0];
+          }
+        } catch (err) {
+          this.logger.warn(`Failed row lock SELECT ... FOR UPDATE on table ${targetTableId}: ${err}`);
+        }
+      }
+
+      if (!lockedTable && tx.restaurantTable?.findFirst) {
+        try {
+          lockedTable = await tx.restaurantTable.findFirst({
+            where: {
+              OR: [
+                { id: targetTableId },
+                { table_number: targetTableId },
+                { name: targetTableId },
+              ],
+            },
+          });
+        } catch (err) {
+          this.logger.warn(`Failed to find table ${targetTableId}: ${err}`);
+        }
+      }
+
+      if (lockedTable) {
+        if (lockedTable.is_deleted) {
           isTableDeleted = true;
           this.logger.warn(
             `Order ${orderId} references soft-deleted table ${targetTableId} - accepting with TABLE_DELETED warning`,
           );
         }
-      } catch (err) {
-        this.logger.warn(`Failed to check table soft-delete status for table ${targetTableId}: ${err}`);
+
+        // Conflict detection: does lockedTable already hold another different, still-open order?
+        let activeHoldingOrder: any = null;
+        if (lockedTable.active_order_id && lockedTable.active_order_id !== orderId) {
+          activeHoldingOrder = await tx.order.findFirst({
+            where: {
+              id: lockedTable.active_order_id,
+              is_paid: false,
+              status: { notIn: ['completed', 'cancelled'] },
+            },
+            include: {
+              dine_in_detail: true,
+            },
+          });
+        }
+
+        if (!activeHoldingOrder && tx.dineInOrderDetail?.findFirst) {
+          const openDetail = await tx.dineInOrderDetail.findFirst({
+            where: {
+              table_id: lockedTable.id,
+              order_id: { not: orderId },
+              order: {
+                is_paid: false,
+                status: { notIn: ['completed', 'cancelled'] },
+              },
+            },
+            include: {
+              order: {
+                include: {
+                  dine_in_detail: true,
+                },
+              },
+            },
+          });
+          if (openDetail) {
+            activeHoldingOrder = openDetail.order;
+          }
+        }
+
+        if (activeHoldingOrder) {
+          this.logger.warn(
+            `[D-01] Table collision detected on Table ${lockedTable.table_number}: incoming order ${orderId} vs existing order ${activeHoldingOrder.id}`,
+          );
+
+          const incomingTime = this.getOrderSeatedTimestamp(payload, mutation);
+          const existingTime = this.getOrderSeatedTimestamp(activeHoldingOrder, null, lockedTable.occupied_since);
+
+          // Deterministic winner: earlier seatedAt (fallback createdAt) keeps T; ties broken by smaller UUID
+          let incomingWins = false;
+          if (incomingTime < existingTime) {
+            incomingWins = true;
+          } else if (incomingTime > existingTime) {
+            incomingWins = false;
+          } else {
+            incomingWins = orderId.localeCompare(activeHoldingOrder.id) < 0;
+          }
+
+          this.logger.log(
+            `[D-01] Seating priority resolution on Table ${lockedTable.table_number}: ` +
+              `incoming (${orderId}, time=${incomingTime}) vs existing (${activeHoldingOrder.id}, time=${existingTime}) => ` +
+              (incomingWins ? 'INCOMING WINS' : 'EXISTING WINS'),
+          );
+
+          // Root parent table
+          let rootParent = lockedTable;
+          if (lockedTable.is_overflow && lockedTable.parent_table_id) {
+            const foundParent = await tx.restaurantTable.findUnique({
+              where: { id: lockedTable.parent_table_id },
+            });
+            if (foundParent) rootParent = foundParent;
+          }
+
+          if (!incomingWins) {
+            // Incoming order LOSES: reassign incoming order to an overflow table of rootParent
+            const overflowTable = await this.getOrCreateOverflowTable(tx, rootParent);
+            this.logger.log(
+              `[D-01] Reassigning loser incoming order ${orderId} to overflow table ${overflowTable.table_number} (${overflowTable.id})`,
+            );
+
+            createDto.table_id = overflowTable.id;
+            tableReassignedInfo = {
+              orderId,
+              fromTableId: rootParent.id,
+              toTableId: overflowTable.id,
+              toLabel: overflowTable.table_number,
+            };
+          } else {
+            // Incoming order WINS: reassign existing order to an overflow table!
+            const overflowTable = await this.getOrCreateOverflowTable(tx, rootParent);
+            this.logger.log(
+              `[D-01] Displacing existing order ${activeHoldingOrder.id} from Table ${rootParent.table_number} to overflow table ${overflowTable.table_number} (${overflowTable.id})`,
+            );
+
+            // Move existing order's dine-in detail to overflow table
+            await tx.dineInOrderDetail.updateMany({
+              where: { order_id: activeHoldingOrder.id },
+              data: { table_id: overflowTable.id },
+            });
+
+            // Update overflow table: occupied with activeHoldingOrder
+            await tx.restaurantTable.update({
+              where: { id: overflowTable.id },
+              data: {
+                status: 'occupied',
+                active_order_id: activeHoldingOrder.id,
+                current_bill_amount: activeHoldingOrder.grand_total,
+                occupied_since: activeHoldingOrder.created_at,
+                version: { increment: 1 },
+              },
+            });
+
+            // Record change log for overflow table and displaced order
+            await this.changeLogService.record(
+              tx,
+              'restaurant_table',
+              overflowTable.id,
+              'UPDATE',
+              (overflowTable.version || 1) + 1,
+              {
+                id: overflowTable.id,
+                table_number: overflowTable.table_number,
+                name: overflowTable.name,
+                status: 'occupied',
+                active_order_id: activeHoldingOrder.id,
+                parent_table_id: rootParent.id,
+                overflow_suffix: overflowTable.overflow_suffix,
+                is_overflow: true,
+              },
+              false,
+            );
+
+            await this.changeLogService.record(
+              tx,
+              'order',
+              activeHoldingOrder.id,
+              'UPDATE',
+              (activeHoldingOrder.version || 1) + 1,
+              {
+                id: activeHoldingOrder.id,
+                order_number: activeHoldingOrder.order_number,
+                table_id: overflowTable.id,
+                overflow_reassigned: true,
+              },
+              false,
+            );
+
+            // Incoming order keeps rootParent
+            createDto.table_id = rootParent.id;
+            tableReassignedInfo = {
+              orderId: activeHoldingOrder.id,
+              fromTableId: rootParent.id,
+              toTableId: overflowTable.id,
+              toLabel: overflowTable.table_number,
+            };
+          }
+        }
       }
     }
 
@@ -439,8 +656,13 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
 
     const isReassigned = Boolean(
       (payload.order_number && createdOrder.order_number !== payload.order_number) ||
-      (payload.token_number && createdOrder.takeaway_detail?.token_number !== payload.token_number),
+      (payload.token_number && createdOrder.takeaway_detail?.token_number !== payload.token_number) ||
+      tableReassignedInfo,
     );
+
+    const warnings: string[] = [];
+    if (isTableDeleted) warnings.push('TABLE_DELETED');
+    if (tableReassignedInfo) warnings.push('TABLE_REASSIGNED_OVERFLOW');
 
     return {
       operation_id: mutation.operation_id,
@@ -453,8 +675,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       reassigned_order_number: isReassigned ? createdOrder.order_number : undefined,
       reassigned_token_number: isReassigned ? createdOrder.takeaway_detail?.token_number : undefined,
       token_number: createdOrder.takeaway_detail?.token_number,
-      warning_code: isTableDeleted ? 'TABLE_DELETED' : undefined,
-      warnings: isTableDeleted ? ['TABLE_DELETED'] : undefined,
+      table_reassigned: tableReassignedInfo,
+      tableReassigned: tableReassignedInfo ? [tableReassignedInfo] : undefined,
+      warning_code: warnings[0],
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
 
@@ -1353,5 +1577,135 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       server_version: newVersion,
       server_timestamp: this.toIsoString(updatedAt),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // D-01: Virtual Overflow Table Resolution Helpers (§10.2)
+  // ---------------------------------------------------------------------------
+
+  private async getOrCreateOverflowTable(
+    tx: Prisma.TransactionClient,
+    parentTable: any,
+  ): Promise<any> {
+    const existingOverflows = await tx.restaurantTable.findMany({
+      where: {
+        parent_table_id: parentTable.id,
+        is_deleted: false,
+      },
+      orderBy: { table_number: 'asc' },
+    });
+
+    // Check if an existing overflow table is free (not occupied and no active unpaid order)
+    for (const ov of existingOverflows) {
+      if (ov.status !== 'occupied') {
+        let hasActiveOrder = false;
+        if (ov.active_order_id) {
+          const act = await tx.order.findFirst({
+            where: {
+              id: ov.active_order_id,
+              is_paid: false,
+              status: { notIn: ['completed', 'cancelled'] },
+            },
+          });
+          if (act) hasActiveOrder = true;
+        }
+        if (!hasActiveOrder && tx.dineInOrderDetail?.findFirst) {
+          const openDetail = await tx.dineInOrderDetail.findFirst({
+            where: {
+              table_id: ov.id,
+              order: {
+                is_paid: false,
+                status: { notIn: ['completed', 'cancelled'] },
+              },
+            },
+          });
+          if (openDetail) hasActiveOrder = true;
+        }
+
+        if (!hasActiveOrder) {
+          return ov;
+        }
+      }
+    }
+
+    // Determine next suffix ('B', 'C', 'D', ...)
+    const existingSuffixes = existingOverflows
+      .map((t) => t.overflow_suffix)
+      .filter((s): s is string => Boolean(s));
+
+    const nextSuffix = this.computeNextOverflowSuffix(existingSuffixes);
+    const overflowTableNumber = `${parentTable.table_number}-${nextSuffix}`;
+    const overflowTableName = `${parentTable.name}-${nextSuffix}`;
+
+    const created = await tx.restaurantTable.create({
+      data: {
+        table_number: overflowTableNumber,
+        name: overflowTableName,
+        capacity: parentTable.capacity,
+        section: parentTable.section,
+        zone_id: parentTable.zone_id,
+        status: 'available',
+        is_overflow: true,
+        parent_table_id: parentTable.id,
+        overflow_suffix: nextSuffix,
+        version: 1,
+      },
+    });
+
+    await this.changeLogService.record(
+      tx,
+      'restaurant_table',
+      created.id,
+      'INSERT',
+      1,
+      {
+        id: created.id,
+        table_number: created.table_number,
+        name: created.name,
+        capacity: created.capacity,
+        section: created.section,
+        zone_id: created.zone_id,
+        status: created.status,
+        is_overflow: true,
+        parent_table_id: parentTable.id,
+        overflow_suffix: nextSuffix,
+        version: 1,
+      },
+      false,
+    );
+
+    return created;
+  }
+
+  private computeNextOverflowSuffix(existingSuffixes: string[]): string {
+    const letters = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
+    for (const letter of letters) {
+      if (!existingSuffixes.includes(letter)) {
+        return letter;
+      }
+    }
+    let i = 2;
+    while (existingSuffixes.includes(`OV${i}`)) {
+      i++;
+    }
+    return `OV${i}`;
+  }
+
+  private getOrderSeatedTimestamp(orderOrPayload: any, mutation: any, fallbackTime?: any): number {
+    const raw =
+      orderOrPayload.seated_at ||
+      orderOrPayload.seatedAt ||
+      orderOrPayload.dine_in_detail?.seated_at ||
+      orderOrPayload.dine_in_detail?.seatedAt ||
+      orderOrPayload.occupied_since ||
+      orderOrPayload.created_at ||
+      orderOrPayload.createdAt ||
+      mutation?.created_at;
+
+    if (raw) {
+      const parsed = new Date(raw).getTime();
+      if (!isNaN(parsed)) return parsed;
+    }
+    return Date.now();
   }
 }

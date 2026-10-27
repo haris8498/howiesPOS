@@ -310,6 +310,84 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
         ? payload.active_order_id
         : existing.active_order_id;
 
+    // D-01: Check if incomingActiveOrderId was reassigned to a virtual overflow table
+    let reassignedOverflowTable: any = null;
+    if (incomingActiveOrderId && tx.dineInOrderDetail?.findUnique) {
+      try {
+        const detail = await tx.dineInOrderDetail.findUnique({
+          where: { order_id: incomingActiveOrderId },
+          include: { table: true },
+        });
+        if (
+          detail &&
+          detail.table &&
+          detail.table.is_overflow &&
+          (detail.table.parent_table_id === existing.id || detail.table_id !== existing.id)
+        ) {
+          reassignedOverflowTable = detail.table;
+        }
+      } catch (_) {}
+    }
+    
+    if (reassignedOverflowTable) {
+      this.logger.log(
+        `[D-01] Table update for ${existing.table_number} redirected to reassigned overflow table ${reassignedOverflowTable.table_number} (${reassignedOverflowTable.id}) for order ${incomingActiveOrderId}`,
+      );
+    
+      const updatedOverflow = await tx.restaurantTable.update({
+        where: { id: reassignedOverflowTable.id },
+        data: {
+          status: 'occupied',
+          active_order_id: incomingActiveOrderId,
+          current_bill_amount: payload.current_bill_amount !== undefined
+            ? new Prisma.Decimal(payload.current_bill_amount)
+            : reassignedOverflowTable.current_bill_amount,
+          version: { increment: 1 },
+        },
+      });
+    
+      await this.changeLogService.record(
+        tx,
+        'restaurant_table',
+        updatedOverflow.id,
+        'UPDATE',
+        updatedOverflow.version,
+        {
+          id: updatedOverflow.id,
+          table_number: updatedOverflow.table_number,
+          name: updatedOverflow.name,
+          status: updatedOverflow.status,
+          active_order_id: updatedOverflow.active_order_id,
+          parent_table_id: existing.id,
+          overflow_suffix: updatedOverflow.overflow_suffix,
+          is_overflow: true,
+        },
+        false,
+      );
+    
+      return {
+        operation_id: mutation.operation_id,
+        entity_id: existing.id,
+        status: 'APPLIED',
+        server_version: currentVersion,
+        server_timestamp: (existing.updated_at || new Date()).toISOString(),
+        table_reassigned: {
+          orderId: incomingActiveOrderId,
+          fromTableId: existing.id,
+          toTableId: reassignedOverflowTable.id,
+          toLabel: reassignedOverflowTable.table_number,
+        },
+        tableReassigned: [
+          {
+            orderId: incomingActiveOrderId,
+            fromTableId: existing.id,
+            toTableId: reassignedOverflowTable.id,
+            toLabel: reassignedOverflowTable.table_number,
+          },
+        ],
+      };
+    }
+
     // Idempotent / Repeated Replay Check: If table already matches the mutation payload
     if (
       existing.status.toLowerCase() === incomingStatus &&
@@ -465,6 +543,7 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
           server_timestamp: (updated.updated_at || new Date()).toISOString(),
         };
       }
+
 
       // ── POLICY RULE 2: Active / Paid Order Must NEVER Be Lost (§10.2) ──────
       // If server table has an active order, and client's stale update is releasing

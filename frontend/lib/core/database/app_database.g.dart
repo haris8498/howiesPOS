@@ -9131,6 +9131,43 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _isOverflowMeta = const VerificationMeta(
+    'isOverflow',
+  );
+  @override
+  late final GeneratedColumn<bool> isOverflow = GeneratedColumn<bool>(
+    'is_overflow',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_overflow" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _parentTableIdMeta = const VerificationMeta(
+    'parentTableId',
+  );
+  @override
+  late final GeneratedColumn<String> parentTableId = GeneratedColumn<String>(
+    'parent_table_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _overflowSuffixMeta = const VerificationMeta(
+    'overflowSuffix',
+  );
+  @override
+  late final GeneratedColumn<String> overflowSuffix = GeneratedColumn<String>(
+    'overflow_suffix',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -9142,6 +9179,9 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
     activeOrderId,
     version,
     isDeleted,
+    isOverflow,
+    parentTableId,
+    overflowSuffix,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -9218,6 +9258,30 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
         isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta),
       );
     }
+    if (data.containsKey('is_overflow')) {
+      context.handle(
+        _isOverflowMeta,
+        isOverflow.isAcceptableOrUnknown(data['is_overflow']!, _isOverflowMeta),
+      );
+    }
+    if (data.containsKey('parent_table_id')) {
+      context.handle(
+        _parentTableIdMeta,
+        parentTableId.isAcceptableOrUnknown(
+          data['parent_table_id']!,
+          _parentTableIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('overflow_suffix')) {
+      context.handle(
+        _overflowSuffixMeta,
+        overflowSuffix.isAcceptableOrUnknown(
+          data['overflow_suffix']!,
+          _overflowSuffixMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -9263,6 +9327,18 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
         DriftSqlType.bool,
         data['${effectivePrefix}is_deleted'],
       )!,
+      isOverflow: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_overflow'],
+      )!,
+      parentTableId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}parent_table_id'],
+      ),
+      overflowSuffix: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}overflow_suffix'],
+      ),
     );
   }
 
@@ -9283,6 +9359,9 @@ class LocalRestaurantTable extends DataClass
   final String? activeOrderId;
   final int version;
   final bool isDeleted;
+  final bool isOverflow;
+  final String? parentTableId;
+  final String? overflowSuffix;
   const LocalRestaurantTable({
     required this.id,
     this.zoneId,
@@ -9293,6 +9372,9 @@ class LocalRestaurantTable extends DataClass
     this.activeOrderId,
     required this.version,
     required this.isDeleted,
+    required this.isOverflow,
+    this.parentTableId,
+    this.overflowSuffix,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -9310,6 +9392,13 @@ class LocalRestaurantTable extends DataClass
     }
     map['version'] = Variable<int>(version);
     map['is_deleted'] = Variable<bool>(isDeleted);
+    map['is_overflow'] = Variable<bool>(isOverflow);
+    if (!nullToAbsent || parentTableId != null) {
+      map['parent_table_id'] = Variable<String>(parentTableId);
+    }
+    if (!nullToAbsent || overflowSuffix != null) {
+      map['overflow_suffix'] = Variable<String>(overflowSuffix);
+    }
     return map;
   }
 
@@ -9328,6 +9417,13 @@ class LocalRestaurantTable extends DataClass
           : Value(activeOrderId),
       version: Value(version),
       isDeleted: Value(isDeleted),
+      isOverflow: Value(isOverflow),
+      parentTableId: parentTableId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(parentTableId),
+      overflowSuffix: overflowSuffix == null && nullToAbsent
+          ? const Value.absent()
+          : Value(overflowSuffix),
     );
   }
 
@@ -9346,6 +9442,9 @@ class LocalRestaurantTable extends DataClass
       activeOrderId: serializer.fromJson<String?>(json['activeOrderId']),
       version: serializer.fromJson<int>(json['version']),
       isDeleted: serializer.fromJson<bool>(json['isDeleted']),
+      isOverflow: serializer.fromJson<bool>(json['isOverflow']),
+      parentTableId: serializer.fromJson<String?>(json['parentTableId']),
+      overflowSuffix: serializer.fromJson<String?>(json['overflowSuffix']),
     );
   }
   @override
@@ -9361,6 +9460,9 @@ class LocalRestaurantTable extends DataClass
       'activeOrderId': serializer.toJson<String?>(activeOrderId),
       'version': serializer.toJson<int>(version),
       'isDeleted': serializer.toJson<bool>(isDeleted),
+      'isOverflow': serializer.toJson<bool>(isOverflow),
+      'parentTableId': serializer.toJson<String?>(parentTableId),
+      'overflowSuffix': serializer.toJson<String?>(overflowSuffix),
     };
   }
 
@@ -9374,6 +9476,9 @@ class LocalRestaurantTable extends DataClass
     Value<String?> activeOrderId = const Value.absent(),
     int? version,
     bool? isDeleted,
+    bool? isOverflow,
+    Value<String?> parentTableId = const Value.absent(),
+    Value<String?> overflowSuffix = const Value.absent(),
   }) => LocalRestaurantTable(
     id: id ?? this.id,
     zoneId: zoneId.present ? zoneId.value : this.zoneId,
@@ -9386,6 +9491,13 @@ class LocalRestaurantTable extends DataClass
         : this.activeOrderId,
     version: version ?? this.version,
     isDeleted: isDeleted ?? this.isDeleted,
+    isOverflow: isOverflow ?? this.isOverflow,
+    parentTableId: parentTableId.present
+        ? parentTableId.value
+        : this.parentTableId,
+    overflowSuffix: overflowSuffix.present
+        ? overflowSuffix.value
+        : this.overflowSuffix,
   );
   LocalRestaurantTable copyWithCompanion(LocalRestaurantTablesCompanion data) {
     return LocalRestaurantTable(
@@ -9402,6 +9514,15 @@ class LocalRestaurantTable extends DataClass
           : this.activeOrderId,
       version: data.version.present ? data.version.value : this.version,
       isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
+      isOverflow: data.isOverflow.present
+          ? data.isOverflow.value
+          : this.isOverflow,
+      parentTableId: data.parentTableId.present
+          ? data.parentTableId.value
+          : this.parentTableId,
+      overflowSuffix: data.overflowSuffix.present
+          ? data.overflowSuffix.value
+          : this.overflowSuffix,
     );
   }
 
@@ -9416,7 +9537,10 @@ class LocalRestaurantTable extends DataClass
           ..write('status: $status, ')
           ..write('activeOrderId: $activeOrderId, ')
           ..write('version: $version, ')
-          ..write('isDeleted: $isDeleted')
+          ..write('isDeleted: $isDeleted, ')
+          ..write('isOverflow: $isOverflow, ')
+          ..write('parentTableId: $parentTableId, ')
+          ..write('overflowSuffix: $overflowSuffix')
           ..write(')'))
         .toString();
   }
@@ -9432,6 +9556,9 @@ class LocalRestaurantTable extends DataClass
     activeOrderId,
     version,
     isDeleted,
+    isOverflow,
+    parentTableId,
+    overflowSuffix,
   );
   @override
   bool operator ==(Object other) =>
@@ -9445,7 +9572,10 @@ class LocalRestaurantTable extends DataClass
           other.status == this.status &&
           other.activeOrderId == this.activeOrderId &&
           other.version == this.version &&
-          other.isDeleted == this.isDeleted);
+          other.isDeleted == this.isDeleted &&
+          other.isOverflow == this.isOverflow &&
+          other.parentTableId == this.parentTableId &&
+          other.overflowSuffix == this.overflowSuffix);
 }
 
 class LocalRestaurantTablesCompanion
@@ -9459,6 +9589,9 @@ class LocalRestaurantTablesCompanion
   final Value<String?> activeOrderId;
   final Value<int> version;
   final Value<bool> isDeleted;
+  final Value<bool> isOverflow;
+  final Value<String?> parentTableId;
+  final Value<String?> overflowSuffix;
   final Value<int> rowid;
   const LocalRestaurantTablesCompanion({
     this.id = const Value.absent(),
@@ -9470,6 +9603,9 @@ class LocalRestaurantTablesCompanion
     this.activeOrderId = const Value.absent(),
     this.version = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.isOverflow = const Value.absent(),
+    this.parentTableId = const Value.absent(),
+    this.overflowSuffix = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalRestaurantTablesCompanion.insert({
@@ -9482,6 +9618,9 @@ class LocalRestaurantTablesCompanion
     this.activeOrderId = const Value.absent(),
     this.version = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.isOverflow = const Value.absent(),
+    this.parentTableId = const Value.absent(),
+    this.overflowSuffix = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        tableNumber = Value(tableNumber),
@@ -9496,6 +9635,9 @@ class LocalRestaurantTablesCompanion
     Expression<String>? activeOrderId,
     Expression<int>? version,
     Expression<bool>? isDeleted,
+    Expression<bool>? isOverflow,
+    Expression<String>? parentTableId,
+    Expression<String>? overflowSuffix,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -9508,6 +9650,9 @@ class LocalRestaurantTablesCompanion
       if (activeOrderId != null) 'active_order_id': activeOrderId,
       if (version != null) 'version': version,
       if (isDeleted != null) 'is_deleted': isDeleted,
+      if (isOverflow != null) 'is_overflow': isOverflow,
+      if (parentTableId != null) 'parent_table_id': parentTableId,
+      if (overflowSuffix != null) 'overflow_suffix': overflowSuffix,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -9522,6 +9667,9 @@ class LocalRestaurantTablesCompanion
     Value<String?>? activeOrderId,
     Value<int>? version,
     Value<bool>? isDeleted,
+    Value<bool>? isOverflow,
+    Value<String?>? parentTableId,
+    Value<String?>? overflowSuffix,
     Value<int>? rowid,
   }) {
     return LocalRestaurantTablesCompanion(
@@ -9534,6 +9682,9 @@ class LocalRestaurantTablesCompanion
       activeOrderId: activeOrderId ?? this.activeOrderId,
       version: version ?? this.version,
       isDeleted: isDeleted ?? this.isDeleted,
+      isOverflow: isOverflow ?? this.isOverflow,
+      parentTableId: parentTableId ?? this.parentTableId,
+      overflowSuffix: overflowSuffix ?? this.overflowSuffix,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -9568,6 +9719,15 @@ class LocalRestaurantTablesCompanion
     if (isDeleted.present) {
       map['is_deleted'] = Variable<bool>(isDeleted.value);
     }
+    if (isOverflow.present) {
+      map['is_overflow'] = Variable<bool>(isOverflow.value);
+    }
+    if (parentTableId.present) {
+      map['parent_table_id'] = Variable<String>(parentTableId.value);
+    }
+    if (overflowSuffix.present) {
+      map['overflow_suffix'] = Variable<String>(overflowSuffix.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -9586,6 +9746,9 @@ class LocalRestaurantTablesCompanion
           ..write('activeOrderId: $activeOrderId, ')
           ..write('version: $version, ')
           ..write('isDeleted: $isDeleted, ')
+          ..write('isOverflow: $isOverflow, ')
+          ..write('parentTableId: $parentTableId, ')
+          ..write('overflowSuffix: $overflowSuffix, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -16837,6 +17000,9 @@ typedef $$LocalRestaurantTablesTableCreateCompanionBuilder =
       Value<String?> activeOrderId,
       Value<int> version,
       Value<bool> isDeleted,
+      Value<bool> isOverflow,
+      Value<String?> parentTableId,
+      Value<String?> overflowSuffix,
       Value<int> rowid,
     });
 typedef $$LocalRestaurantTablesTableUpdateCompanionBuilder =
@@ -16850,6 +17016,9 @@ typedef $$LocalRestaurantTablesTableUpdateCompanionBuilder =
       Value<String?> activeOrderId,
       Value<int> version,
       Value<bool> isDeleted,
+      Value<bool> isOverflow,
+      Value<String?> parentTableId,
+      Value<String?> overflowSuffix,
       Value<int> rowid,
     });
 
@@ -16904,6 +17073,21 @@ class $$LocalRestaurantTablesTableFilterComposer
 
   ColumnFilters<bool> get isDeleted => $composableBuilder(
     column: $table.isDeleted,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isOverflow => $composableBuilder(
+    column: $table.isOverflow,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get parentTableId => $composableBuilder(
+    column: $table.parentTableId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get overflowSuffix => $composableBuilder(
+    column: $table.overflowSuffix,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -16961,6 +17145,21 @@ class $$LocalRestaurantTablesTableOrderingComposer
     column: $table.isDeleted,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get isOverflow => $composableBuilder(
+    column: $table.isOverflow,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get parentTableId => $composableBuilder(
+    column: $table.parentTableId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get overflowSuffix => $composableBuilder(
+    column: $table.overflowSuffix,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalRestaurantTablesTableAnnotationComposer
@@ -17002,6 +17201,21 @@ class $$LocalRestaurantTablesTableAnnotationComposer
 
   GeneratedColumn<bool> get isDeleted =>
       $composableBuilder(column: $table.isDeleted, builder: (column) => column);
+
+  GeneratedColumn<bool> get isOverflow => $composableBuilder(
+    column: $table.isOverflow,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get parentTableId => $composableBuilder(
+    column: $table.parentTableId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get overflowSuffix => $composableBuilder(
+    column: $table.overflowSuffix,
+    builder: (column) => column,
+  );
 }
 
 class $$LocalRestaurantTablesTableTableManager
@@ -17059,6 +17273,9 @@ class $$LocalRestaurantTablesTableTableManager
                 Value<String?> activeOrderId = const Value.absent(),
                 Value<int> version = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
+                Value<bool> isOverflow = const Value.absent(),
+                Value<String?> parentTableId = const Value.absent(),
+                Value<String?> overflowSuffix = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalRestaurantTablesCompanion(
                 id: id,
@@ -17070,6 +17287,9 @@ class $$LocalRestaurantTablesTableTableManager
                 activeOrderId: activeOrderId,
                 version: version,
                 isDeleted: isDeleted,
+                isOverflow: isOverflow,
+                parentTableId: parentTableId,
+                overflowSuffix: overflowSuffix,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -17083,6 +17303,9 @@ class $$LocalRestaurantTablesTableTableManager
                 Value<String?> activeOrderId = const Value.absent(),
                 Value<int> version = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
+                Value<bool> isOverflow = const Value.absent(),
+                Value<String?> parentTableId = const Value.absent(),
+                Value<String?> overflowSuffix = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalRestaurantTablesCompanion.insert(
                 id: id,
@@ -17094,6 +17317,9 @@ class $$LocalRestaurantTablesTableTableManager
                 activeOrderId: activeOrderId,
                 version: version,
                 isDeleted: isDeleted,
+                isOverflow: isOverflow,
+                parentTableId: parentTableId,
+                overflowSuffix: overflowSuffix,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

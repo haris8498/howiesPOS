@@ -113,7 +113,7 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
 
       const users = await usersService.listUsers();
       expect(users).toHaveLength(1);
-      const userObj = users[0] as Record<string, unknown>;
+      const userObj = users[0] as unknown as Record<string, unknown>;
       expect(userObj.password_hash).toBeUndefined();
       expect(userObj.plain_password).toBeUndefined();
       expect(userObj.password).toBeUndefined();
@@ -130,7 +130,7 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
       });
 
       const user = await usersService.getUserById('u-secret-1');
-      const userObj = user as Record<string, unknown>;
+      const userObj = user as unknown as Record<string, unknown>;
       expect(userObj.password_hash).toBeUndefined();
       expect(userObj.plain_password).toBeUndefined();
       expect(userObj.password).toBeUndefined();
@@ -153,7 +153,7 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
         { id: 'admin-id', username: 'admin', role: 'owner', is_default: true },
       );
 
-      const createdObj = created as Record<string, unknown>;
+      const createdObj = created as unknown as Record<string, unknown>;
       expect(createdObj.password_hash).toBeUndefined();
       expect(createdObj.plain_password).toBeUndefined();
       expect(createdObj.password).toBeUndefined();
@@ -179,7 +179,7 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
         { id: 'admin-id', username: 'admin', role: 'owner', is_default: true },
       );
 
-      const updatedObj = updated as Record<string, unknown>;
+      const updatedObj = updated as unknown as Record<string, unknown>;
       expect(updatedObj.password_hash).toBeUndefined();
       expect(updatedObj.plain_password).toBeUndefined();
       expect(updatedObj.password).toBeUndefined();
@@ -200,12 +200,12 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
       });
 
       expect(response.accessToken).toBeDefined();
-      const userResponse = response.user as Record<string, unknown>;
+      const userResponse = response.user as unknown as Record<string, unknown>;
       expect(userResponse.password_hash).toBeUndefined();
       expect(userResponse.plain_password).toBeUndefined();
       expect(userResponse.password).toBeUndefined();
-      expect((response as Record<string, unknown>).password_hash).toBeUndefined();
-      expect((response as Record<string, unknown>).plain_password).toBeUndefined();
+      expect((response as unknown as Record<string, unknown>).password_hash).toBeUndefined();
+      expect((response as unknown as Record<string, unknown>).plain_password).toBeUndefined();
     });
   });
 
@@ -232,7 +232,7 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
       expect(staffUsers.length).toBeGreaterThan(0);
 
       for (const su of staffUsers) {
-        const anyUser = su as Record<string, unknown>;
+        const anyUser = su as unknown as Record<string, unknown>;
         expect(anyUser.password_hash).toBeUndefined();
         expect(anyUser.plain_password).toBeUndefined();
         expect(anyUser.password).toBeUndefined();

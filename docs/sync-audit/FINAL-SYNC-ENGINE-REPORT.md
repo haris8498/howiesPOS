@@ -1650,6 +1650,8 @@ The following matrix cross-references every unified `SYNC-xxx` finding ID to its
 | **D-05** | `fix/D-05` | **DONE** | `fix/D-05` | Mapped: SYNC-032. Append-only UUID v7 order line-item ledger. Replaced destructive delete-replace in REST updateOrder and Drift updateOrder with ledger diff/merge semantics. Added voided_at, voided_by, supersedes_item_id, created_by_device_id, client_created_at to OrderItem and LocalOrderItems. Added endpoints and outbox mutations for ITEM_ADD and ITEM_VOID. Delta pull implements set-union by ID where void always wins over live copy. Drift schema bumped to v3 with migration. Verified 65 backend test suites (456 tests) and 249 frontend tests passing. (2026-10-27) |
 | **D-01** | `fix/D-01` | **DONE** | `fix/D-01` | Mapped: SYNC-011, SYNC-030, TBL-02, TBL-10. Virtual overflow tables for concurrent offline seating collisions. Row lock via FOR UPDATE, deterministic priority by seatedAt (tie-break UUID), loser reassigned to virtual overflow table (4-B, 4-C) with free table re-use. Push ACK conveys tableReassigned envelope; subsequent table updates redirected to overflow table. Drift bumped to schemaVersion 3; sync worker upserts overflow tables and re-links local orders. UI floor plan sorts overflow tables adjacent to parent, auto-hides closed tables, and renders distinct purple badge and non-blocking notification banner. (2026-10-27) |
 | **D-03** | `fix/D-03` | **DONE** | `fix/D-03` | Mapped: SYNC-016, BCK-02, MNY-08. Server Authoritative Pricing & Manager Discount Control. Authoritative calculation in Decimal; tolerance for rounding differences (<= 1.00 PKR); immutable audit tables (discount_audits, pricing_audits); offline sync accepts order without discount if unapproved and flags UNAUTHORIZED_DISCOUNT; online REST rejects with 403 Forbidden. Flutter manager approval dialog integrated with OfflineAuthService (D-06); approval payload attached to outbox mutation; sync reconciliation banner notifies cashier. (2026-10-27) |
+| **D-04** | `fix/D-04` | **DONE** | `fix/D-04` | Mapped: SYNC-027, FLG-02. Startup outbox drain gate and blocking modal preventing stranding of unsynced orders on flag rollback. Routing remains local-first while pending rows exist; switches seamlessly to online after drain. (2026-10-27) |
+| **D-06** | `fix/D-06` | **DONE** | `fix/D-06` | Mapped: SEC-05, SEC-07, SEC-11. Argon2id server password hashing, transparent legacy SHA-256 upgrade and hash wrapping, Windows DPAPI client credential cache encryption, 14-day expiry, 5-attempt exponential lockout. (2026-10-27) |
 
 ---
 
@@ -1761,3 +1763,40 @@ A dedicated leftovers remediation pass cataloged all 56 remaining audit findings
     - Flutter dedicated UI & integration test suite (`server_pricing_authority_ui_test.dart`) 5/5 tests passing.
     - Full Flutter test suite passing (259/259 tests).
     - Flutter analyze clean with 0 errors across all modified modules.
+
+
+---
+
+### 11.7 Decision D-04 Remediation (SYNC-027, FLG-02)
+
+- **Item ID:** `D-04`
+- **Branch:** `fix/D-04`
+- **Mapped Findings:** `SYNC-027` (Permanent Stranding of Local Outbox Mutations upon Flag Rollback), `FLG-02` (Flag Rollback with Pending Outbox Data)
+- **Status:** **DONE**
+- **Date:** October 27, 2026
+- **Summary:**
+  - **Outbox DAO Read Helpers (`outbox_dao.dart`):** Implemented non-destructive helpers `getNonTerminalCount()`, `watchNonTerminalCount()`, `getPermanentlyFailedEntries()`, and `exportOutboxBackupJson()`. Protects all pending and failed mutations without deletion.
+  - **Startup Outbox Drain Gate (`outbox_drain_gate.dart`):** Evaluates `shouldUseLocalFirst` as `featureFlag || nonTerminalCount > 0`. If `OFFLINE_FIRST_ENABLED = false` with pending rows in SQLite WAL, repository routing safely remains on `DriftOfflineFirstOrderRepository` until all rows drain to the server.
+  - **Blocking Drain Modal (`outbox_drain_modal.dart`):** Displays a non-dismissible dialog informing cashiers of unsynced transactions. Allows cashiers to trigger "Sync Now" to flush the queue or continue working locally if offline. Once `nonTerminalCount == 0`, repository seamlessly switches to `ApiOrderRepository`.
+  - **Test Suite Verification:**
+    - Dedicated Flutter test suite (`outbox_drain_gate_test.dart` and `outbox_drain_modal_test.dart`) passing with full routing matrix coverage.
+    - Full Flutter test suite passing (259/259 tests).
+
+---
+
+### 11.8 Decision D-05 Remediation (SYNC-032)
+
+- **Item ID:** `D-05`
+- **Branch:** `fix/D-05`
+- **Mapped Findings:** `SYNC-032` (Whole-Order Last-Write-Wins in REST Deletes Concurrent Line Items)
+- **Status:** **DONE**
+- **Date:** October 27, 2026
+- **Summary:**
+  - **Append-Only Schema & Migration (`20261027150000_order_line_item_ledger`):** Added `voided_at`, `voided_by`, `supersedes_item_id`, `created_by_device_id`, and `client_created_at` to PostgreSQL `order_items` and Drift `LocalOrderItems`.
+  - **Append-Only Ledger Diff & Void-Always-Wins:** Replaced destructive line-item deletion in REST `updateOrder` and Drift `updateOrder` with non-destructive ledger merge semantics. New items are appended with client-generated UUID v7 identifiers. Item updates void previous versions and insert superseding items. If an item is voided, void always wins over live copies across devices.
+  - **REST Endpoints & Outbox Mutations:** Added `POST /orders/:id/items` (`ITEM_ADD`) and `POST /orders/:id/items/:itemId/void` (`ITEM_VOID`).
+  - **Drift Schema Bump:** Incremented schema version to 3 with additive `onUpgrade` migration adding all ledger columns.
+  - **Test Suite Verification:**
+    - Dedicated backend ledger suite (`orders-ledger.spec.ts`) passing.
+    - Dedicated Flutter repository suite (`order_line_item_ledger_test.dart`) passing.
+    - Full backend (69/69 suites, 480/480 tests) and frontend (259/259 tests) passing.

@@ -259,6 +259,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     double discountPercentage = 0.0,
     double discountAmount = 0.0,
     List<Map<String, dynamic>>? items,
+    Map<String, dynamic>? managerApproval,
+    String? approvedByManagerId,
   }) async {
     final nextToken = state.tokenCounter;
     final effectiveDiscount = discountPercentage > 0
@@ -340,6 +342,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
           paymentStatus: 'UNPAID',
           isPaid: false,
           kitchenTicketSent: true,
+          approvedByManagerId: approvedByManagerId ?? managerApproval?['manager_id']?.toString(),
+          managerApproval: managerApproval,
           takeawayDetail: TakeawayOrderDetail(
             id: const Uuid().v7(),
             orderId: orderId,
@@ -377,6 +381,9 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
         'payment_status': 'UNPAID',
         'kitchen_ticket_sent': true,
         'items': orderItemsPayload,
+        if (approvedByManagerId != null || managerApproval != null)
+          'approved_by_manager_id': approvedByManagerId ?? managerApproval?['manager_id'],
+        if (managerApproval != null) 'manager_approval': managerApproval,
       });
 
       if (FeatureFlags.offlineFirstEnabled && _ref != null) {
@@ -407,6 +414,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     double discountPercentage = 0.0,
     double discountAmount = 0.0,
     List<Map<String, dynamic>>? items,
+    Map<String, dynamic>? managerApproval,
+    String? approvedByManagerId,
   }) async {
     final effectiveDiscount = discountPercentage > 0
         ? (subtotal * (discountPercentage / 100))
@@ -478,6 +487,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             discountPercentage: discountPercentage,
             discountAmount: effectiveDiscount,
             grandTotalOverride: grandTotal,
+            approvedByManagerId: approvedByManagerId ?? managerApproval?['manager_id']?.toString(),
+            managerApproval: managerApproval,
             items: updatedItems,
             takeawayDetail: TakeawayOrderDetail(
               id: existingLocal.takeawayDetail?.id ?? const Uuid().v7(),
@@ -554,6 +565,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     String orderId, {
     double? discountPercentage,
     double? discountAmount,
+    Map<String, dynamic>? managerApproval,
+    String? approvedByManagerId,
   }) async {
     final existing = state.orders.firstWhere((o) => o.id == orderId, orElse: () => state.orders.first);
     final subtotal = existing.subtotal;
@@ -561,11 +574,37 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     final amt = discountAmount ?? (subtotal * (pct / 100));
     final grandTotal = (subtotal - amt + existing.taxAmount).clamp(0.0, double.infinity);
 
+    // Update local SQLite order atomically if offline-first is enabled
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        final existingLocal = await orderRepo.getOrderById(orderId);
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            discountPercentage: pct,
+            discountAmount: amt,
+            grandTotalOverride: grandTotal,
+            approvedByManagerId: approvedByManagerId ?? managerApproval?['manager_id']?.toString(),
+            managerApproval: managerApproval,
+          );
+          await orderRepo.updateOrder(updated);
+          try {
+            _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+          } catch (_) {}
+        }
+      } catch (err) {
+        print('Error updating local order discount in Drift: $err');
+      }
+    }
+
     try {
       await _ordersApiService.updateOrder(orderId, {
         'discount_percentage': pct,
         'discount_amount': amt,
         'grand_total': grandTotal,
+        if (approvedByManagerId != null || managerApproval != null)
+          'approved_by_manager_id': approvedByManagerId ?? managerApproval?['manager_id'],
+        if (managerApproval != null) 'manager_approval': managerApproval,
       });
     } catch (e) {
       print('Error updating takeaway discount: $e');

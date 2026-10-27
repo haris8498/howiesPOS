@@ -9,6 +9,7 @@ import {
 import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
+import { PricingService } from '../pricing/pricing.service';
 import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -44,6 +45,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly kitchenGateway?: KitchenGateway,
+    @Optional() private readonly pricingService?: PricingService,
   ) {}
 
   private round(val: number): number {
@@ -155,6 +157,7 @@ export class OrdersService {
     tx: Prisma.TransactionClient,
     dto: CreateOrderDto,
     explicitOrderId?: string,
+    options?: { source?: 'ONLINE' | 'OFFLINE' },
   ): Promise<OrderWithDetails> {
     // 0. Idempotency guard: If order with this explicit ID already exists, return it immediately
     if (explicitOrderId) {
@@ -543,6 +546,24 @@ export class OrdersService {
             payment_status: 'COMPLETED',
             received_by: dto.waiter_name ?? 'Cashier',
           },
+        });
+      }
+
+      // 9.5 Server Authoritative Pricing (D-03 / SYNC-016)
+      if (this.pricingService) {
+        const pricingSource = options?.source || 'ONLINE';
+        await this.pricingService.calculate(createdOrder.id, tx, {
+          clientGrandTotal: dto.grand_total,
+          clientSubtotal: dto.subtotal,
+          discountPercentage: dto.discount_percentage,
+          discountAmount: dto.discount_amount,
+          discountApproval: dto.manager_approval || (dto as any).managerApproval,
+          approvedByManagerId: dto.approved_by_manager_id || (dto.manager_approval as any)?.manager_id || (dto.manager_approval as any)?.managerId,
+          managerCredential: dto.manager_credential,
+          source: pricingSource,
+          deviceId: (createdOrder as any).device_id,
+          rejectOnlineMismatch: pricingSource === 'ONLINE',
+          deliveryFee: isOnlineType ? (dto.delivery_fee ?? 0.0) : 0.0,
         });
       }
 
@@ -1460,6 +1481,10 @@ export class OrdersService {
       } else if (grandTotal === 0 && activeItems.length === 0) {
         paymentStatus = 'CANCELLED';
         isPaid = false;
+      }
+
+      if (this.pricingService) {
+        await this.pricingService.calculate(orderId, tx, { source: 'ONLINE' });
       }
 
       // 4. Update Order financial totals atomically

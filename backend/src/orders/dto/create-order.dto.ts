@@ -252,6 +252,20 @@ export class CreateOrderDto {
 
   @IsString()
   @IsOptional()
+  approved_by_manager_id?: string;
+
+  @IsString()
+  @IsOptional()
+  manager_credential?: string;
+
+  @IsOptional()
+  manager_approval?: any;
+
+  @IsOptional()
+  managerApproval?: any;
+
+  @IsString()
+  @IsOptional()
   @MaxLength(20)
   payment_status?: string;
 

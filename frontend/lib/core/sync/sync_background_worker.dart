@@ -21,6 +21,7 @@ import '../security/token_storage.dart';
 import 'connectivity_notifier.dart';
 import 'device_identity.dart';
 import 'table_reassignment_provider.dart';
+import 'pricing_reconciliation_provider.dart';
 
 export '../database/daos/retention_dao.dart' show RetentionPruneResult;
 
@@ -982,6 +983,49 @@ class SyncBackgroundWorker {
             toTableId: toTableId,
             toLabel: toLabel,
             message: 'Table $parentNum had two parties, one moved to $toLabel',
+          ));
+        }
+      }
+
+      // D-03 (SYNC-016): Process authoritative pricing reconciliation from push response
+      for (final r in results.whereType<Map<String, dynamic>>()) {
+        final pricingStatus = r['pricing_status']?.toString();
+        final warningCode = r['warning_code']?.toString();
+        final isMismatch = pricingStatus == 'MISMATCH' || warningCode == 'PRICE_MISMATCH';
+        final isUnauthorized = pricingStatus == 'UNAUTHORIZED_DISCOUNT' || warningCode == 'UNAUTHORIZED_DISCOUNT';
+
+        if (isMismatch || isUnauthorized) {
+          final entityId = r['entity_id']?.toString() ?? '';
+          final serverTotal = double.tryParse(r['server_grand_total']?.toString() ?? r['grand_total']?.toString() ?? '0') ?? 0.0;
+          final orderNumber = r['order_number']?.toString() ?? r['token_number']?.toString() ?? entityId;
+
+          // Lookup local order to compare client total and update authoritative amount
+          double clientTotal = 0.0;
+          if (entityId.isNotEmpty) {
+            final localOrder = await (db.select(db.localOrders)..where((t) => t.id.equals(entityId))).getSingleOrNull();
+            if (localOrder != null) {
+              clientTotal = localOrder.grandTotal;
+              await (db.update(db.localOrders)..where((t) => t.id.equals(entityId))).write(
+                LocalOrdersCompanion(
+                  grandTotal: Value(serverTotal),
+                  discountAmount: isUnauthorized ? const Value(0.0) : Value(localOrder.discountAmount),
+                  discountPercentage: isUnauthorized ? const Value(0.0) : Value(localOrder.discountPercentage),
+                ),
+              );
+            }
+          }
+
+          final diff = (clientTotal - serverTotal).abs();
+          PricingReconciliationEventBus.emit(PricingReconciliationNotification(
+            orderId: entityId,
+            orderNumber: orderNumber,
+            clientTotal: clientTotal > 0 ? clientTotal : serverTotal,
+            serverTotal: serverTotal,
+            pricingStatus: isUnauthorized ? 'UNAUTHORIZED_DISCOUNT' : 'MISMATCH',
+            difference: diff,
+            message: isUnauthorized
+                ? 'Order #$orderNumber discount was unapproved and removed by server: PKR ${clientTotal.toStringAsFixed(0)} -> PKR ${serverTotal.toStringAsFixed(0)}'
+                : 'Order #$orderNumber total was reconciled by server: PKR ${clientTotal.toStringAsFixed(0)} -> PKR ${serverTotal.toStringAsFixed(0)}',
           ));
         }
       }

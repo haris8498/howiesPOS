@@ -137,7 +137,7 @@ This backlog captures **all remaining findings** across the audit corpus, catego
 - **Options:**
   1. *(Recommended)* **Tolerant Recalculation with Audit Logging:** Server recomputes item prices from catalog base prices and size modifiers. If deviation between client grand total and server computed total is $> pm 0.05$ PKR (beyond rounding), verify if a recognized discount or manager promo was applied. If unexplained price modification occurred, accept order into database with `price_override_flag = true` and log an audit entry for store owner inspection. Never drop customer revenue.
   2. **Strict Server Authority:** Server strictly overwrites client totals with catalog pricing. Risk: Offline customers quoted bill price in paper receipts will have different amounts than cloud invoice.
-- **Status:** `needs-decision` (Recommended: Option 1).
+- **Status:** Implemented (recommendation adopted) (branch: fix/D-03).
 
 ---
 

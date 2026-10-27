@@ -7,6 +7,8 @@ import '../../data/auth_repository.dart';
 import '../../data/role_rights_repository.dart';
 import '../../data/table_repository.dart';
 import '../../domain/models/restaurant_table.dart';
+import '../../core/sync/pricing_reconciliation_provider.dart';
+import '../../shared/widgets/manager_approval_dialog.dart';
 import '../../domain/models/user_role.dart';
 import '../../services/api/api_providers.dart';
 import '../../services/printer/escpos_builder.dart';
@@ -1133,6 +1135,55 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                       ),
                     ),
                 ],
+                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner
+                () {
+                  final pricingNotifs = ref.watch(pricingReconciliationNotificationProvider);
+                  if (pricingNotifs.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    children: [
+                      for (final notif in pricingNotifs)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFD97706), width: 1.5),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x1AD97706),
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  notif.message,
+                                  style: TextStyle(
+                                    color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 18),
+                                color: const Color(0xFFD97706),
+                                onPressed: () {
+                                  ref.read(pricingReconciliationNotificationProvider.notifier).dismiss(notif);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  );
+                }(),
 
                 // Visual Table Floor Plan Grid
                 Expanded(
@@ -2264,8 +2315,9 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
       builder: (dialogContext) {
         return _CustomerPreBillDialog(
           table: table,
+          ref: ref,
           isDark: isDark,
-          onPrint: (subtotal, discountAmount, taxAmount, grandTotal, taxRate, discountPercentage) async {
+          onPrint: (subtotal, discountAmount, taxAmount, grandTotal, taxRate, discountPercentage, managerApproval) async {
             // 1. Update order in database with discount, tax, and grand total
             final activeOrderId = table.activeOrderId;
             if (activeOrderId != null && activeOrderId.isNotEmpty) {
@@ -2279,6 +2331,8 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                       discountPercentage: discountPercentage,
                       taxAmount: taxAmount,
                       grandTotalOverride: grandTotal,
+                      approvedByManagerId: managerApproval?.managerId,
+                      managerApproval: managerApproval?.toJson(),
                       dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmount),
                     );
                     await orderRepo.updateOrder(updated);
@@ -2291,6 +2345,8 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                     'tax_amount': taxAmount,
                     'dine_in_tax': taxAmount,
                     'grand_total': grandTotal,
+                    if (managerApproval != null) 'approved_by_manager_id': managerApproval.managerId,
+                    if (managerApproval != null) 'manager_approval': managerApproval.toJson(),
                   });
                 }
                 final notifier = ref.read(tableProvider.notifier);
@@ -4203,11 +4259,13 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
 // ---------------------------------------------------------------------------
 class _CustomerPreBillDialog extends StatefulWidget {
   final RestaurantTable table;
+  final WidgetRef ref;
   final bool isDark;
-  final void Function(double subtotal, double discountAmount, double taxAmount, double grandTotal, double taxRate, double discountPercentage) onPrint;
+  final void Function(double subtotal, double discountAmount, double taxAmount, double grandTotal, double taxRate, double discountPercentage, ManagerApproval? managerApproval) onPrint;
 
   const _CustomerPreBillDialog({
     required this.table,
+    required this.ref,
     required this.isDark,
     required this.onPrint,
   });
@@ -4223,6 +4281,7 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
   double _discountPercentage = 0.0;
   bool _isDiscountAmountMode = false;
   double _customDiscountAmount = 0.0;
+  ManagerApproval? _managerApproval;
 
   @override
   void initState() {
@@ -4282,12 +4341,44 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
     });
   }
 
-  void _setDiscountPreset(double pct) {
-    setState(() {
-      _isDiscountAmountMode = false;
-      _discountPercentage = pct;
-      _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
-    });
+  Future<void> _setDiscountPreset(double pct) async {
+    if (pct == 0.0) {
+      setState(() {
+        _isDiscountAmountMode = false;
+        _discountPercentage = 0.0;
+        _managerApproval = null;
+        _discountController.text = '0';
+      });
+      return;
+    }
+
+    final billAmount = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 0.0;
+    double sub = 0.0;
+    for (final item in widget.table.currentOrderItems) {
+      if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
+      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
+      final price = (item['price'] as num?)?.toDouble() ?? 0.0;
+      sub += (price * qty);
+    }
+    if (sub <= 0) sub = billAmount > 0 ? billAmount : 1449.0;
+    final discountAmount = (sub * (pct / 100.0)).clamp(0.0, sub);
+
+    final approval = await ManagerApprovalDialog.show(
+      context,
+      offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
+      actionTitle: 'Table ${widget.table.tableNumber} Discount (${pct.toStringAsFixed(0)}%)',
+      discountAmount: discountAmount,
+      discountPercentage: pct,
+    );
+
+    if (approval != null) {
+      setState(() {
+        _isDiscountAmountMode = false;
+        _discountPercentage = pct;
+        _managerApproval = approval;
+        _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
+      });
+    }
   }
 
   @override
@@ -4855,9 +4946,21 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: () {
+                        onPressed: () async {
+                          if (discountAmount > 0 && _managerApproval == null) {
+                            final approval = await ManagerApprovalDialog.show(
+                              context,
+                              offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
+                              actionTitle: 'Table ${widget.table.tableNumber} Discount',
+                              discountAmount: discountAmount,
+                              discountPercentage: effectiveDiscountPct,
+                            );
+                            if (approval == null) return;
+                            _managerApproval = approval;
+                          }
+                          if (!context.mounted) return;
                           Navigator.pop(context);
-                          widget.onPrint(subtotal, discountAmount, taxAmount, grandTotal, _taxRate, effectiveDiscountPct);
+                          widget.onPrint(subtotal, discountAmount, taxAmount, grandTotal, _taxRate, effectiveDiscountPct, _managerApproval);
                         },
                         icon: const Icon(Icons.print_rounded, size: 18),
                         label: Text('PRINT PRE-BILL (PKR ${grandTotal.toStringAsFixed(0)})'),

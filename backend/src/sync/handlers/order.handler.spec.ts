@@ -175,6 +175,7 @@ describe('OrderHandler', () => {
           ],
         }),
         'ord-uuid-sync014',
+        expect.anything(),
       );
     });
   });

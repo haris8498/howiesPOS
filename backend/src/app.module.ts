@@ -24,6 +24,7 @@ import { DailyCalculationModule } from './daily-calculation/daily-calculation.mo
 import { PrinterModule } from './printer/printer.module';
 import { SyncModule } from './sync/sync.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { PricingModule } from './pricing/pricing.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     QueueModule,
     ReportsModule,
     HealthModule,
+    PricingModule,
   ],
 })
 export class AppModule {}

@@ -26,6 +26,10 @@ export interface SyncMutationResult {
   conflict_details?: any;
   warning_code?: string;
   warnings?: string[];
+  pricing_status?: string;
+  subtotal?: number;
+  grand_total?: number;
+  server_grand_total?: number;
   table_reassigned?: {
     orderId: string;
     fromTableId: string;

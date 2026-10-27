@@ -12,6 +12,8 @@ import {
 import { HandlerRegistry } from './handler-registry.service';
 import { OrdersService } from '../../orders/orders.service';
 import { ChangeLogService } from '../change-log.service';
+import { PricingService } from '../../pricing/pricing.service';
+import { Optional } from '@nestjs/common';
 import { SyncMutationDto } from '../dto/sync-push.dto';
 import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto, CreateOrderPaymentDto } from '../../orders/dto/create-order.dto';
@@ -25,6 +27,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     private readonly handlerRegistry: HandlerRegistry,
     private readonly ordersService: OrdersService,
     private readonly changeLogService: ChangeLogService,
+    @Optional() private readonly pricingService?: PricingService,
   ) {}
 
   onModuleInit() {
@@ -404,6 +407,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         mutation.created_at,
       items: this.mapItems(payload.items),
       payments: this.mapPayments(payload.payments),
+      approved_by_manager_id:
+        payload.approved_by_manager_id ||
+        payload.approvedByManagerId ||
+        payload.manager_approval?.manager_id ||
+        payload.manager_approval?.managerId ||
+        payload.managerApproval?.manager_id ||
+        payload.managerApproval?.managerId,
+      manager_approval: payload.manager_approval || payload.managerApproval,
+      manager_credential: payload.manager_credential || payload.managerCredential,
     };
 
     // 2.5 Row lock & conflict detection on claimed table (§10.2, D-01)
@@ -622,6 +634,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       tx,
       createDto,
       orderId,
+      { source: 'OFFLINE' },
     );
 
     const version = (createdOrder as any).version ?? 1;
@@ -663,6 +676,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const warnings: string[] = [];
     if (isTableDeleted) warnings.push('TABLE_DELETED');
     if (tableReassignedInfo) warnings.push('TABLE_REASSIGNED_OVERFLOW');
+    if ((createdOrder as any).pricing_status === 'MISMATCH') {
+      warnings.push('PRICE_MISMATCH');
+    } else if ((createdOrder as any).pricing_status === 'UNAUTHORIZED_DISCOUNT') {
+      warnings.push('UNAUTHORIZED_DISCOUNT');
+    }
 
     return {
       operation_id: mutation.operation_id,
@@ -678,6 +696,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       table_reassigned: tableReassignedInfo,
       tableReassigned: tableReassignedInfo ? [tableReassignedInfo] : undefined,
       warning_code: warnings[0],
+      pricing_status: (createdOrder as any).pricing_status,
+      subtotal: Number(createdOrder.subtotal),
+      grand_total: Number(createdOrder.grand_total),
+      server_grand_total: Number(createdOrder.grand_total),
       warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
@@ -803,7 +825,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       existingOrder,
     );
     const deliveryFee = this.extractDeliveryFee(payload, orderType, existingOrder);
-    const orderTotal = this.computeGrandTotal(
+    let orderTotal = this.computeGrandTotal(
       subtotal,
       discountAmount,
       taxAmount,
@@ -1015,6 +1037,22 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       }
     }
 
+    // 3.5 Server Authoritative Pricing (D-03 / SYNC-016)
+    let pricingResult: any = null;
+    if (this.pricingService) {
+      pricingResult = await this.pricingService.calculate(orderId, tx, {
+        clientGrandTotal: payload.grand_total !== undefined ? Number(payload.grand_total) : undefined,
+        clientSubtotal: payload.subtotal !== undefined ? Number(payload.subtotal) : undefined,
+        discountPercentage: payload.discount_percentage !== undefined ? Number(payload.discount_percentage) : undefined,
+        discountAmount: payload.discount_amount !== undefined ? Number(payload.discount_amount) : undefined,
+        discountApproval: payload.manager_approval || payload.managerApproval,
+        approvedByManagerId: payload.approved_by_manager_id || payload.approvedByManagerId || payload.manager_approval?.manager_id || payload.manager_approval?.managerId || payload.managerApproval?.manager_id || payload.managerApproval?.managerId,
+        source: 'OFFLINE',
+        deviceId: context.deviceId,
+      });
+      orderTotal = pricingResult.grandTotal.toNumber();
+    }
+
     // 4. Upsert Payments Idempotently by Client ID
     if (hasIncomingPayments && tx.orderPayment) {
       for (let index = 0; index < incomingPayments.length; index++) {
@@ -1217,14 +1255,27 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       false,
     );
 
+    const updateWarnings: string[] = [];
+    if (isUpdateTableDeleted) updateWarnings.push('TABLE_DELETED');
+    const updatePricingStatus = pricingResult?.pricingStatus || (updated as any).pricing_status;
+    if (updatePricingStatus === 'MISMATCH') {
+      updateWarnings.push('PRICE_MISMATCH');
+    } else if (updatePricingStatus === 'UNAUTHORIZED_DISCOUNT') {
+      updateWarnings.push('UNAUTHORIZED_DISCOUNT');
+    }
+
     return {
       operation_id: mutation.operation_id,
       entity_id: updated.id,
       status: 'SYNCED',
       server_version: newVersion,
       server_timestamp: this.toIsoString(updatedAt),
-      warning_code: isUpdateTableDeleted ? 'TABLE_DELETED' : undefined,
-      warnings: isUpdateTableDeleted ? ['TABLE_DELETED'] : undefined,
+      pricing_status: updatePricingStatus,
+      subtotal: Number(updated.subtotal),
+      grand_total: Number(updated.grand_total),
+      server_grand_total: Number(updated.grand_total),
+      warning_code: updateWarnings[0],
+      warnings: updateWarnings.length > 0 ? updateWarnings : undefined,
     };
   }
 
@@ -1361,6 +1412,13 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const taxAmount = Number(existingOrder.tax_amount);
     const grandTotal = this.round(taxableAmount + taxAmount);
 
+    if (this.pricingService) {
+      await this.pricingService.calculate(orderId, tx, {
+        source: 'OFFLINE',
+        deviceId: context.deviceId,
+      });
+    }
+
     const updated = await tx.order.update({
       where: { id: orderId },
       data: {
@@ -1485,6 +1543,13 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const taxableAmount = Math.max(0, subtotal - discountAmount);
     const taxAmount = Number(existingOrder.tax_amount);
     const grandTotal = this.round(taxableAmount + taxAmount);
+
+    if (this.pricingService) {
+      await this.pricingService.calculate(orderId, tx, {
+        source: 'OFFLINE',
+        deviceId: context.deviceId,
+      });
+    }
 
     const updated = await tx.order.update({
       where: { id: orderId },

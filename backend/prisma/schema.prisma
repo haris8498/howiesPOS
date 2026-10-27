@@ -301,6 +301,10 @@ model Order {
   discount_amount      Decimal  @default(0.00) @map("discount_amount") @db.Decimal(10, 2)
   tax_amount           Decimal  @default(0.00) @map("tax_amount") @db.Decimal(10, 2)
   grand_total          Decimal  @map("grand_total") @db.Decimal(10, 2)
+  // ---- Server Authoritative Pricing (D-03 / SYNC-016) ----
+  pricing_status       String   @default("VERIFIED") @map("pricing_status") @db.VarChar(30) // 'VERIFIED' | 'MATCH' | 'MISMATCH' | 'UNAUTHORIZED_DISCOUNT'
+  client_reported_total Decimal? @map("client_reported_total") @db.Decimal(10, 2)
+  approved_by_manager_id String? @map("approved_by_manager_id") @db.VarChar(36)
   payment_status       String   @default("UNPAID") @map("payment_status") @db.VarChar(20)
   is_paid              Boolean  @default(false) @map("is_paid")
   is_held              Boolean  @default(false) @map("is_held")
@@ -328,6 +332,8 @@ model Order {
   online_detail        OnlineOrderDetail?
   takeaway_detail      TakeawayOrderDetail?
   dine_in_detail       DineInOrderDetail?
+  discount_audits      DiscountAudit[]
+  pricing_audits       PricingAudit[]
 
   @@index([shift_id])
   @@index([status])
@@ -467,6 +473,57 @@ model OrderPayment {
   order                 Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
   @@map("order_payments")
+}
+
+// ----------------------------------------------------
+// 14C. DISCOUNT AUDITS (Immutable Manager Approval Log - D-03 / SYNC-016)
+// ----------------------------------------------------
+model DiscountAudit {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  order_id      String   @map("order_id") @db.VarChar(36)
+  amount        Decimal  @db.Decimal(10, 2)
+  percent       Decimal? @db.Decimal(5, 2)
+  discount_type String   @default("PERCENTAGE") @map("discount_type") @db.VarChar(30)
+  reason        String?  @db.Text
+  cashier_id    String?  @map("cashier_id") @db.VarChar(36)
+  approved_by   String   @map("approved_by") @db.VarChar(36)
+  device_id     String?  @map("device_id") @db.VarChar(50)
+  source        String   @default("ONLINE") @db.VarChar(20) // 'ONLINE' | 'OFFLINE'
+  created_at    DateTime @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationship
+  order         Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@index([order_id])
+  @@index([approved_by])
+  @@map("discount_audits")
+}
+
+// ----------------------------------------------------
+// 14D. PRICING AUDITS (Price Discrepancy & Mismatch Log - D-03 / SYNC-016)
+// ----------------------------------------------------
+model PricingAudit {
+  id                 String   @id @default(uuid()) @db.VarChar(36)
+  order_id           String   @map("order_id") @db.VarChar(36)
+  client_grand_total Decimal  @map("client_grand_total") @db.Decimal(10, 2)
+  server_grand_total Decimal  @map("server_grand_total") @db.Decimal(10, 2)
+  client_subtotal    Decimal? @map("client_subtotal") @db.Decimal(10, 2)
+  server_subtotal    Decimal? @map("server_subtotal") @db.Decimal(10, 2)
+  tolerance          Decimal  @db.Decimal(10, 2)
+  difference         Decimal  @db.Decimal(10, 2)
+  pricing_status     String   @map("pricing_status") @db.VarChar(30) // 'MISMATCH' | 'UNAUTHORIZED_DISCOUNT' | 'LINE_ITEM_OVERRIDE'
+  line_discrepancies Json?    @map("line_discrepancies")
+  source             String   @default("OFFLINE") @db.VarChar(20)
+  device_id          String?  @map("device_id") @db.VarChar(50)
+  notes              String?  @db.Text
+  created_at         DateTime @default(now()) @map("created_at") @db.Timestamp()
+
+  // Relationship
+  order              Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@index([order_id])
+  @@index([pricing_status])
+  @@map("pricing_audits")
 }
 
 // ----------------------------------------------------

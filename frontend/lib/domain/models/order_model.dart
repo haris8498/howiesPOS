@@ -282,6 +282,10 @@ class OrderModel {
   final bool isPaid;
   final bool isHeld;
   final List<OrderPaymentModel> payments;
+  final String? approvedByManagerId;
+  final Map<String, dynamic>? managerApproval;
+  final String? pricingStatus;
+  final double? clientReportedTotal;
 
   // ── Kitchen ───────────────────────────────────────────────
   final bool kitchenTicketSent;
@@ -338,6 +342,10 @@ class OrderModel {
     this.isPaid = false,
     this.isHeld = false,
     this.payments = const [],
+    this.approvedByManagerId,
+    this.managerApproval,
+    this.pricingStatus,
+    this.clientReportedTotal,
     this.kitchenTicketSent = false,
     this.cookingTimeMinutes,
     this.estimatedReadyAt,
@@ -388,6 +396,10 @@ class OrderModel {
     OrderStatus? status,
     List<OrderItem>? items,
     DateTime? createdAt,
+    String? approvedByManagerId,
+    Map<String, dynamic>? managerApproval,
+    String? pricingStatus,
+    double? clientReportedTotal,
     String? shiftId,
     double? subtotalOverride,
     double? discountPercentage,
@@ -414,6 +426,10 @@ class OrderModel {
       items: items ?? this.items,
       createdAt: createdAt ?? this.createdAt,
       shiftId: shiftId ?? this.shiftId,
+      approvedByManagerId: approvedByManagerId ?? this.approvedByManagerId,
+      managerApproval: managerApproval ?? this.managerApproval,
+      pricingStatus: pricingStatus ?? this.pricingStatus,
+      clientReportedTotal: clientReportedTotal ?? this.clientReportedTotal,
       subtotalOverride: subtotalOverride ?? this.subtotalOverride,
       discountPercentage: discountPercentage ?? this.discountPercentage,
       discountAmount: discountAmount ?? this.discountAmount,
@@ -450,6 +466,10 @@ class OrderModel {
       'discount_amount': discountAmount,
       'tax_amount': taxAmount,
       'grand_total': grandTotal,
+      if (approvedByManagerId != null) 'approved_by_manager_id': approvedByManagerId,
+      if (managerApproval != null) 'manager_approval': managerApproval,
+      if (pricingStatus != null) 'pricing_status': pricingStatus,
+      if (clientReportedTotal != null) 'client_reported_total': clientReportedTotal,
       'payment_status': isPaid ? 'PAID' : 'UNPAID',
       'is_paid': isPaid,
       'is_held': isHeld,
@@ -590,6 +610,10 @@ class OrderModel {
       discountAmount: double.tryParse(json['discount_amount']?.toString() ?? '0') ?? 0.0,
       taxAmount: double.tryParse(json['tax_amount']?.toString() ?? '0') ?? 0.0,
       grandTotalOverride: double.tryParse(json['grand_total']?.toString() ?? '0') ?? 0.0,
+      approvedByManagerId: json['approved_by_manager_id']?.toString(),
+      managerApproval: json['manager_approval'] is Map<String, dynamic> ? json['manager_approval'] as Map<String, dynamic> : null,
+      pricingStatus: json['pricing_status']?.toString(),
+      clientReportedTotal: json['client_reported_total'] != null ? double.tryParse(json['client_reported_total'].toString()) : null,
       paymentStatus: json['payment_status']?.toString() ?? 'UNPAID',
       isPaid: json['is_paid'] == true || json['payment_status'] == 'PAID',
       isHeld: json['is_held'] == true,

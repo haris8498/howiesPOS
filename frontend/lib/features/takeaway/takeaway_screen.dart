@@ -7,6 +7,8 @@ import '../../config/app_colors.dart';
 import '../../data/auth_repository.dart';
 import '../../data/takeaway_repository.dart';
 import '../../domain/models/takeaway_model.dart';
+import '../../core/sync/pricing_reconciliation_provider.dart';
+import '../../shared/widgets/manager_approval_dialog.dart';
 import '../../domain/models/user_role.dart';
 import '../../services/receipt_printer_service.dart';
 import '../../shared/widgets/cashier_sidebar_footer.dart';
@@ -595,6 +597,56 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                 ),
 
                 const SizedBox(height: 16),
+
+                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner
+                () {
+                  final pricingNotifs = ref.watch(pricingReconciliationNotificationProvider);
+                  if (pricingNotifs.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    children: [
+                      for (final notif in pricingNotifs)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFD97706), width: 1.5),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x1AD97706),
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  notif.message,
+                                  style: TextStyle(
+                                    color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 18),
+                                color: const Color(0xFFD97706),
+                                onPressed: () {
+                                  ref.read(pricingReconciliationNotificationProvider.notifier).dismiss(notif);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  );
+                }(),
 
                 // Mini Stat Overview Row
                 // Mini Stat Overview Row (Clickable to Filter)
@@ -2191,6 +2243,7 @@ class _TakeawayCustomerBillDialogState extends State<_TakeawayCustomerBillDialog
   bool _isDiscountAmountMode = false;
   double _customDiscountAmount = 0.0;
   bool _isSaving = false;
+  ManagerApproval? _managerApproval;
 
   @override
   void initState() {
@@ -2218,12 +2271,33 @@ class _TakeawayCustomerBillDialogState extends State<_TakeawayCustomerBillDialog
     super.dispose();
   }
 
-  void _setDiscountPreset(double pct) {
-    setState(() {
-      _isDiscountAmountMode = false;
-      _discountPercentage = pct;
-      _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
-    });
+  Future<void> _setDiscountPreset(double pct) async {
+    if (pct == 0.0) {
+      setState(() {
+        _isDiscountAmountMode = false;
+        _discountPercentage = 0.0;
+        _managerApproval = null;
+        _discountController.text = '0';
+      });
+      return;
+    }
+    final sub = widget.order.subtotal;
+    final amt = (sub * (pct / 100.0)).clamp(0.0, sub);
+    final approval = await ManagerApprovalDialog.show(
+      context,
+      offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
+      actionTitle: 'Takeaway Discount (${pct.toStringAsFixed(0)}%)',
+      discountAmount: amt,
+      discountPercentage: pct,
+    );
+    if (approval != null) {
+      setState(() {
+        _isDiscountAmountMode = false;
+        _discountPercentage = pct;
+        _managerApproval = approval;
+        _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
+      });
+    }
   }
 
   @override
@@ -2574,12 +2648,29 @@ class _TakeawayCustomerBillDialogState extends State<_TakeawayCustomerBillDialog
                             : () async {
                                 setState(() => _isSaving = true);
 
+                                if (discountAmount > 0 && _managerApproval == null) {
+                                  final approval = await ManagerApprovalDialog.show(
+                                    context,
+                                    offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
+                                    actionTitle: 'Takeaway Discount',
+                                    discountAmount: discountAmount,
+                                    discountPercentage: effectiveDiscountPct,
+                                  );
+                                  if (approval == null) {
+                                    setState(() => _isSaving = false);
+                                    return;
+                                  }
+                                  _managerApproval = approval;
+                                }
+
                                 // 1. Save discount in backend database
                                 try {
                                   await widget.takeawayNotifier.updateOrderDiscount(
                                     widget.order.id,
                                     discountPercentage: effectiveDiscountPct,
                                     discountAmount: discountAmount,
+                                    managerApproval: _managerApproval?.toJson(),
+                                    approvedByManagerId: _managerApproval?.managerId,
                                   );
                                 } catch (e) {
                                   debugPrint('⚠️ Error saving takeaway discount to DB: $e');
@@ -4352,6 +4443,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
   ];
 
   double _discountPercentage = 0.0;
+  ManagerApproval? _managerApproval;
 
   @override
   void initState() {
@@ -4903,7 +4995,29 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                 children: [0.0, 5.0, 10.0, 15.0, 20.0, 25.0].map((pct) {
                                   final isSel = (_discountPercentage - pct).abs() < 0.01;
                                   return InkWell(
-                                    onTap: () => setState(() => _discountPercentage = pct),
+                                    onTap: () async {
+                                      if (pct == 0.0) {
+                                        setState(() {
+                                          _discountPercentage = 0.0;
+                                          _managerApproval = null;
+                                        });
+                                        return;
+                                      }
+                                      final discountAmt = _subtotal * (pct / 100.0);
+                                      final approval = await ManagerApprovalDialog.show(
+                                        context,
+                                        offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
+                                        actionTitle: 'Takeaway Discount (${pct.toStringAsFixed(0)}%)',
+                                        discountAmount: discountAmt,
+                                        discountPercentage: pct,
+                                      );
+                                      if (approval != null) {
+                                        setState(() {
+                                          _discountPercentage = pct;
+                                          _managerApproval = approval;
+                                        });
+                                      }
+                                    },
                                     borderRadius: BorderRadius.circular(4),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -5008,6 +5122,8 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                         discountPercentage: _discountPercentage,
                                         discountAmount: _discountAmount,
                                         items: itemsList,
+                                        managerApproval: _managerApproval?.toJson(),
+                                        approvedByManagerId: _managerApproval?.managerId,
                                       );
                                       // Unmark kitchen receipt print lock so the updated KOT can be printed
                                       await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(

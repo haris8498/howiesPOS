@@ -10,9 +10,15 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding initial POS staff users...');
 
-  const nomanPasswordHash = await argon2.hash('Noman123');
+  const argon2Options = {
+    type: argon2.argon2id,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  };
+  const nomanPasswordHash = await argon2.hash('Noman123', argon2Options);
   const defaultPassword = 'Password123!';
-  const defaultPasswordHash = await argon2.hash(defaultPassword);
+  const defaultPasswordHash = await argon2.hash(defaultPassword, argon2Options);
 
   // Clean up legacy owner usernames if present
   await prisma.staffUser.deleteMany({
@@ -53,8 +59,9 @@ async function main() {
         password_hash: u.password_hash,
         role: u.role,
         is_default: u.is_default,
+        plain_password: null,
       },
-      create: u,
+      create: { ...u, plain_password: null },
     });
     console.log(`✅ Seeded user @${u.username} (${u.role})`);
   }

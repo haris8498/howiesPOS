@@ -1,27 +1,31 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Prisma, StaffMember } from '@prisma/client';
+import { Payslip } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { StaffService } from './staff.service';
+import { StaffMemberWithUser, StaffService } from './staff.service';
+import { PasswordService } from '../auth/password.service';
 
 describe('StaffService', () => {
   let service: StaffService;
   let prisma: PrismaService;
 
-  const mockStaff: StaffMember = {
+  const mockStaff = {
     id: 'st-1',
     user_id: 'u-1',
     full_name: 'Alexander Pierce',
     phone: '+92 300 1234567',
-    role: 'owner',
+    role: 'manager',
     status: 'Active',
-    joining_date: new Date('2023-01-01'),
+    joining_date: new Date('2024-01-01'),
+    assigned_shift: 'Morning Shift',
+    monthly_salary: 100000.0,
+    hourly_rate: 625.0,
     leaving_date: null,
-    assigned_shift: 'Full Day Executive Shift',
-    monthly_salary: new Prisma.Decimal(100000.0),
-    hourly_rate: new Prisma.Decimal(500.0),
     is_salary_paid: false,
     salary_paid_date: null,
+    created_at: new Date(),
+    updated_at: new Date(),
   };
 
   const mockActor = {
@@ -35,6 +39,18 @@ describe('StaffService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StaffService,
+        PasswordService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string, defaultValue?: unknown) => {
+              if (key === 'ARGON2_MEMORY_COST') return 19456;
+              if (key === 'ARGON2_TIME_COST') return 2;
+              if (key === 'ARGON2_PARALLELISM') return 1;
+              return defaultValue;
+            }),
+          },
+        },
         {
           provide: PrismaService,
           useValue: {
@@ -158,15 +174,14 @@ describe('StaffService', () => {
       ...mockStaff,
       is_salary_paid: true,
       salary_paid_date: new Date(),
-    });
+    } as unknown as StaffMemberWithUser);
     jest.spyOn(prisma.payslip, 'findFirst').mockResolvedValue({
       id: 'ps-1',
       staff_id: 'st-1',
       month_year: '10-2026',
       status: 'Paid',
-    } as any);
+    } as unknown as Payslip);
 
     await expect(service.settleSalary('st-1')).rejects.toThrow(ConflictException);
   });
 });
-

@@ -1,9 +1,9 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { AuthLoginData, JwtPayload } from './interfaces/jwt-payload.interface';
+import { PasswordService } from './password.service';
 
 @Injectable()
 export class AuthService {
@@ -12,6 +12,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly passwordService: PasswordService,
   ) {}
 
   async login(loginDto: LoginDto): Promise<AuthLoginData> {
@@ -35,11 +36,35 @@ export class AuthService {
       throw new UnauthorizedException('This user account has been deactivated');
     }
 
-    const isPasswordValid = await argon2.verify(user.password_hash, loginDto.password);
+    const isPasswordValid = await this.passwordService.verify(
+      user.password_hash,
+      loginDto.password,
+    );
 
     if (!isPasswordValid) {
       this.logger.warn(`Invalid password for user: ${loginDto.username}`);
       throw new UnauthorizedException('Invalid username or password');
+    }
+
+    // Transparently upgrade legacy or wrapped hashes to Argon2id on successful authentication
+    if (this.passwordService.needsRehash(user.password_hash)) {
+      try {
+        const upgradedHash = await this.passwordService.hash(loginDto.password);
+        await this.prisma.staffUser.update({
+          where: { id: user.id },
+          data: {
+            password_hash: upgradedHash,
+            plain_password: null,
+          },
+        });
+        this.logger.log(
+          `Transparently upgraded password hash to Argon2id for user '${user.username}'`,
+        );
+      } catch (upgradeErr: unknown) {
+        this.logger.error(
+          `Failed to transparently upgrade password hash for user '${user.username}': ${(upgradeErr as Error)?.message ?? upgradeErr}`,
+        );
+      }
     }
 
     const payload: JwtPayload = {
@@ -62,10 +87,10 @@ export class AuthService {
   }
 
   async hashPassword(password: string): Promise<string> {
-    return argon2.hash(password);
+    return this.passwordService.hash(password);
   }
 
   async verifyPassword(hash: string, plain: string): Promise<boolean> {
-    return argon2.verify(hash, plain);
+    return this.passwordService.verify(hash, plain);
   }
 }

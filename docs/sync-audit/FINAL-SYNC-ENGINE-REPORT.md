@@ -1700,3 +1700,16 @@ A dedicated leftovers remediation pass cataloged all 56 remaining audit findings
   - **S6 (Crash Resilience):** In-flight zombie tasks reaped on reboot without duplication -> **PASS**
   - **S7 (Idempotency):** 3x push replay yields zero duplicates across database tables -> **PASS**
 - **Flag-OFF Equivalence:** Byte-for-byte behavioral parity confirmed when `OFFLINE_FIRST_ENABLED = false`.
+
+---
+
+### 11.4 Decision D-06 Remediation (SEC-05, SEC-07, SEC-11)
+
+- **Item ID:** `D-06`
+- **Branch:** `fix/D-06`
+- **Mapped Findings:** `SEC-05` (Staff password hashing & API sanitization), `SEC-07` (Windows DPAPI credential cache encryption), `SEC-11` (Argon2id password verification, exponential lockout & expiry)
+- **Status:** **DONE**
+- **Date:** October 27, 2026
+- **Summary:**
+  - **Server:** Implemented `PasswordService` with OWASP-recommended Argon2id (`m=19456`, `t=2`, `p=1`) hashing. Seamlessly upgrades legacy SHA-256 and wrapped hashes to Argon2id upon successful authentication while nullifying `plain_password`. Seed script and user controllers strictly sanitize password hashes and plain passwords from all REST responses and sync bootstrap payloads. Added bulk upgrade migration script `scripts/wrap-legacy-hashes.ts`.
+  - **Client:** Integrated `OfflineAuthService` deriving Argon2id verifiers via `cryptography` with per-user 128-bit random salt. Encrypted credential cache at rest using Windows DPAPI (`CryptProtectData`, user scope). Implemented 14-day offline cache expiry, exponential backoff lockout after 5 consecutive failures, and constant-time verifier comparison. Exposed `verifyManagerCredential(managerId/pin)` for D-03 supervisor approvals.

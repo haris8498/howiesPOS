@@ -3,6 +3,7 @@ import '../core/sync/sync_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/network/api_client.dart';
 import '../core/network/realtime_socket_service.dart';
+import '../core/security/offline_auth_service.dart';
 import '../core/security/permission_checker.dart';
 import '../core/security/token_storage.dart';
 import '../domain/models/staff_model.dart';
@@ -114,8 +115,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final StaffApiService _staffApiService;
   final IAuthRepository _fallbackRepository;
   final PermissionChecker _permissionChecker;
+  final OfflineAuthService _offlineAuthService;
   final Ref? _ref;
   PermissionChecker get permissionChecker => _permissionChecker;
+  OfflineAuthService get offlineAuthService => _offlineAuthService;
 
   AuthNotifier({
     AuthApiService? authApiService,
@@ -123,6 +126,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     StaffApiService? staffApiService,
     IAuthRepository? fallbackRepository,
     PermissionChecker? permissionChecker,
+    OfflineAuthService? offlineAuthService,
     Ref? ref,
   })  : _ref = ref,
         _authApiService = authApiService ?? AuthApiService(),
@@ -130,6 +134,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         _staffApiService = staffApiService ?? StaffApiService(),
         _fallbackRepository = fallbackRepository ?? InMemoryAuthRepository(),
         _permissionChecker = permissionChecker ?? const PermissionChecker(),
+        _offlineAuthService = offlineAuthService ?? OfflineAuthService(),
         super(AuthState(
           currentUser: const StaffMember(
             id: 'default_admin',
@@ -430,8 +435,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         clearError: true,
       );
 
-      // Load users list now that a valid auth token is saved
-      _saveLoginOffline(trimmedUsername, trimmedPassword, parsedRole, user['email']?.toString());
+      // Cache Argon2id local verifier in DPAPI-protected store and purge legacy cache
+      final userId = user['id']?.toString() ?? profile.id;
+      _saveLoginOffline(userId, trimmedUsername, trimmedPassword, parsedRole, user['email']?.toString());
       loadUsersFromBackend();
 
       final token = loginData['token']?.toString() ?? loginData['accessToken']?.toString();
@@ -466,66 +472,68 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> _saveLoginOffline(String username, String password, UserRole role, String? email) async {
+  Future<void> _saveLoginOffline(
+    String userId,
+    String username,
+    String password,
+    UserRole role,
+    String? email,
+  ) async {
     try {
-      await _fallbackRepository.addStaffUser(
+      await _offlineAuthService.cacheOnlineLogin(
+        userId: userId,
         username: username,
-        role: role,
+        role: role.name,
         password: password,
-        email: email ?? '$username@hungryhowies.com',
-        fullName: username,
       );
-      await _fallbackRepository.updateUserPassword(username, password);
     } catch (_) {}
   }
 
   /// Offline local fallback verification if backend is completely unreachable
   Future<bool> _loginFallback(String username, String password) async {
     try {
-      final cred = await _fallbackRepository.findCredentialByUsername(username);
+      final authResult = await _offlineAuthService.authenticateOffline(username, password);
       if (!mounted) return false;
-      if (cred == null) {
+
+      if (!authResult.isSuccess) {
         state = state.copyWith(
           isLoading: false,
-          errorMessage: 'Invalid username. User not found.',
+          errorMessage: authResult.errorMessage ?? 'Offline login failed.',
         );
         return false;
       }
 
-      final isValid = await _fallbackRepository.verifyUserCredentials(username, password) ||
-                      await _fallbackRepository.verifyCredentials(cred.role, password);
-      if (!mounted) return false;
-      if (!isValid) {
-        state = state.copyWith(
-          isLoading: false,
-          errorMessage: 'Invalid password for ${cred.username}.',
-        );
-        return false;
+      final cred = authResult.credential!;
+      final roleStr = cred.role.toLowerCase();
+      UserRole parsedRole = UserRole.cashier;
+      if (roleStr == 'owner' || roleStr == 'superadmin') {
+        parsedRole = UserRole.owner;
+      } else if (roleStr == 'manager' || roleStr == 'storemanager') {
+        parsedRole = UserRole.manager;
       }
-
 
       final activeStaff = StaffMember(
-        id: 'local_${cred.role.name}',
+        id: cred.userId,
         fullName: cred.username,
         phone: '',
-        role: cred.role,
+        role: parsedRole,
         hourlyRate: 406.0,
-        assignedShift: 'Local Shift',
+        assignedShift: 'Offline Shift',
       );
 
       await TokenStorage.saveUserSession(
-        token: 'local_offline_token_${cred.username}',
+        token: 'offline_dpapi_token_${cred.username}',
         userId: activeStaff.id,
         username: cred.username,
-        email: cred.email,
-        role: cred.role.name,
+        email: '${cred.username}@hungryhowies.com',
+        role: parsedRole.name,
         isDefault: true,
       );
 
       if (!mounted) return false;
       state = state.copyWith(
         currentUser: activeStaff,
-        selectedRole: cred.role,
+        selectedRole: parsedRole,
         isAuthenticated: true,
         isLoading: false,
         clearError: true,
@@ -776,12 +784,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 }
 
+final offlineAuthServiceProvider = Provider<OfflineAuthService>((ref) {
+  return OfflineAuthService();
+});
+
 final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   final authApi = ref.watch(authApiServiceProvider);
   final usersApi = ref.watch(usersApiServiceProvider);
   final staffApi = ref.watch(staffApiServiceProvider);
   final repo = ref.watch(authRepositoryProvider);
   final checker = ref.watch(permissionCheckerProvider);
+  final offlineAuth = ref.watch(offlineAuthServiceProvider);
 
   return AuthNotifier(
     authApiService: authApi,
@@ -789,6 +802,7 @@ final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
     staffApiService: staffApi,
     fallbackRepository: repo,
     permissionChecker: checker,
+    offlineAuthService: offlineAuth,
     ref: ref,
   );
 });

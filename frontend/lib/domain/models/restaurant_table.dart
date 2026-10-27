@@ -20,6 +20,9 @@ class RestaurantTable {
   // Stores the current order items as a list of maps: {name, category, price, imagePath, quantity}
   final List<Map<String, dynamic>> currentOrderItems;
   final bool isDeleted;
+  final bool isOverflow;
+  final String? parentTableId;
+  final String? overflowSuffix;
 
   const RestaurantTable({
     required this.id,
@@ -40,6 +43,9 @@ class RestaurantTable {
     this.reservationTime,
     this.currentOrderItems = const [],
     this.isDeleted = false,
+    this.isOverflow = false,
+    this.parentTableId,
+    this.overflowSuffix,
   });
 
   int get occupancyDurationMinutes {
@@ -66,6 +72,9 @@ class RestaurantTable {
     DateTime? reservationTime,
     List<Map<String, dynamic>>? currentOrderItems,
     bool? isDeleted,
+    bool? isOverflow,
+    String? parentTableId,
+    String? overflowSuffix,
   }) {
     return RestaurantTable(
       id: id ?? this.id,
@@ -86,6 +95,9 @@ class RestaurantTable {
       reservationTime: reservationTime ?? this.reservationTime,
       currentOrderItems: currentOrderItems ?? this.currentOrderItems,
       isDeleted: isDeleted ?? this.isDeleted,
+      isOverflow: isOverflow ?? this.isOverflow,
+      parentTableId: parentTableId ?? this.parentTableId,
+      overflowSuffix: overflowSuffix ?? this.overflowSuffix,
     );
   }
 
@@ -207,7 +219,36 @@ class RestaurantTable {
           : null,
       currentOrderItems: isTableOccupied ? orderItems : const [],
       isDeleted: json['is_deleted'] == true || json['is_deleted'] == 1,
+      isOverflow: json['is_overflow'] == true || json['is_overflow'] == 1,
+      parentTableId: json['parent_table_id']?.toString(),
+      overflowSuffix: json['overflow_suffix']?.toString(),
     );
+
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'table_number': tableNumber,
+      'name': name,
+      'capacity': capacity,
+      'current_customer_count': currentCustomerCount,
+      'current_bill_amount': currentBillAmount,
+      'dine_in_tax': dineInTax,
+      'discount_amount': discountAmount,
+      'discount_percentage': discountPercentage,
+      'status': status.name,
+      'section': section,
+      'active_order_id': activeOrderId,
+      'active_order_number': activeOrderNumber,
+      'occupied_since': occupiedSince?.toIso8601String(),
+      'reserved_customer_name': reservedCustomerName,
+      'reservation_time': reservationTime?.toIso8601String(),
+      'is_deleted': isDeleted,
+      'is_overflow': isOverflow,
+      'parent_table_id': parentTableId,
+      'overflow_suffix': overflowSuffix,
+    };
   }
 }
 

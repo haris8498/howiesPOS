@@ -20,6 +20,7 @@ import '../network/kitchen_socket_service.dart';
 import '../security/token_storage.dart';
 import 'connectivity_notifier.dart';
 import 'device_identity.dart';
+import 'table_reassignment_provider.dart';
 
 export '../database/daos/retention_dao.dart' show RetentionPruneResult;
 
@@ -908,6 +909,82 @@ class SyncBackgroundWorker {
           }
         }
       });
+
+      // D-01: Process table reassignments from push response
+      final reassignments = <Map<String, dynamic>>[];
+      if (decoded['tableReassigned'] is List) {
+        for (final item in (decoded['tableReassigned'] as List)) {
+          if (item is Map) reassignments.add(Map<String, dynamic>.from(item));
+        }
+      }
+      for (final r in results.whereType<Map<String, dynamic>>()) {
+        if (r['table_reassigned'] is Map) {
+          reassignments.add(Map<String, dynamic>.from(r['table_reassigned'] as Map));
+        }
+        if (r['tableReassigned'] is List) {
+          for (final item in (r['tableReassigned'] as List)) {
+            if (item is Map) reassignments.add(Map<String, dynamic>.from(item));
+          }
+        }
+      }
+
+      final seenReassignmentKeys = <String>{};
+      for (final re in reassignments) {
+        final orderId = re['orderId']?.toString();
+        final fromTableId = re['fromTableId']?.toString();
+        final toTableId = re['toTableId']?.toString();
+        final toLabel = re['toLabel']?.toString();
+
+        if (orderId != null && toTableId != null && toLabel != null) {
+          final rKey = '$orderId:$toTableId';
+          if (seenReassignmentKeys.contains(rKey)) continue;
+          seenReassignmentKeys.add(rKey);
+          debugPrint('[SyncWorker] [D-01] Processing table reassignment: order $orderId from $fromTableId to $toTableId ($toLabel)');
+
+          // 1. Fetch parent table info
+          LocalRestaurantTable? parentTable;
+          if (fromTableId != null) {
+            parentTable = await (db.select(db.localRestaurantTables)..where((t) => t.id.equals(fromTableId))).getSingleOrNull();
+            // Clear previous table if occupied by this order
+            if (parentTable != null && parentTable.activeOrderId == orderId) {
+              await (db.update(db.localRestaurantTables)..where((t) => t.id.equals(fromTableId))).write(
+                const LocalRestaurantTablesCompanion(
+                  status: Value('available'),
+                  activeOrderId: Value(null),
+                ),
+              );
+            }
+          }
+
+          // 2. Upsert overflow table into Drift
+          final suffix = toLabel.contains('-') ? toLabel.split('-').last : null;
+          await db.catalogDao.upsertRestaurantTables([
+            LocalRestaurantTablesCompanion(
+              id: Value(toTableId),
+              zoneId: Value(parentTable?.zoneId),
+              tableNumber: Value(toLabel),
+              name: Value('Table $toLabel'),
+              capacity: Value(parentTable?.capacity ?? 4),
+              status: const Value('occupied'),
+              activeOrderId: Value(orderId),
+              isOverflow: const Value(true),
+              parentTableId: Value(fromTableId),
+              overflowSuffix: Value(suffix),
+              isDeleted: const Value(false),
+            ),
+          ]);
+
+          // 3. Emit notification for UI floor plan
+          final parentNum = parentTable?.tableNumber ?? (fromTableId ?? 'Table');
+          TableReassignmentEventBus.emit(TableReassignmentNotification(
+            orderId: orderId,
+            fromTableId: fromTableId ?? '',
+            toTableId: toTableId,
+            toLabel: toLabel,
+            message: 'Table $parentNum had two parties, one moved to $toLabel',
+          ));
+        }
+      }
 
       // Reset circuit breaker consecutive failure counter on successful request
       stateNotifier.updateState(state.copyWith(

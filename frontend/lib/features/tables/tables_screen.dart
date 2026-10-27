@@ -16,6 +16,7 @@ import '../../shared/widgets/cashier_sidebar_footer.dart';
 import 'package:uuid/uuid.dart';
 import '../../config/feature_flags.dart';
 import '../../core/sync/sync_providers.dart';
+import '../../core/sync/table_reassignment_provider.dart';
 import '../../data/repositories/order_repository_provider.dart';
 import '../../domain/models/menu_item.dart';
 import '../../domain/models/order_model.dart';
@@ -683,6 +684,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
     final tableState = ref.watch(tableProvider);
     final tableNotifier = ref.read(tableProvider.notifier);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tableReassignments = ref.watch(tableReassignmentNotificationProvider);
 
     // If a table is active/opened, render the Full Screen Table Order Details view (Not in pop-up)
     if (_activeDetailTableId != null) {
@@ -701,6 +703,11 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
         final hasOpenOrder = t.status == TableStatus.occupied || (t.activeOrderId != null && t.currentBillAmount > 0);
         if (!hasOpenOrder) return false;
       }
+      // D-01: Auto-hide empty/closed overflow tables
+      if (t.isOverflow) {
+        final hasActiveOrder = t.status == TableStatus.occupied || (t.activeOrderId != null && t.currentBillAmount > 0);
+        if (!hasActiveOrder) return false;
+      }
 
       final matchesSection = () {
         if (tableState.selectedSection == 'All') return true;
@@ -716,6 +723,27 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
 
       return matchesSection && matchesQuery;
     }).toList();
+
+    // D-01: Sort overflow tables immediately after their parent table
+    filteredTables.sort((a, b) {
+      final aBase = a.isOverflow && a.parentTableId != null
+          ? (tableState.tables.where((t) => t.id == a.parentTableId).firstOrNull?.tableNumber ?? a.tableNumber.split('-').first)
+          : a.tableNumber.split('-').first;
+      final bBase = b.isOverflow && b.parentTableId != null
+          ? (tableState.tables.where((t) => t.id == b.parentTableId).firstOrNull?.tableNumber ?? b.tableNumber.split('-').first)
+          : b.tableNumber.split('-').first;
+
+      if (aBase != bBase) {
+        final aNum = int.tryParse(aBase);
+        final bNum = int.tryParse(bBase);
+        if (aNum != null && bNum != null) return aNum.compareTo(bNum);
+        return aBase.compareTo(bBase);
+      }
+
+      if (!a.isOverflow && b.isOverflow) return -1;
+      if (a.isOverflow && !b.isOverflow) return 1;
+      return a.tableNumber.compareTo(b.tableNumber);
+    });
 
     final isCashier = ref.watch(authProvider).currentUser.role == UserRole.cashier;
 
@@ -1063,6 +1091,49 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
 
                 const SizedBox(height: 16),
 
+                if (tableReassignments.isNotEmpty) ...[
+                  for (final notif in tableReassignments)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF2E1A47) : const Color(0xFFF3E8FF),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF7C3AED), width: 1.5),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x1A7C3AED),
+                            blurRadius: 6,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline_rounded, color: Color(0xFF7C3AED), size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              notif.message,
+                              style: TextStyle(
+                                color: isDark ? const Color(0xFFE9D5FF) : const Color(0xFF581C87),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                            color: const Color(0xFF7C3AED),
+                            onPressed: () {
+                              ref.read(tableReassignmentNotificationProvider.notifier).dismiss(notif);
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+
                 // Visual Table Floor Plan Grid
                 Expanded(
                   child: filteredTables.isEmpty
@@ -1139,8 +1210,8 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                       color: statusBgColor,
                                       borderRadius: BorderRadius.circular(16),
                                       border: Border.all(
-                                        color: isSelected ? AppColors.primaryRed : statusColor,
-                                        width: isSelected ? 2.8 : 2.0,
+                                        color: isSelected ? AppColors.primaryRed : (table.isOverflow ? const Color(0xFF7C3AED) : statusColor),
+                                        width: isSelected ? 2.8 : (table.isOverflow ? 2.2 : 2.0),
                                       ),
                                       boxShadow: isSelected
                                           ? [
@@ -1209,6 +1280,41 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                     ),
                                   ),
                                 ),
+                                if (table.isOverflow)
+                                  Positioned(
+                                    top: 8,
+                                    left: isSelected ? 32 : (table.isDeleted ? 76 : 8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF7C3AED),
+                                        borderRadius: BorderRadius.circular(6),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color(0x337C3AED),
+                                            blurRadius: 4,
+                                            offset: Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
+                                      child: const Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.call_split_rounded, size: 10, color: Colors.white),
+                                          SizedBox(width: 3),
+                                          Text(
+                                            'OVERFLOW',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w900,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                                 if (table.isDeleted)
                                   Positioned(
                                     top: 8,

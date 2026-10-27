@@ -23,11 +23,11 @@ This backlog captures **all remaining findings** across the audit corpus, catego
 
 | Severity | Total Findings | Resolved in SYNC-006 | Needs Product Decision | Skipped (Low / Hardening) |
 |---|---|---|---|---|
-| **Critical** | 7 | 4 | 3 | 0 |
+| **Critical** | 7 | 5 | 2 | 0 |
 | **High** | 18 | 13 | 5 | 0 |
 | **Medium** | 19 | 6 | 7 | 6 |
 | **Low** | 12 | 1 | 0 | 11 |
-| **TOTAL** | **56** | **24** | **15** | **17** |
+| **TOTAL** | **56** | **25** | **14** | **17** |
 
 ---
 
@@ -44,7 +44,7 @@ This backlog captures **all remaining findings** across the audit corpus, catego
 | **SYNC-016** | **Critical** | Server Blindly Trusts Client Unit Prices, Subtotals, and Grand Totals | `backend/src/orders/orders.service.ts:211-262`, `backend/src/sync/handlers/order.handler.ts:100-151` | `BCK-02, MNY-08, SEC-01` | Server catalog total recomputation vs cashier manual discount/promo flexibility. Requires pricing policy decision. | **needs-decision** |
 | **SYNC-017** | **Critical** | Auth Pause Deadlock Halts Outbox Sync After User Re-Login | `frontend/lib/data/auth_repository.dart:420-435`, `frontend/lib/core/sync/sync_background_worker.dart:964-973` | `FLT-01, SEC-04` | Call `ref.read(syncBackgroundWorkerProvider).resumeAuthPaused()` upon successful login in `auth_repository.dart`. | **resolved** (`9401030`) |
 | **SYNC-018** | **Critical** | HTTP 4xx Validation Error Fatally Drops Entire 25-Mutation Batch | `frontend/lib/core/sync/sync_background_worker.dart:671-675, 975-985` | `OBX-04, SEC-13` | Never batch-quarantine all 25 rows on HTTP 4xx. Split multi-mutation batches into single-item pushes to isolate the invalid row and let the others succeed. | **resolved** (`1aec81d`) |
-| **SYNC-027** | **Critical** | Permanent Stranding / Data Loss of Local Outbox Mutations upon Flag Rollback | `frontend/lib/main.dart:43-45`, `frontend/lib/config/feature_flags.dart:5-6` | `FLG-02` | Startup drain check when `OFFLINE_FIRST_ENABLED = false` to prevent stranding unsynced orders. Requires UI/startup decision. | **needs-decision** |
+| **SYNC-027** | **Critical** | Permanent Stranding / Data Loss of Local Outbox Mutations upon Flag Rollback | `frontend/lib/main.dart:43-45`, `frontend/lib/config/feature_flags.dart:5-6` | `FLG-02` | Startup drain check when `OFFLINE_FIRST_ENABLED = false` to prevent stranding unsynced orders. Requires UI/startup decision. | **resolved** (branch: `fix/D-04`) |
 | **SYNC-008** | **High** | Hardcoded Password Guessing in Silent Re-Authentication Pipeline | `frontend/lib/core/sync/sync_background_worker.dart:1355-1360` | `ARCH-05, FLT-05, SEC-03, CFL-13` | Remove hardcoded plaintext password guessing (`username123` / `Noman123`). Transition safely to `AUTH_PAUSED` when refresh token unavailable. | **resolved** (`a40be49`) |
 | **SYNC-010** | **High** | Dual-Write Anti-Pattern Creates Ghost Duplicate Orders During Network Drops | `frontend/lib/features/tables/tables_screen.dart`, `frontend/lib/data/takeaway_repository.dart:365-388` | `TBL-01, ARCH-01, OBX-08, FLT-02` | Unify domain repositories to write exclusively through Drift outbox when `offlineFirstEnabled` is true. | **needs-decision** |
 | **SYNC-014** | **High** | Order `created_at` Client Timestamp Stripped; Replaced by Server NOW() | `backend/src/orders/dto/create-order.dto.ts:83-246`, `backend/src/orders/orders.service.ts:358-379, 480-495` | `BCK-03, MNY-05` | Add `created_at?: string` to `CreateOrderDto`, map in `OrderHandler`, and pass to `tx.order.create` and `tx.orderPayment.createMany`. | **resolved** (`5503563`) |
@@ -146,7 +146,7 @@ This backlog captures **all remaining findings** across the audit corpus, catego
 - **Options:**
   1. *(Recommended)* **Blocking Startup Drain Modal:** On application launch when `OFFLINE_FIRST_ENABLED = false`, check if `sync_outbox` has pending rows. If count $> 0$, display a non-dismissible dialog: *"Unsynced offline orders found on this terminal. Tap 'Drain and Continue' to push to cloud before switching to online-only mode."*
   2. **Silent Background Drain:** Start `SyncBackgroundWorker` in one-shot drain mode even when flag is OFF, running until `pendingCount == 0`, then disposing worker.
-- **Status:** `needs-decision` (Recommended: Option 1).
+- **Status:** `Implemented (recommendation adopted) (branch: fix/D-04)`
 
 ---
 

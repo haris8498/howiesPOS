@@ -1681,6 +1681,7 @@ A dedicated leftovers remediation pass cataloged all 56 remaining audit findings
   - `OBX-07`: Prevented linking offline orders to unrelated active shifts (`9b71004`)
   - `MNY-02` & `MNY-03`: Blocked underpayment in tender dialog & scoped cash change to cash tender (`d668601`)
   - `FLG-04` & `FLT-11`: Gated background polling timer behind flag and added startup resilience (`1ab1325`, `6a47698`)
+  - `D-04` (`SYNC-027` / `FLG-02`): Startup outbox drain gate and blocking modal preventing stranding of unsynced orders on flag rollback (branch: `fix/D-04`)
 - **Needs Product Decision:** **15 items** documented with trade-off analysis and recommendations
 - **Skipped (Low / Non-Critical Polish):** **17 items** documented with justification
 

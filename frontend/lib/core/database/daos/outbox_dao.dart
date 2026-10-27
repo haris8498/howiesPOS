@@ -161,7 +161,7 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
       'userName': userName,
       'entryIds': entryIds,
       'timestamp': DateTime.now().toIso8601String(),
-      if (details != null) 'details': details,
+      'details': ?details,
     });
 
     await db.into(db.syncConflicts).insert(
@@ -365,6 +365,111 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
       ..where(syncOutbox.status.equals(SyncOutboxStatus.pending) |
           syncOutbox.status.equals(SyncOutboxStatus.failedRetryable));
     return query.map((row) => row.read(countExpr) ?? 0).watchSingle();
+  }
+
+  /// Non-terminal outbox queue states (D-04 / SYNC-027).
+  static const List<String> nonTerminalStatuses = [
+    SyncOutboxStatus.pending,
+    SyncOutboxStatus.failedRetryable,
+    SyncOutboxStatus.inFlight,
+    SyncOutboxStatus.authPaused,
+  ];
+
+  /// Counts non-terminal outbox rows (pending, failed-retryable, in-flight, auth-paused).
+  Future<int> getNonTerminalCount() async {
+    final countExpr = syncOutbox.id.count();
+    final query = selectOnly(syncOutbox)
+      ..addColumns([countExpr])
+      ..where(syncOutbox.status.isIn(nonTerminalStatuses));
+    final row = await query.getSingle();
+    return row.read(countExpr) ?? 0;
+  }
+
+  /// Reactive stream of non-terminal outbox rows count.
+  Stream<int> watchNonTerminalCount() {
+    final countExpr = syncOutbox.id.count();
+    final query = selectOnly(syncOutbox)
+      ..addColumns([countExpr])
+      ..where(syncOutbox.status.isIn(nonTerminalStatuses));
+    return query.map((row) => row.read(countExpr) ?? 0).watchSingle();
+  }
+
+  /// Retrieves non-terminal outbox rows ordered by dependency and creation date.
+  Future<List<SyncOutboxEntry>> getNonTerminalEntries() {
+    return (select(syncOutbox)
+          ..where((t) => t.status.isIn(nonTerminalStatuses))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.dependencyOrder),
+            (t) => OrderingTerm.asc(t.createdAt),
+          ]))
+        .get();
+  }
+
+  /// Retrieves permanently failed outbox entries (4xx business errors, FAILED_FATAL, CONFLICT, QUARANTINED, DEAD_LETTER).
+  Future<List<SyncOutboxEntry>> getPermanentlyFailedEntries() {
+    return (select(syncOutbox)
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.failedFatal) |
+              t.status.equals(SyncOutboxStatus.conflict) |
+              t.status.equals(statusQuarantined) |
+              t.status.equals(statusDeadLetter))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+  }
+
+  /// Reactive stream of permanently failed outbox entries.
+  Stream<List<SyncOutboxEntry>> watchPermanentlyFailedEntries() {
+    return (select(syncOutbox)
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.failedFatal) |
+              t.status.equals(SyncOutboxStatus.conflict) |
+              t.status.equals(statusQuarantined) |
+              t.status.equals(statusDeadLetter))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch();
+  }
+
+  /// Serializes all pending/non-terminal and failed outbox entries to diagnostic JSON (D-04).
+  /// Every pending and failed row is included with its metadata and payload.
+  Future<String> exportOutboxBackupJson() async {
+    final nonTerminal = await getNonTerminalEntries();
+    final failed = await getPermanentlyFailedEntries();
+    final allToExport = [...nonTerminal, ...failed];
+
+    final list = allToExport.map((e) {
+      dynamic parsedPayload;
+      try {
+        parsedPayload = jsonDecode(e.payload);
+      } catch (_) {
+        parsedPayload = e.payload;
+      }
+
+      return {
+        'id': e.id,
+        'operationId': e.operationId,
+        'deviceId': e.deviceId,
+        'entityType': e.entityType,
+        'entityId': e.entityId,
+        'operationType': e.operationType,
+        'baseVersion': e.baseVersion,
+        'status': e.status,
+        'retryCount': e.retryCount,
+        'createdAt': e.createdAt.toIso8601String(),
+        'sentAt': e.sentAt?.toIso8601String(),
+        'ackedAt': e.ackedAt?.toIso8601String(),
+        'lastError': e.lastError,
+        'conflictDetails': e.conflictDetails,
+        'payload': parsedPayload,
+      };
+    }).toList();
+
+    return const JsonEncoder.withIndent('  ').convert({
+      'exportedAt': DateTime.now().toIso8601String(),
+      'pendingCount': nonTerminal.length,
+      'failedCount': failed.length,
+      'totalExported': list.length,
+      'entries': list,
+    });
   }
 
   Future<List<SyncOutboxEntry>> getAllEntries() {

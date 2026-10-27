@@ -1,3 +1,5 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 /// Feature flags controlling rollout of offline-first capabilities.
 class FeatureFlags {
   static bool? _overrideOfflineFirstEnabled;
@@ -18,3 +20,8 @@ class FeatureFlags {
     _overrideOfflineFirstEnabled = null;
   }
 }
+
+/// Feature flag provider for offline-first architecture (Riverpod §17.1).
+final offlineFirstFeatureFlagProvider = StateProvider<bool>((ref) {
+  return FeatureFlags.offlineFirstEnabled;
+});

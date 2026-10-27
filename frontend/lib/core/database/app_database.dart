@@ -66,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? openEncryptedConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -74,7 +74,10 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
         },
         onUpgrade: (Migrator m, int from, int to) async {
-          // Schema Version 1 Baseline. Scaffold for future versioned migrations.
+          // Version 2: SYNC-012/TBL-12: Add is_deleted to local_restaurant_tables
+          if (from < 2) {
+            await m.addColumn(localRestaurantTables, localRestaurantTables.isDeleted);
+          }
         },
         beforeOpen: (OpeningDetails details) async {
           // Guarantee foreign key constraints are enforced

@@ -136,6 +136,50 @@ class TableNotifier extends StateNotifier<TableState> {
         return st;
       }));
 
+            // Preserve locally occupied soft-deleted tables so cashier can settle orders (§SYNC-012/TBL-12)
+      if (FeatureFlags.offlineFirstEnabled && localDb != null) {
+        try {
+          final allLocal = await localDb.catalogDao.getAllTables(includeDeleted: true);
+          for (final lt in allLocal) {
+            if (lt.isDeleted && (lt.status == 'occupied' || lt.activeOrderId != null)) {
+              final alreadyIn = mergedTables.any((mt) => mt.id == lt.id);
+              if (!alreadyIn) {
+                List<Map<String, dynamic>> items = const [];
+                double bill = 0.0;
+                if (lt.activeOrderId != null) {
+                  final dbItems = await localDb.ordersDao.getOrderItems(lt.activeOrderId!);
+                  if (dbItems.isNotEmpty) {
+                    items = dbItems.map((i) => {
+                      'id': i.id,
+                      'name': i.itemName,
+                      'quantity': i.quantity,
+                      'price': i.unitPrice,
+                      'selected_size': i.sizeName ?? 'Regular',
+                      'notes': i.notes,
+                      'is_cancelled': i.isCancelled,
+                      'cancel_reason': i.cancelReason,
+                    }).toList();
+                    bill = dbItems.where((i) => !i.isCancelled).fold<double>(0.0, (acc, i) => acc + i.subtotal);
+                  }
+                }
+                mergedTables.add(RestaurantTable(
+                  id: lt.id,
+                  tableNumber: lt.tableNumber,
+                  name: lt.name,
+                  capacity: lt.capacity,
+                  section: 'Hall',
+                  status: TableStatus.occupied,
+                  activeOrderId: lt.activeOrderId,
+                  currentBillAmount: bill,
+                  currentOrderItems: items,
+                  isDeleted: true,
+                ));
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       // Cache tables locally in Drift catalog
       if (FeatureFlags.offlineFirstEnabled && localDb != null && mergedTables.isNotEmpty) {
         final companions = mergedTables.map((t) => LocalRestaurantTablesCompanion(
@@ -145,6 +189,7 @@ class TableNotifier extends StateNotifier<TableState> {
           capacity: Value(t.capacity),
           status: Value(t.status.name),
           activeOrderId: Value(t.activeOrderId),
+          isDeleted: Value(t.isDeleted),
         )).toList();
         await localDb.catalogDao.upsertRestaurantTables(companions);
       }
@@ -167,7 +212,7 @@ class TableNotifier extends StateNotifier<TableState> {
     } catch (_) {
       // Offline fallback: load from local SQLite catalog
       if (FeatureFlags.offlineFirstEnabled && localDb != null) {
-        final localTables = await localDb.catalogDao.getAllTables();
+        final localTables = await localDb.catalogDao.getAllTables(includeDeleted: true);
         if (localTables.isNotEmpty) {
           final currentMap = {for (final t in state.tables) t.id: t};
           final mapped = await Future.wait(localTables.map((lt) async {
@@ -208,6 +253,7 @@ class TableNotifier extends StateNotifier<TableState> {
               currentOrderItems: items,
               reservedCustomerName: local?.reservedCustomerName,
               reservationTime: local?.reservationTime,
+              isDeleted: lt.isDeleted,
             );
           }));
           state = state.copyWith(tables: mapped, isLoading: false);

@@ -84,6 +84,7 @@ class LocalRestaurantTables extends Table {
   TextColumn get status => text().withDefault(const Constant('available'))();
   TextColumn get activeOrderId => text().nullable()();
   IntColumn get version => integer().withDefault(const Constant(1))();
+  BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};

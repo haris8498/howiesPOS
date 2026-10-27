@@ -122,7 +122,10 @@ export class SyncPullService {
       this.prisma.menuItemOption.findMany(),
       this.prisma.deal.findMany({ include: { components: true } }),
       this.prisma.floorZone.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.restaurantTable.findMany({ orderBy: { table_number: 'asc' } }),
+      this.prisma.restaurantTable.findMany({
+        where: { is_deleted: false },
+        orderBy: { table_number: 'asc' },
+      }),
       this.prisma.deliveryRider.findMany({ where: { is_available: true } }),
       this.prisma.dailyCalculation.findFirst({
         where: { status: 'ACTIVE' },

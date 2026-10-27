@@ -19,6 +19,7 @@ class RestaurantTable {
   final DateTime? reservationTime;
   // Stores the current order items as a list of maps: {name, category, price, imagePath, quantity}
   final List<Map<String, dynamic>> currentOrderItems;
+  final bool isDeleted;
 
   const RestaurantTable({
     required this.id,
@@ -38,6 +39,7 @@ class RestaurantTable {
     this.reservedCustomerName,
     this.reservationTime,
     this.currentOrderItems = const [],
+    this.isDeleted = false,
   });
 
   int get occupancyDurationMinutes {
@@ -63,6 +65,7 @@ class RestaurantTable {
     String? reservedCustomerName,
     DateTime? reservationTime,
     List<Map<String, dynamic>>? currentOrderItems,
+    bool? isDeleted,
   }) {
     return RestaurantTable(
       id: id ?? this.id,
@@ -82,6 +85,7 @@ class RestaurantTable {
       reservedCustomerName: reservedCustomerName ?? this.reservedCustomerName,
       reservationTime: reservationTime ?? this.reservationTime,
       currentOrderItems: currentOrderItems ?? this.currentOrderItems,
+      isDeleted: isDeleted ?? this.isDeleted,
     );
   }
 
@@ -202,6 +206,7 @@ class RestaurantTable {
           ? DateTime.tryParse(json['reservation_time'].toString())
           : null,
       currentOrderItems: isTableOccupied ? orderItems : const [],
+      isDeleted: json['is_deleted'] == true || json['is_deleted'] == 1,
     );
   }
 }

@@ -21,6 +21,9 @@ describe('TablesController', () => {
     active_order_id: null,
     reserved_customer_name: null,
     reservation_time: null,
+    is_deleted: false,
+    deleted_at: null,
+    deleted_by: null,
     version: 1,
     updated_at: new Date(),
   };
@@ -55,6 +58,7 @@ describe('TablesController', () => {
               reserved_customer_name: 'David Beckham',
             }),
             deleteTable: jest.fn().mockResolvedValue({ message: 'Table deleted' }),
+            restoreTable: jest.fn().mockResolvedValue({ message: 'Table restored', table: mockTable }),
           },
         },
         {
@@ -130,6 +134,12 @@ describe('TablesController', () => {
     });
     expect(result.success).toBe(true);
     expect(result.data?.status).toBe('reserved');
+  });
+
+  it('should restore table', async () => {
+    const result = await controller.restoreTable('tbl-1');
+    expect(result.success).toBe(true);
+    expect(result.message).toContain('restored');
   });
 
   it('should delete table', async () => {

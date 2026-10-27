@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -155,13 +156,29 @@ export class TablesController {
     };
   }
 
-  @Delete(':id')
+  @Post(':id/restore')
   @RequirePermission('Tables', 'Delete Tables')
-  async deleteTable(@Param('id') id: string): Promise<ApiResponse<{ message: string }>> {
-    const data = await this.tablesService.deleteTable(id);
+  async restoreTable(@Param('id') id: string): Promise<ApiResponse<RestaurantTable>> {
+    const data = await this.tablesService.restoreTable(id);
     return {
       success: true,
       message: data.message,
+      data: data.table,
+    };
+  }
+
+  @Delete(':id')
+  @RequirePermission('Tables', 'Delete Tables')
+  async deleteTable(
+    @Param('id') id: string,
+    @Req() req?: any,
+  ): Promise<ApiResponse<{ message: string; table?: RestaurantTable; open_orders?: any[]; openOrders?: any[]; has_open_orders?: boolean }>> {
+    const deletedBy = req?.user?.username || req?.user?.id || 'admin';
+    const data = await this.tablesService.deleteTable(id, deletedBy);
+    return {
+      success: true,
+      message: data.message,
+      data,
     };
   }
 }

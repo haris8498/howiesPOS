@@ -1,6 +1,7 @@
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, RestaurantTable } from '@prisma/client';
+import { ChangeLogService } from '../sync/change-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTableDto } from './dto/create-table.dto';
 import { UpdateTableDto } from './dto/update-table.dto';
@@ -16,10 +17,11 @@ export class TablesService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
+    @Optional() private readonly changeLogService?: ChangeLogService,
   ) {}
 
   async listTables(query: QueryTableDto = {}): Promise<any[]> {
-    const where: Prisma.RestaurantTableWhereInput = {};
+    const where: Prisma.RestaurantTableWhereInput = { is_deleted: false };
 
     if (query.status) {
       where.status = query.status;
@@ -189,7 +191,7 @@ export class TablesService {
       },
     });
 
-    if (!table) {
+    if (!table || table.is_deleted) {
       throw new NotFoundException(`Restaurant table with ID '${id}' not found`);
     }
 
@@ -268,6 +270,7 @@ export class TablesService {
 
     const existing = await this.prisma.restaurantTable.findFirst({
       where: {
+        is_deleted: false,
         OR: [
           { table_number: { equals: trimmedNumber, mode: 'insensitive' } },
           { name: { equals: trimmedName, mode: 'insensitive' } },
@@ -302,7 +305,7 @@ export class TablesService {
       where: { id },
     });
 
-    if (!existing) {
+    if (!existing || existing.is_deleted) {
       throw new NotFoundException(`Restaurant table with ID '${id}' not found`);
     }
 
@@ -313,6 +316,7 @@ export class TablesService {
       const duplicate = await this.prisma.restaurantTable.findFirst({
         where: {
           id: { not: id },
+          is_deleted: false,
           OR: [
             ...(trimmedNumber ? [{ table_number: { equals: trimmedNumber, mode: 'insensitive' as const } }] : []),
             ...(trimmedName ? [{ name: { equals: trimmedName, mode: 'insensitive' as const } }] : []),
@@ -357,7 +361,7 @@ export class TablesService {
       where: { id },
     });
 
-    if (!existing) {
+    if (!existing || existing.is_deleted) {
       throw new NotFoundException(`Restaurant table with ID '${id}' not found`);
     }
 
@@ -399,7 +403,7 @@ export class TablesService {
       where: { id },
     });
 
-    if (!existing) {
+    if (!existing || existing.is_deleted) {
       throw new NotFoundException(`Restaurant table with ID '${id}' not found`);
     }
 
@@ -432,7 +436,7 @@ export class TablesService {
         where: { id: dto.from_table_id },
       });
 
-      if (!fromTable) {
+      if (!fromTable || fromTable.is_deleted) {
         throw new NotFoundException(`Source table with ID '${dto.from_table_id}' not found`);
       }
 
@@ -444,7 +448,7 @@ export class TablesService {
         where: { id: dto.to_table_id },
       });
 
-      if (!toTable) {
+      if (!toTable || toTable.is_deleted) {
         throw new NotFoundException(`Destination table with ID '${dto.to_table_id}' not found`);
       }
 
@@ -531,7 +535,7 @@ export class TablesService {
       where: { id },
     });
 
-    if (!existing) {
+    if (!existing || existing.is_deleted) {
       throw new NotFoundException(`Restaurant table with ID '${id}' not found`);
     }
 
@@ -564,7 +568,7 @@ export class TablesService {
     return updated;
   }
 
-  async deleteTable(idOrNumber: string): Promise<{ message: string }> {
+  async deleteTable(idOrNumber: string, deletedBy: string = 'admin'): Promise<{ message: string; table: RestaurantTable; open_orders: any[]; openOrders: any[]; has_open_orders: boolean }> {
     const existing = await this.prisma.restaurantTable.findFirst({
       where: {
         OR: [
@@ -579,32 +583,199 @@ export class TablesService {
       throw new NotFoundException(`Restaurant table '${idOrNumber}' not found`);
     }
 
-    if (existing.status === 'occupied' || existing.active_order_id) {
-      throw new ConflictException(
-        `Cannot delete table '${existing.name}' while it is currently occupied`,
-      );
+    if (existing.is_deleted) {
+      return {
+        message: `Table '${existing.name}' is already deleted`,
+        table: existing,
+        open_orders: [],
+        openOrders: [],
+        has_open_orders: false,
+      };
     }
 
-    // Protect historical order integrity: if any dine-in orders reference this table,
-    // block deletion because table_id is non-nullable on dine_in_order_details.
-    // Deleting these rows would destroy permanent historical records.
-    const linkedOrderCount = await this.prisma.dineInOrderDetail.count({
-      where: { table_id: existing.id },
+    // Task 7: Admin web/API: when deleting a table that has open orders,
+    // return them in the response so the UI can warn (do not block).
+    const openOrders = await this.prisma.order.findMany({
+      where: {
+        OR: [
+          ...(existing.active_order_id ? [{ id: existing.active_order_id }] : []),
+          {
+            dine_in_detail: {
+              table_id: existing.id,
+            },
+          },
+        ],
+        is_paid: false,
+        status: { notIn: ['completed', 'cancelled', 'rejected'] },
+      },
+      select: {
+        id: true,
+        order_number: true,
+        status: true,
+        grand_total: true,
+        created_at: true,
+      },
     });
 
-    if (linkedOrderCount > 0) {
-      throw new ConflictException(
-        `Cannot delete table '${existing.name}' because it has ${linkedOrderCount} historical order record(s). ` +
-        `Historical records must be preserved. Consider deactivating the table instead.`,
-      );
-    }
-
-    await this.prisma.restaurantTable.delete({
+    const now = new Date();
+    const updated = await this.prisma.restaurantTable.update({
       where: { id: existing.id },
+      data: {
+        is_deleted: true,
+        deleted_at: now,
+        deleted_by: deletedBy,
+        version: { increment: 1 },
+      },
     });
 
-    this.logger.log(`Deleted table '${existing.name}' (${existing.id}) from database`);
-    return { message: `Table '${existing.name}' deleted successfully from database` };
+    // Record deletion tombstone in system change log
+    try {
+      if (this.changeLogService) {
+        await this.changeLogService.record(
+          this.prisma,
+          'restaurant_table',
+          existing.id,
+          'DELETE',
+          updated.version,
+          {
+            id: existing.id,
+            table_number: existing.table_number,
+            name: existing.name,
+            is_deleted: true,
+            deleted_at: now.toISOString(),
+            deleted_by: deletedBy,
+            version: updated.version,
+          },
+          true,
+        );
+      } else {
+        await this.prisma.systemChangeLog.create({
+          data: {
+            entity_type: 'restaurant_table',
+            entity_id: existing.id,
+            operation: 'DELETE',
+            record_version: updated.version,
+            is_deleted: true,
+            payload: {
+              id: existing.id,
+              table_number: existing.table_number,
+              name: existing.name,
+              is_deleted: true,
+              deleted_at: now.toISOString(),
+              deleted_by: deletedBy,
+              version: updated.version,
+            },
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to record change log for soft-deleted table ${existing.id}: ${err}`);
+    }
+
+    this.logger.log(`Soft-deleted table '${existing.name}' (${existing.id})`);
+    return {
+      message: `Table '${existing.name}' deleted successfully`,
+      table: updated,
+      open_orders: openOrders,
+      openOrders: openOrders,
+      has_open_orders: openOrders.length > 0,
+    };
+  }
+
+  async restoreTable(idOrNumber: string): Promise<{ message: string; table: RestaurantTable }> {
+    const existing = await this.prisma.restaurantTable.findFirst({
+      where: {
+        OR: [
+          { id: idOrNumber },
+          { table_number: idOrNumber },
+          { name: { equals: idOrNumber, mode: 'insensitive' } },
+        ],
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException(`Restaurant table '${idOrNumber}' not found`);
+    }
+
+    if (!existing.is_deleted) {
+      return {
+        message: `Table '${existing.name}' is already active`,
+        table: existing,
+      };
+    }
+
+    // Check if table_number or name is currently in use by another active table
+    const conflictingActive = await this.prisma.restaurantTable.findFirst({
+      where: {
+        id: { not: existing.id },
+        is_deleted: false,
+        OR: [
+          { table_number: { equals: existing.table_number, mode: 'insensitive' } },
+          { name: { equals: existing.name, mode: 'insensitive' } },
+        ],
+      },
+    });
+
+    if (conflictingActive) {
+      throw new ConflictException(
+        `Cannot restore table '${existing.name}': table number '${existing.table_number}' or name is already in use by active table '${conflictingActive.name}'`,
+      );
+    }
+
+    const now = new Date();
+    const updated = await this.prisma.restaurantTable.update({
+      where: { id: existing.id },
+      data: {
+        is_deleted: false,
+        deleted_at: null,
+        deleted_by: null,
+        status: 'available',
+        active_order_id: null,
+        current_bill_amount: 0.0,
+        current_customer_count: 0,
+        occupied_since: null,
+        version: { increment: 1 },
+      },
+    });
+
+    try {
+      if (this.changeLogService) {
+        await this.changeLogService.record(
+          this.prisma,
+          'restaurant_table',
+          existing.id,
+          'UPDATE',
+          updated.version,
+          {
+            ...updated,
+            is_deleted: false,
+          },
+          false,
+        );
+      } else {
+        await this.prisma.systemChangeLog.create({
+          data: {
+            entity_type: 'restaurant_table',
+            entity_id: existing.id,
+            operation: 'UPDATE',
+            record_version: updated.version,
+            is_deleted: false,
+            payload: {
+              ...updated,
+              is_deleted: false,
+            },
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to record change log for restored table ${existing.id}: ${err}`);
+    }
+
+    this.logger.log(`Restored table '${updated.name}' (${existing.id})`);
+    return {
+      message: `Table '${updated.name}' restored successfully`,
+      table: updated,
+    };
   }
 
   // ----------------------------------------------------
@@ -669,12 +840,19 @@ export class TablesService {
     }
 
     // Delete associated tables in this zone
-    await this.prisma.restaurantTable.deleteMany({
+    await this.prisma.restaurantTable.updateMany({
       where: {
+        is_deleted: false,
         OR: [
           { zone_id: zone.id },
           { section: { equals: zone.name, mode: 'insensitive' } },
         ],
+      },
+      data: {
+        is_deleted: true,
+        deleted_at: new Date(),
+        deleted_by: 'admin',
+        version: { increment: 1 },
       },
     });
 

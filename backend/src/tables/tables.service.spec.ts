@@ -21,6 +21,9 @@ describe('TablesService', () => {
     active_order_id: null,
     reserved_customer_name: null,
     reservation_time: null,
+    is_deleted: false,
+    deleted_at: null,
+    deleted_by: null,
     version: 1,
     updated_at: new Date(),
   };
@@ -39,6 +42,9 @@ describe('TablesService', () => {
     active_order_id: 'ord-101',
     reserved_customer_name: null,
     reservation_time: null,
+    is_deleted: false,
+    deleted_at: null,
+    deleted_by: null,
     version: 1,
     updated_at: new Date(),
   };
@@ -105,7 +111,12 @@ describe('TablesService', () => {
               delete: jest.fn().mockResolvedValue(mockTable),
             },
             order: {
-              findMany: jest.fn().mockResolvedValue([]),
+              findMany: jest.fn().mockImplementation(({ where }: any) => {
+                if (where?.OR?.some((cond: any) => cond.id === 'ord-101' || cond.dine_in_detail?.table_id === 'tbl-2')) {
+                  return Promise.resolve([{ id: 'ord-101', order_number: '101', status: 'newOrder', grand_total: 1890, created_at: new Date() }]);
+                }
+                return Promise.resolve([]);
+              }),
               findUnique: jest.fn().mockResolvedValue(null),
               updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             },
@@ -251,7 +262,19 @@ describe('TablesService', () => {
     expect(result.message).toContain('deleted successfully');
   });
 
-  it('should throw ConflictException when deleting an occupied table', async () => {
-    await expect(service.deleteTable('tbl-2')).rejects.toThrow(ConflictException);
+  it('should soft-delete an occupied table and return open orders in response without blocking', async () => {
+    const result = await service.deleteTable('tbl-2');
+    expect(result.message).toContain('deleted successfully');
+    expect(result.table.is_deleted).toBe(true);
+    expect(result.has_open_orders).toBe(true);
+    expect(result.open_orders.length).toBeGreaterThan(0);
+  });
+
+  it('should restore a soft-deleted table', async () => {
+    const deletedMockTable = { ...mockTable, is_deleted: true, deleted_at: new Date() };
+    (service as any).prisma.restaurantTable.findFirst = jest.fn().mockResolvedValueOnce(deletedMockTable).mockResolvedValueOnce(null);
+    const result = await service.restoreTable('tbl-1');
+    expect(result.message).toContain('restored successfully');
+    expect(result.table.is_deleted).toBe(false);
   });
 });

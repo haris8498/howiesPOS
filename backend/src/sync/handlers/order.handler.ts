@@ -369,6 +369,32 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       payments: this.mapPayments(payload.payments),
     };
 
+    // 2.5 Check if referenced table is soft-deleted
+    const targetTableId = payload.table_id || payload.dine_in_detail?.table_id;
+    let isTableDeleted = false;
+    if (targetTableId && tx.restaurantTable?.findFirst) {
+      try {
+        const tbl = await tx.restaurantTable.findFirst({
+          where: {
+            OR: [
+              { id: targetTableId },
+              { table_number: targetTableId },
+              { name: targetTableId },
+            ],
+          },
+          select: { id: true, is_deleted: true },
+        });
+        if (tbl && tbl.is_deleted) {
+          isTableDeleted = true;
+          this.logger.warn(
+            `Order ${orderId} references soft-deleted table ${targetTableId} - accepting with TABLE_DELETED warning`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to check table soft-delete status for table ${targetTableId}: ${err}`);
+      }
+    }
+
     // 3. Delegate to ordersService.createOrderInTx
     const createdOrder = await this.ordersService.createOrderInTx(
       tx,
@@ -422,6 +448,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       reassigned_order_number: isReassigned ? createdOrder.order_number : undefined,
       reassigned_token_number: isReassigned ? createdOrder.takeaway_detail?.token_number : undefined,
       token_number: createdOrder.takeaway_detail?.token_number,
+      warning_code: isTableDeleted ? 'TABLE_DELETED' : undefined,
+      warnings: isTableDeleted ? ['TABLE_DELETED'] : undefined,
     };
   }
 
@@ -824,6 +852,26 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }
 
     const tableId = payload.table_id || existingOrder.dine_in_detail?.table_id;
+    let isUpdateTableDeleted = false;
+    if (tableId && tx.restaurantTable?.findFirst) {
+      try {
+        const tbl = await tx.restaurantTable.findFirst({
+          where: {
+            OR: [
+              { id: tableId },
+              { table_number: tableId },
+              { name: tableId },
+            ],
+          },
+          select: { id: true, is_deleted: true },
+        });
+        if (tbl && tbl.is_deleted) {
+          isUpdateTableDeleted = true;
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to check table soft-delete status: ${err}`);
+      }
+    }
     if (tableId && tx.restaurantTable?.update) {
       await tx.restaurantTable
         .update({
@@ -888,6 +936,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       status: 'SYNCED',
       server_version: newVersion,
       server_timestamp: this.toIsoString(updatedAt),
+      warning_code: isUpdateTableDeleted ? 'TABLE_DELETED' : undefined,
+      warnings: isUpdateTableDeleted ? ['TABLE_DELETED'] : undefined,
     };
   }
 

@@ -8846,6 +8846,21 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
     requiredDuringInsert: false,
     defaultValue: const Constant(1),
   );
+  static const VerificationMeta _isDeletedMeta = const VerificationMeta(
+    'isDeleted',
+  );
+  @override
+  late final GeneratedColumn<bool> isDeleted = GeneratedColumn<bool>(
+    'is_deleted',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_deleted" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -8856,6 +8871,7 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
     status,
     activeOrderId,
     version,
+    isDeleted,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -8926,6 +8942,12 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
         version.isAcceptableOrUnknown(data['version']!, _versionMeta),
       );
     }
+    if (data.containsKey('is_deleted')) {
+      context.handle(
+        _isDeletedMeta,
+        isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta),
+      );
+    }
     return context;
   }
 
@@ -8967,6 +8989,10 @@ class $LocalRestaurantTablesTable extends LocalRestaurantTables
         DriftSqlType.int,
         data['${effectivePrefix}version'],
       )!,
+      isDeleted: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_deleted'],
+      )!,
     );
   }
 
@@ -8986,6 +9012,7 @@ class LocalRestaurantTable extends DataClass
   final String status;
   final String? activeOrderId;
   final int version;
+  final bool isDeleted;
   const LocalRestaurantTable({
     required this.id,
     this.zoneId,
@@ -8995,6 +9022,7 @@ class LocalRestaurantTable extends DataClass
     required this.status,
     this.activeOrderId,
     required this.version,
+    required this.isDeleted,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -9011,6 +9039,7 @@ class LocalRestaurantTable extends DataClass
       map['active_order_id'] = Variable<String>(activeOrderId);
     }
     map['version'] = Variable<int>(version);
+    map['is_deleted'] = Variable<bool>(isDeleted);
     return map;
   }
 
@@ -9028,6 +9057,7 @@ class LocalRestaurantTable extends DataClass
           ? const Value.absent()
           : Value(activeOrderId),
       version: Value(version),
+      isDeleted: Value(isDeleted),
     );
   }
 
@@ -9045,6 +9075,7 @@ class LocalRestaurantTable extends DataClass
       status: serializer.fromJson<String>(json['status']),
       activeOrderId: serializer.fromJson<String?>(json['activeOrderId']),
       version: serializer.fromJson<int>(json['version']),
+      isDeleted: serializer.fromJson<bool>(json['isDeleted']),
     );
   }
   @override
@@ -9059,6 +9090,7 @@ class LocalRestaurantTable extends DataClass
       'status': serializer.toJson<String>(status),
       'activeOrderId': serializer.toJson<String?>(activeOrderId),
       'version': serializer.toJson<int>(version),
+      'isDeleted': serializer.toJson<bool>(isDeleted),
     };
   }
 
@@ -9071,6 +9103,7 @@ class LocalRestaurantTable extends DataClass
     String? status,
     Value<String?> activeOrderId = const Value.absent(),
     int? version,
+    bool? isDeleted,
   }) => LocalRestaurantTable(
     id: id ?? this.id,
     zoneId: zoneId.present ? zoneId.value : this.zoneId,
@@ -9082,6 +9115,7 @@ class LocalRestaurantTable extends DataClass
         ? activeOrderId.value
         : this.activeOrderId,
     version: version ?? this.version,
+    isDeleted: isDeleted ?? this.isDeleted,
   );
   LocalRestaurantTable copyWithCompanion(LocalRestaurantTablesCompanion data) {
     return LocalRestaurantTable(
@@ -9097,6 +9131,7 @@ class LocalRestaurantTable extends DataClass
           ? data.activeOrderId.value
           : this.activeOrderId,
       version: data.version.present ? data.version.value : this.version,
+      isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
     );
   }
 
@@ -9110,7 +9145,8 @@ class LocalRestaurantTable extends DataClass
           ..write('capacity: $capacity, ')
           ..write('status: $status, ')
           ..write('activeOrderId: $activeOrderId, ')
-          ..write('version: $version')
+          ..write('version: $version, ')
+          ..write('isDeleted: $isDeleted')
           ..write(')'))
         .toString();
   }
@@ -9125,6 +9161,7 @@ class LocalRestaurantTable extends DataClass
     status,
     activeOrderId,
     version,
+    isDeleted,
   );
   @override
   bool operator ==(Object other) =>
@@ -9137,7 +9174,8 @@ class LocalRestaurantTable extends DataClass
           other.capacity == this.capacity &&
           other.status == this.status &&
           other.activeOrderId == this.activeOrderId &&
-          other.version == this.version);
+          other.version == this.version &&
+          other.isDeleted == this.isDeleted);
 }
 
 class LocalRestaurantTablesCompanion
@@ -9150,6 +9188,7 @@ class LocalRestaurantTablesCompanion
   final Value<String> status;
   final Value<String?> activeOrderId;
   final Value<int> version;
+  final Value<bool> isDeleted;
   final Value<int> rowid;
   const LocalRestaurantTablesCompanion({
     this.id = const Value.absent(),
@@ -9160,6 +9199,7 @@ class LocalRestaurantTablesCompanion
     this.status = const Value.absent(),
     this.activeOrderId = const Value.absent(),
     this.version = const Value.absent(),
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalRestaurantTablesCompanion.insert({
@@ -9171,6 +9211,7 @@ class LocalRestaurantTablesCompanion
     this.status = const Value.absent(),
     this.activeOrderId = const Value.absent(),
     this.version = const Value.absent(),
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        tableNumber = Value(tableNumber),
@@ -9184,6 +9225,7 @@ class LocalRestaurantTablesCompanion
     Expression<String>? status,
     Expression<String>? activeOrderId,
     Expression<int>? version,
+    Expression<bool>? isDeleted,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -9195,6 +9237,7 @@ class LocalRestaurantTablesCompanion
       if (status != null) 'status': status,
       if (activeOrderId != null) 'active_order_id': activeOrderId,
       if (version != null) 'version': version,
+      if (isDeleted != null) 'is_deleted': isDeleted,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -9208,6 +9251,7 @@ class LocalRestaurantTablesCompanion
     Value<String>? status,
     Value<String?>? activeOrderId,
     Value<int>? version,
+    Value<bool>? isDeleted,
     Value<int>? rowid,
   }) {
     return LocalRestaurantTablesCompanion(
@@ -9219,6 +9263,7 @@ class LocalRestaurantTablesCompanion
       status: status ?? this.status,
       activeOrderId: activeOrderId ?? this.activeOrderId,
       version: version ?? this.version,
+      isDeleted: isDeleted ?? this.isDeleted,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -9250,6 +9295,9 @@ class LocalRestaurantTablesCompanion
     if (version.present) {
       map['version'] = Variable<int>(version.value);
     }
+    if (isDeleted.present) {
+      map['is_deleted'] = Variable<bool>(isDeleted.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -9267,6 +9315,7 @@ class LocalRestaurantTablesCompanion
           ..write('status: $status, ')
           ..write('activeOrderId: $activeOrderId, ')
           ..write('version: $version, ')
+          ..write('isDeleted: $isDeleted, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -16416,6 +16465,7 @@ typedef $$LocalRestaurantTablesTableCreateCompanionBuilder =
       Value<String> status,
       Value<String?> activeOrderId,
       Value<int> version,
+      Value<bool> isDeleted,
       Value<int> rowid,
     });
 typedef $$LocalRestaurantTablesTableUpdateCompanionBuilder =
@@ -16428,6 +16478,7 @@ typedef $$LocalRestaurantTablesTableUpdateCompanionBuilder =
       Value<String> status,
       Value<String?> activeOrderId,
       Value<int> version,
+      Value<bool> isDeleted,
       Value<int> rowid,
     });
 
@@ -16477,6 +16528,11 @@ class $$LocalRestaurantTablesTableFilterComposer
 
   ColumnFilters<int> get version => $composableBuilder(
     column: $table.version,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isDeleted => $composableBuilder(
+    column: $table.isDeleted,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -16529,6 +16585,11 @@ class $$LocalRestaurantTablesTableOrderingComposer
     column: $table.version,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get isDeleted => $composableBuilder(
+    column: $table.isDeleted,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalRestaurantTablesTableAnnotationComposer
@@ -16567,6 +16628,9 @@ class $$LocalRestaurantTablesTableAnnotationComposer
 
   GeneratedColumn<int> get version =>
       $composableBuilder(column: $table.version, builder: (column) => column);
+
+  GeneratedColumn<bool> get isDeleted =>
+      $composableBuilder(column: $table.isDeleted, builder: (column) => column);
 }
 
 class $$LocalRestaurantTablesTableTableManager
@@ -16623,6 +16687,7 @@ class $$LocalRestaurantTablesTableTableManager
                 Value<String> status = const Value.absent(),
                 Value<String?> activeOrderId = const Value.absent(),
                 Value<int> version = const Value.absent(),
+                Value<bool> isDeleted = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalRestaurantTablesCompanion(
                 id: id,
@@ -16633,6 +16698,7 @@ class $$LocalRestaurantTablesTableTableManager
                 status: status,
                 activeOrderId: activeOrderId,
                 version: version,
+                isDeleted: isDeleted,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -16645,6 +16711,7 @@ class $$LocalRestaurantTablesTableTableManager
                 Value<String> status = const Value.absent(),
                 Value<String?> activeOrderId = const Value.absent(),
                 Value<int> version = const Value.absent(),
+                Value<bool> isDeleted = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalRestaurantTablesCompanion.insert(
                 id: id,
@@ -16655,6 +16722,7 @@ class $$LocalRestaurantTablesTableTableManager
                 status: status,
                 activeOrderId: activeOrderId,
                 version: version,
+                isDeleted: isDeleted,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

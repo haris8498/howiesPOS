@@ -107,8 +107,11 @@ class CatalogDao extends DatabaseAccessor<AppDatabase> with _$CatalogDaoMixin {
     return (select(localDealComponents)..where((t) => t.dealId.equals(dealId))).get();
   }
 
-  Future<List<LocalRestaurantTable>> getAllTables() {
-    return select(localRestaurantTables).get();
+  Future<List<LocalRestaurantTable>> getAllTables({bool includeDeleted = false}) {
+    if (includeDeleted) {
+      return select(localRestaurantTables).get();
+    }
+    return (select(localRestaurantTables)..where((t) => t.isDeleted.equals(false))).get();
   }
 
   Future<LocalRestaurantTable?> getTableById(String id) {

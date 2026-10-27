@@ -1646,6 +1646,7 @@ The following matrix cross-references every unified `SYNC-xxx` finding ID to its
 | **SYNC-003** | `sync003-table-update-payments` | **DONE** | `5d944ff` | Offline dine-in table `UPDATE` mutations persist payments, cash/card tenders, discounts, taxes, and line items atomically. Enforces OCC version checking and validates that total payments match order grand total. |
 | **SYNC-004** | `sync004-push-pull-sequencing` | **DONE** | `5e44673` | Implemented single-flight sync cycle mutex enforcing strict **PUSH (drain outbox) -> PULL (apply deltas)** ordering. Delta application is state-aware: locally closed shifts cannot revert to `ACTIVE`, freed tables respect local mutations, and pull pauses on push failures. |
 | **SYNC-005** | `sync005-device-identity-shift` | **DONE** | `88e302b` | Replaced hardcoded `POS-P1` with persistent UUID hardware identity stored via Windows DPAPI. Replaced store-wide `unique_active_shift` with terminal-scoped partial unique index `unique_active_shift_per_terminal`, enabling concurrent multi-terminal active shifts. |
+| **D-02** | `fix/D-02` | **DONE** | `fix/D-02` | Mapped: SYNC-012, TBL-12. Soft-delete for DiningTable (is_deleted, deleted_at, deleted_by). Raw partial unique index for table number reuse. Tombstones in delta pull. Offline order push accepted with TABLE_DELETED warning ACK. Drift schema bumped to v2 with is_deleted migration. Table grid hides deleted tables unless local open order exists, displaying REMOVED badge until paid. (2026-10-27) |
 
 ---
 

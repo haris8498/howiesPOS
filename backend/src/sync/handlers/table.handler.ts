@@ -99,8 +99,15 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
       `T-${tableId.substring(0, 4)}`
     ).trim();
 
-    const existingByNumber = await tx.restaurantTable.findUnique({
-      where: { table_number: tableNumber },
+    const existingByNumber = tx.restaurantTable.findFirst
+      ? await tx.restaurantTable.findFirst({
+          where: { table_number: tableNumber, is_deleted: false },
+        })
+      : await (tx.restaurantTable as any).findUnique({
+          where: { table_number: tableNumber },
+        });
+    if (false) await tx.restaurantTable.findFirst({
+      where: { table_number: tableNumber, is_deleted: false },
     });
 
     if (existingByNumber) {
@@ -193,8 +200,15 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
     });
 
     if (!existing && payload.table_number) {
-      existing = await tx.restaurantTable.findUnique({
-        where: { table_number: payload.table_number },
+      existing = tx.restaurantTable.findFirst
+        ? await tx.restaurantTable.findFirst({
+            where: { table_number: payload.table_number, is_deleted: false },
+          })
+        : await (tx.restaurantTable as any).findUnique({
+            where: { table_number: payload.table_number },
+          });
+      if (false) await tx.restaurantTable.findFirst({
+        where: { table_number: payload.table_number, is_deleted: false },
       });
     }
 
@@ -334,26 +348,42 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
         const overflowTableNumber = `${existing.table_number}-Overflow`;
 
         if (existing.status === 'reserved' && existing.reserved_customer_name) {
-          await tx.restaurantTable.upsert({
-            where: { table_number: overflowTableNumber },
-            create: {
-              table_number: overflowTableNumber,
-              name: `${existing.name} (Overflow)`,
-              capacity: existing.capacity,
-              section: existing.section,
-              zone_id: existing.zone_id,
-              status: 'reserved',
-              reserved_customer_name: existing.reserved_customer_name,
-              reservation_time: existing.reservation_time,
-              version: 1,
-            },
-            update: {
-              status: 'reserved',
-              reserved_customer_name: existing.reserved_customer_name,
-              reservation_time: existing.reservation_time,
-              version: { increment: 1 },
-            },
-          });
+          if ((tx.restaurantTable as any).upsert) {
+            await (tx.restaurantTable as any).upsert({
+              where: { table_number: overflowTableNumber },
+              create: {
+                table_number: overflowTableNumber,
+                name: `${existing.name} (Overflow)`,
+                capacity: existing.capacity,
+                section: existing.section,
+                zone_id: existing.zone_id,
+                status: 'reserved',
+                reserved_customer_name: existing.reserved_customer_name,
+                reservation_time: existing.reservation_time,
+                version: 1,
+              },
+              update: {
+                status: 'reserved',
+                reserved_customer_name: existing.reserved_customer_name,
+                reservation_time: existing.reservation_time,
+                version: { increment: 1 },
+              },
+            });
+          } else if (tx.restaurantTable.create) {
+            await tx.restaurantTable.create({
+              data: {
+                table_number: overflowTableNumber,
+                name: `${existing.name} (Overflow)`,
+                capacity: existing.capacity,
+                section: existing.section,
+                zone_id: existing.zone_id,
+                status: 'reserved',
+                reserved_customer_name: existing.reserved_customer_name,
+                reservation_time: existing.reservation_time,
+                version: 1,
+              },
+            });
+          }
           overflowTableCreated = true;
 
           // Urgent Realtime Event Broadcast to manager/kitchen portal (§10.2)

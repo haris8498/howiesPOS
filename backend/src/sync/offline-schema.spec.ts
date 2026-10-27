@@ -168,6 +168,20 @@ describe('Offline Schema Additions (Stage 1 / Spec §7.1 - §7.3, SYNC-005)', ()
       expect(deletedAt.type).toBe('DateTime');
       expect(deletedAt.isRequired).toBe(false);
     });
+
+    it('should have is_deleted, deleted_at, and deleted_by on RestaurantTable (SYNC-012, TBL-12)', () => {
+      const isDeleted = getField('RestaurantTable', 'is_deleted');
+      expect(isDeleted.type).toBe('Boolean');
+      expect(isDeleted.default).toBe(false);
+
+      const deletedAt = getField('RestaurantTable', 'deleted_at');
+      expect(deletedAt.type).toBe('DateTime');
+      expect(deletedAt.isRequired).toBe(false);
+
+      const deletedBy = getField('RestaurantTable', 'deleted_by');
+      expect(deletedBy.type).toBe('String');
+      expect(deletedBy.isRequired).toBe(false);
+    });
   });
 
   describe('Shift Variance, Terminal Scope & Status (§7.3, SYNC-005)', () => {

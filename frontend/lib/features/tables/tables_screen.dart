@@ -301,6 +301,24 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                               ),
                             ),
                             const SizedBox(width: 10),
+                            if (table.isDeleted) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFDC2626),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Text(
+                                  'REMOVED',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                               decoration: BoxDecoration(
@@ -678,6 +696,12 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
     final sections = ['All', ...allZones, 'Free', 'Occupied', 'Reserved'];
 
     final filteredTables = tableState.tables.where((t) {
+      // SYNC-012/TBL-12: On tombstone pull, hide table from grid unless local open order exists on it
+      if (t.isDeleted) {
+        final hasOpenOrder = t.status == TableStatus.occupied || (t.activeOrderId != null && t.currentBillAmount > 0);
+        if (!hasOpenOrder) return false;
+      }
+
       final matchesSection = () {
         if (tableState.selectedSection == 'All') return true;
         if (tableState.selectedSection == 'Free') return t.status == TableStatus.available;
@@ -1185,6 +1209,27 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                     ),
                                   ),
                                 ),
+                                if (table.isDeleted)
+                                  Positioned(
+                                    top: 8,
+                                    left: isSelected ? 32 : 8,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFDC2626),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text(
+                                        'REMOVED',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 if (isSelected)
                                   Positioned(
                                     top: 8,

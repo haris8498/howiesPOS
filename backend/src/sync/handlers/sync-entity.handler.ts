@@ -24,6 +24,8 @@ export interface SyncMutationResult {
   reassigned_token_number?: string;
   token_number?: string;
   conflict_details?: any;
+  warning_code?: string;
+  warnings?: string[];
 }
 
 export interface SyncEntityHandler {

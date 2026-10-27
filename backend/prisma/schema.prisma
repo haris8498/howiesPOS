@@ -141,7 +141,7 @@ model FloorZone {
 
 model RestaurantTable {
   id                     String            @id @default(uuid()) @db.VarChar(36)
-  table_number           String            @unique @map("table_number") @db.VarChar(20)
+  table_number           String            @map("table_number") @db.VarChar(20)
   name                   String            @db.VarChar(50)
   capacity               Int               @default(4)
   section                String            @default("Hall") @db.VarChar(50)
@@ -153,6 +153,9 @@ model RestaurantTable {
   active_order_id        String?           @map("active_order_id") @db.VarChar(36)
   reserved_customer_name String?           @map("reserved_customer_name") @db.VarChar(100)
   reservation_time       DateTime?         @map("reservation_time") @db.Timestamp()
+  is_deleted             Boolean           @default(false) @map("is_deleted")
+  deleted_at             DateTime?         @map("deleted_at") @db.Timestamp()
+  deleted_by             String?           @map("deleted_by") @db.VarChar(100)
   version                Int               @default(1) @map("version")
   updated_at             DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
 

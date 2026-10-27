@@ -1424,6 +1424,7 @@ class SyncBackgroundWorker {
             status: Value(t['status']?.toString() ?? 'available'),
             activeOrderId: Value(t['active_order_id']?.toString()),
             version: Value((t['version'] as num?)?.toInt() ?? 1),
+            isDeleted: Value(t['is_deleted'] == true || t['is_deleted'] == 1),
           ));
         }
         if (list.isNotEmpty) await db.catalogDao.upsertRestaurantTables(list);
@@ -1480,7 +1481,35 @@ class SyncBackgroundWorker {
         }
 
         if (isDeleted) {
-          await (db.delete(db.localRestaurantTables)..where((t) => t.id.equals(entityId))).go();
+          // SYNC-012/TBL-12: On tombstone pull, check if local open order still exists on table
+          bool hasLocalOpenOrder = false;
+          if (existing != null) {
+            if (existing.activeOrderId != null) {
+              final localOrder = await db.ordersDao.getOrderById(existing.activeOrderId!);
+              if (localOrder != null && !localOrder.isPaid && localOrder.status != 'completed' && localOrder.status != 'cancelled') {
+                hasLocalOpenOrder = true;
+              } else if (localOrder == null && existing.status == 'occupied') {
+                hasLocalOpenOrder = true;
+              }
+            } else if (existing.status == 'occupied') {
+              hasLocalOpenOrder = true;
+            }
+          }
+
+          // Mark is_deleted = true in Drift. Keep row in Drift so open orders are preserved and UI shows "removed" badge
+          await db.catalogDao.upsertRestaurantTables([
+            LocalRestaurantTablesCompanion(
+              id: Value(entityId),
+              zoneId: Value(existing?.zoneId),
+              tableNumber: Value(payload['table_number']?.toString() ?? existing?.tableNumber ?? ''),
+              name: Value(payload['name']?.toString() ?? existing?.name ?? ''),
+              capacity: Value(existing?.capacity ?? 4),
+              status: Value(hasLocalOpenOrder ? (existing?.status ?? 'occupied') : 'available'),
+              activeOrderId: Value(hasLocalOpenOrder ? existing?.activeOrderId : null),
+              version: Value(recordVersion),
+              isDeleted: const Value(true),
+            ),
+          ]);
           return PullApplyResult.applied;
         } else {
           // Hospitality Operational Priority (§10.2):
@@ -1504,6 +1533,7 @@ class SyncBackgroundWorker {
               status: Value(finalStatus),
               activeOrderId: Value(finalOrderId),
               version: Value(recordVersion),
+              isDeleted: const Value(false),
             ),
           ]);
           return PullApplyResult.applied;

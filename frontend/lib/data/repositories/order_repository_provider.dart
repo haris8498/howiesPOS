@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../config/feature_flags.dart';
+import '../../core/sync/outbox_drain_gate.dart';
 import '../../core/sync/sync_providers.dart';
 import '../../domain/models/order_model.dart';
 import '../../domain/repositories/order_repository.dart';
@@ -24,13 +24,13 @@ final driftOfflineFirstOrderRepositoryProvider =
   );
 });
 
-/// Order Repository Seam Provider per Architecture Spec §17.2:
-/// - When `FeatureFlags.offlineFirstEnabled == false`: returns `ApiOrderRepository`
-///   (legacy behavior and error handling 100% identical).
-/// - When `FeatureFlags.offlineFirstEnabled == true`: returns `DriftOfflineFirstOrderRepository`
-///   (local SQLite WAL persistence, UUID v7, terminal sequence, outbox queue).
+/// Order Repository Seam Provider per Architecture Spec §17.2 & Decision D-04:
+/// - Uses the local-first path if `flag == true` OR `outbox` is non-empty (`drainGate.shouldUseLocalFirst`).
+/// - The online-only path is chosen ONLY when `flag == false` AND `outbox` is empty.
+/// - Never switch routing silently with rows pending.
 final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
-  if (FeatureFlags.offlineFirstEnabled) {
+  final drainGate = ref.watch(outboxDrainGateProvider);
+  if (drainGate.shouldUseLocalFirst) {
     return ref.watch(driftOfflineFirstOrderRepositoryProvider);
   } else {
     return ref.watch(apiOrderRepositoryProvider);
@@ -39,7 +39,8 @@ final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
 
 /// Reactive stream of all orders watched from the active repository (Drift stream).
 final allOrdersStreamProvider = StreamProvider<List<OrderModel>>((ref) {
-  if (FeatureFlags.offlineFirstEnabled) {
+  final drainGate = ref.watch(outboxDrainGateProvider);
+  if (drainGate.shouldUseLocalFirst) {
     final repo = ref.watch(driftOfflineFirstOrderRepositoryProvider);
     return repo.watchAllOrders();
   }
@@ -48,7 +49,8 @@ final allOrdersStreamProvider = StreamProvider<List<OrderModel>>((ref) {
 
 /// Reactive stream of pending orders awaiting synchronization.
 final pendingOrdersStreamProvider = StreamProvider<List<OrderModel>>((ref) {
-  if (FeatureFlags.offlineFirstEnabled) {
+  final drainGate = ref.watch(outboxDrainGateProvider);
+  if (drainGate.shouldUseLocalFirst) {
     final repo = ref.watch(driftOfflineFirstOrderRepositoryProvider);
     return repo.watchPendingOrders();
   }

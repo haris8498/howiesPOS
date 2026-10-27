@@ -1,7 +1,14 @@
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { Prisma, StaffMember } from '@prisma/client';
-import * as argon2 from 'argon2';
+import { PasswordService } from '../auth/password.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
@@ -32,6 +39,7 @@ export class StaffService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly passwordService: PasswordService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
@@ -85,10 +93,7 @@ export class StaffService {
         },
         // Employee must NOT have left before this month (leaving_date is null OR after this month's end)
         {
-          OR: [
-            { leaving_date: null },
-            { leaving_date: { gt: endOfTargetMonth } },
-          ],
+          OR: [{ leaving_date: null }, { leaving_date: { gt: endOfTargetMonth } }],
         } as any,
       ];
     } else if (!query?.status) {
@@ -143,7 +148,9 @@ export class StaffService {
   }
 
   async getStaffStats(monthYearInput?: string): Promise<StaffStats> {
-    const allStaff = await this.listStaff(monthYearInput ? { month_year: monthYearInput } : undefined);
+    const allStaff = await this.listStaff(
+      monthYearInput ? { month_year: monthYearInput } : undefined,
+    );
 
     const totalCount = allStaff.length;
 
@@ -217,13 +224,14 @@ export class StaffService {
         throw new ConflictException(`Username '${dto.username}' is already taken`);
       }
 
-      const passwordHash = await argon2.hash(dto.password);
+      const passwordHash = await this.passwordService.hash(dto.password);
 
       return this.prisma.$transaction(async (tx) => {
         const user = await tx.staffUser.create({
           data: {
             username: dto.username!,
             password_hash: passwordHash,
+            plain_password: null,
             role: dto.role,
             is_default: false,
             updated_by: actor.username,
@@ -426,9 +434,13 @@ export class StaffService {
       }
     });
 
-    this.logger.log(`Deactivated staff member '${existing.full_name}' effective from ${now.toISOString()}`);
+    this.logger.log(
+      `Deactivated staff member '${existing.full_name}' effective from ${now.toISOString()}`,
+    );
     this.realtimeGateway?.emitStaffDeleted(id);
-    return { message: `Staff member '${existing.full_name}' deleted effective from current month onward` };
+    return {
+      message: `Staff member '${existing.full_name}' deleted effective from current month onward`,
+    };
   }
 
   async settleSalary(id: string, monthYearInput?: string): Promise<StaffMemberWithUser> {
@@ -450,7 +462,9 @@ export class StaffService {
     });
 
     if (existingPayslip && existingPayslip.status.toLowerCase() === 'paid') {
-      throw new ConflictException(`Salary for '${staff.full_name}' is already settled for ${targetMonthYear}`);
+      throw new ConflictException(
+        `Salary for '${staff.full_name}' is already settled for ${targetMonthYear}`,
+      );
     }
 
     const paidDate = new Date();

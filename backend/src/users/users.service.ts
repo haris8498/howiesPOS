@@ -1,15 +1,21 @@
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
-import * as argon2 from 'argon2';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { PasswordService } from '../auth/password.service';
 
 export interface SafeUser {
   id: string;
   username: string;
-  plain_password?: string | null;
   role: string;
   is_default: boolean;
   last_updated: Date;
@@ -28,6 +34,7 @@ export class UsersService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly passwordService: PasswordService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
@@ -37,7 +44,6 @@ export class UsersService {
       select: {
         id: true,
         username: true,
-        plain_password: true,
         role: true,
         is_default: true,
         last_updated: true,
@@ -61,7 +67,6 @@ export class UsersService {
       select: {
         id: true,
         username: true,
-        plain_password: true,
         role: true,
         is_default: true,
         last_updated: true,
@@ -93,13 +98,13 @@ export class UsersService {
       throw new ConflictException(`Username '${dto.username}' is already taken`);
     }
 
-    const passwordHash = await argon2.hash(dto.password);
+    const passwordHash = await this.passwordService.hash(dto.password);
 
     const created = await this.prisma.staffUser.create({
       data: {
         username: dto.username.trim(),
         password_hash: passwordHash,
-        plain_password: dto.password,
+        plain_password: null,
         role: dto.role,
         is_default: dto.is_default ?? false,
         updated_by: actor.username,
@@ -107,7 +112,6 @@ export class UsersService {
       select: {
         id: true,
         username: true,
-        plain_password: true,
         role: true,
         is_default: true,
         last_updated: true,
@@ -137,8 +141,10 @@ export class UsersService {
           hourly_rate: dto.role === 'manager' ? 406 : 218,
         },
       });
-    } catch (staffErr: any) {
-      this.logger.warn(`Could not create associated staff member for user '${created.username}': ${staffErr?.message ?? staffErr}`);
+    } catch (staffErr: unknown) {
+      this.logger.warn(
+        `Could not create associated staff member for user '${created.username}': ${(staffErr as Error)?.message ?? staffErr}`,
+      );
     }
 
     this.logger.log(`Created new staff user '${created.username}' with role '${created.role}'`);
@@ -186,7 +192,7 @@ export class UsersService {
 
     let passwordHash: string | undefined;
     if (dto.password && dto.password.trim().length > 0) {
-      passwordHash = await argon2.hash(dto.password.trim());
+      passwordHash = await this.passwordService.hash(dto.password.trim());
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -195,15 +201,12 @@ export class UsersService {
         data: {
           username: dto.username ? dto.username.trim() : existing.username,
           role: dto.role ?? existing.role,
-          ...(passwordHash
-            ? { password_hash: passwordHash, plain_password: dto.password!.trim() }
-            : {}),
+          ...(passwordHash ? { password_hash: passwordHash, plain_password: null } : {}),
           updated_by: actor.username,
         },
         select: {
           id: true,
           username: true,
-          plain_password: true,
           role: true,
           is_default: true,
           last_updated: true,
@@ -220,7 +223,7 @@ export class UsersService {
       });
 
       if (res.staff_member) {
-        const staffUpdates: Record<string, any> = {};
+        const staffUpdates: Prisma.StaffMemberUpdateInput = {};
         if (dto.role) staffUpdates.role = dto.role;
         if (dto.full_name) staffUpdates.full_name = dto.full_name.trim();
         if (dto.phone) staffUpdates.phone = dto.phone.trim();
@@ -263,13 +266,13 @@ export class UsersService {
       throw new NotFoundException(`User with ID or Username '${id}' not found`);
     }
 
-    const passwordHash = await argon2.hash(newPassword.trim());
+    const passwordHash = await this.passwordService.hash(newPassword.trim());
 
     await this.prisma.staffUser.update({
       where: { id: existing.id },
       data: {
         password_hash: passwordHash,
-        plain_password: newPassword.trim(),
+        plain_password: null,
         updated_by: actor.username,
       },
     });
@@ -328,7 +331,11 @@ export class UsersService {
       });
     });
 
-    this.logger.log(`Deactivated staff user '${existing.username}' (effective: ${now.toISOString()})`);
-    return { message: `Staff user '${existing.username}' deleted effective from current month onward` };
+    this.logger.log(
+      `Deactivated staff user '${existing.username}' (effective: ${now.toISOString()})`,
+    );
+    return {
+      message: `Staff user '${existing.username}' deleted effective from current month onward`,
+    };
   }
 }

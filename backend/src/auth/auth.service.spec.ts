@@ -1,9 +1,11 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
+import { PasswordService } from './password.service';
 
 describe('AuthService', () => {
   let authService: AuthService;
@@ -20,13 +22,30 @@ describe('AuthService', () => {
   };
 
   beforeAll(async () => {
-    mockStaffUser.password_hash = await argon2.hash('admin123');
+    mockStaffUser.password_hash = await argon2.hash('admin123', {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
   }, 15000);
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
+        PasswordService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string, defaultValue?: unknown) => {
+              if (key === 'ARGON2_MEMORY_COST') return 19456;
+              if (key === 'ARGON2_TIME_COST') return 2;
+              if (key === 'ARGON2_PARALLELISM') return 1;
+              return defaultValue;
+            }),
+          },
+        },
         {
           provide: PrismaService,
           useValue: {
@@ -38,12 +57,14 @@ describe('AuthService', () => {
                 return Promise.resolve(null);
               }),
               findFirst: jest.fn().mockImplementation(({ where }) => {
-                const username = typeof where?.username === 'string' ? where.username : where?.username?.equals;
+                const username =
+                  typeof where?.username === 'string' ? where.username : where?.username?.equals;
                 if (username && username.toLowerCase() === 'admin') {
                   return Promise.resolve(mockStaffUser);
                 }
                 return Promise.resolve(null);
               }),
+              update: jest.fn().mockResolvedValue(mockStaffUser),
             },
           },
         },

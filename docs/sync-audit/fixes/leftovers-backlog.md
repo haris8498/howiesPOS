@@ -155,7 +155,7 @@ This backlog captures **all remaining findings** across the audit corpus, catego
 - **Options:**
   1. *(Recommended)* **Append-Only Item Merging by UUID v7:** Line items are identified by client-generated UUID v7. Updating an order only adds new items or updates quantities; items are never deleted unless an explicit `is_cancelled: true` flag is sent.
   2. **Cart OCC Locking:** Prevent concurrent cart edits across multiple devices by acquiring a server lock on the table order.
-- **Status:** `needs-decision` (Recommended: Option 1).
+- **Status:** Implemented (recommendation adopted) (branch: fix/D-05).
 
 ---
 

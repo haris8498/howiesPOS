@@ -129,6 +129,33 @@ class OrdersApiService {
     throw const ApiException('Failed to cancel order item');
   }
 
+  /// POST /api/orders/:id/items (D-05 SYNC-032)
+  Future<List<Map<String, dynamic>>> appendOrderItems(String orderId, List<Map<String, dynamic>> items) async {
+    final response = await _apiClient.post('orders/$orderId/items', body: {'items': items});
+    if (response is Map<String, dynamic> && response['data'] is List) {
+      return (response['data'] as List).cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// POST /api/orders/:id/items/:itemId/void (D-05 SYNC-032)
+  Future<Map<String, dynamic>> voidOrderItem(
+    String orderId,
+    String itemId, {
+    String? voidedBy,
+    String? reason,
+  }) async {
+    final body = <String, dynamic>{
+      'voided_by': ?voidedBy,
+      'reason': ?reason,
+    };
+    final response = await _apiClient.post('orders/$orderId/items/$itemId/void', body: body);
+    if (response is Map<String, dynamic> && response['data'] is Map) {
+      return response['data'] as Map<String, dynamic>;
+    }
+    return {};
+  }
+
   /// DELETE /api/orders/:id
   Future<void> deleteOrder(String id) async {
     await _apiClient.delete('orders/$id');

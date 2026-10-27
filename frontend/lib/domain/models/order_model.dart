@@ -115,6 +115,11 @@ class OrderItem {
   final DateTime? cancelledAt;
   final String? cancelReason;
   final String? cancelledBy;
+  final DateTime? voidedAt;
+  final String? voidedBy;
+  final String? supersedesItemId;
+  final String? createdByDeviceId;
+  final DateTime? clientCreatedAt;
 
   const OrderItem({
     this.id,
@@ -129,6 +134,11 @@ class OrderItem {
     this.cancelledAt,
     this.cancelReason,
     this.cancelledBy,
+    this.voidedAt,
+    this.voidedBy,
+    this.supersedesItemId,
+    this.createdByDeviceId,
+    this.clientCreatedAt,
   });
 
   double get unitPrice {
@@ -155,6 +165,11 @@ class OrderItem {
     DateTime? cancelledAt,
     String? cancelReason,
     String? cancelledBy,
+    DateTime? voidedAt,
+    String? voidedBy,
+    String? supersedesItemId,
+    String? createdByDeviceId,
+    DateTime? clientCreatedAt,
   }) {
     return OrderItem(
       id: id ?? this.id,
@@ -169,11 +184,17 @@ class OrderItem {
       cancelledAt: cancelledAt ?? this.cancelledAt,
       cancelReason: cancelReason ?? this.cancelReason,
       cancelledBy: cancelledBy ?? this.cancelledBy,
+      voidedAt: voidedAt ?? this.voidedAt,
+      voidedBy: voidedBy ?? this.voidedBy,
+      supersedesItemId: supersedesItemId ?? this.supersedesItemId,
+      createdByDeviceId: createdByDeviceId ?? this.createdByDeviceId,
+      clientCreatedAt: clientCreatedAt ?? this.clientCreatedAt,
     );
   }
 
   Map<String, dynamic> toCreateItemDto() {
     return {
+      if (id != null && id!.isNotEmpty) 'id': id,
       if (item.id.isNotEmpty && !item.id.startsWith('temp_')) 'menu_item_id': item.id,
       'item_name': item.name,
       'quantity': quantity,
@@ -182,6 +203,11 @@ class OrderItem {
       'selected_crust': selectedCrust,
       'extra_toppings': extraToppings.join(', '),
       'notes': notes,
+      if (voidedAt != null) 'voided_at': voidedAt!.toIso8601String(),
+      if (voidedBy != null) 'voided_by': voidedBy,
+      if (supersedesItemId != null) 'supersedes_item_id': supersedesItemId,
+      if (createdByDeviceId != null) 'created_by_device_id': createdByDeviceId,
+      if (clientCreatedAt != null) 'client_created_at': clientCreatedAt!.toIso8601String(),
     };
   }
 
@@ -211,10 +237,28 @@ class OrderItem {
       extraToppings: toppings,
       notes: json['notes']?.toString() ?? '',
       backendUnitPrice: double.tryParse(json['unit_price']?.toString() ?? '0') ?? 0.0,
-      isCancelled: json['is_cancelled'] == true,
-      cancelledAt: json['cancelled_at'] != null ? DateTime.tryParse(json['cancelled_at'].toString()) : null,
-      cancelReason: json['cancel_reason']?.toString(),
-      cancelledBy: json['cancelled_by']?.toString(),
+      isCancelled: json['is_cancelled'] == true ||
+          json['isCancelled'] == true ||
+          json['voided_at'] != null ||
+          json['voidedAt'] != null,
+      cancelledAt: json['cancelled_at'] != null
+          ? DateTime.tryParse(json['cancelled_at'].toString())
+          : (json['cancelledAt'] != null
+              ? DateTime.tryParse(json['cancelledAt'].toString())
+              : (json['voided_at'] != null
+                  ? DateTime.tryParse(json['voided_at'].toString())
+                  : (json['voidedAt'] != null ? DateTime.tryParse(json['voidedAt'].toString()) : null))),
+      cancelReason: json['cancel_reason']?.toString() ?? json['cancelReason']?.toString(),
+      voidedAt: json['voided_at'] != null
+          ? DateTime.tryParse(json['voided_at'].toString())
+          : (json['voidedAt'] != null ? DateTime.tryParse(json['voidedAt'].toString()) : null),
+      voidedBy: json['voided_by']?.toString() ?? json['voidedBy']?.toString(),
+      supersedesItemId: json['supersedes_item_id']?.toString() ?? json['supersedesItemId']?.toString(),
+      createdByDeviceId: json['created_by_device_id']?.toString() ?? json['createdByDeviceId']?.toString(),
+      clientCreatedAt: json['client_created_at'] != null
+          ? DateTime.tryParse(json['client_created_at'].toString())
+          : (json['clientCreatedAt'] != null ? DateTime.tryParse(json['clientCreatedAt'].toString()) : null),
+      cancelledBy: json['cancelled_by']?.toString() ?? json['cancelledBy']?.toString() ?? json['voided_by']?.toString() ?? json['voidedBy']?.toString(),
     );
   }
 }

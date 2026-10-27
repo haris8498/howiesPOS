@@ -154,4 +154,13 @@ export class UpdateOrderDto {
   @Type(() => CreateOrderPaymentDto)
   @IsOptional()
   payments?: CreateOrderPaymentDto[];
+
+  // SYNC-032 / D-05: Explicit full-replace flag for destructive sync / whole-order replacement
+  @IsBoolean()
+  @IsOptional()
+  fullReplace?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  full_replace?: boolean;
 }

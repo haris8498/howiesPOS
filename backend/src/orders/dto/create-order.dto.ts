@@ -82,6 +82,47 @@ export class CreateOrderItemDto {
   @IsDateString()
   @IsOptional()
   cancelled_at?: string;
+
+  // Append-only line-item ledger fields (SYNC-032 / D-05)
+  @IsDateString()
+  @IsOptional()
+  voided_at?: string;
+
+  @IsDateString()
+  @IsOptional()
+  voidedAt?: string;
+
+  @IsString()
+  @IsOptional()
+  voided_by?: string;
+
+  @IsString()
+  @IsOptional()
+  voidedBy?: string;
+
+  @IsString()
+  @IsOptional()
+  supersedes_item_id?: string;
+
+  @IsString()
+  @IsOptional()
+  supersedesItemId?: string;
+
+  @IsString()
+  @IsOptional()
+  created_by_device_id?: string;
+
+  @IsString()
+  @IsOptional()
+  createdByDeviceId?: string;
+
+  @IsDateString()
+  @IsOptional()
+  client_created_at?: string;
+
+  @IsDateString()
+  @IsOptional()
+  clientCreatedAt?: string;
 }
 
 export class CreateOrderDto {

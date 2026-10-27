@@ -13,4 +13,6 @@ abstract class IOrderRepository {
   Future<void> updateOrderStatus(String orderId, OrderStatus status);
   Future<void> cancelOrder(String orderId);
   Future<void> deleteHeldOrder(String orderId);
+  Future<OrderItem> addOrderItem(String orderId, OrderItem item);
+  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason});
 }

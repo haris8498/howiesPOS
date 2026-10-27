@@ -48,6 +48,13 @@ class LocalOrderItems extends Table {
   DateTimeColumn get cancelledAt => dateTime().nullable()();
   TextColumn get cancelReason => text().nullable()();
 
+  // D-05 (SYNC-032) Order line-item ledger columns
+  DateTimeColumn get voidedAt => dateTime().nullable()();
+  TextColumn get voidedBy => text().nullable()();
+  TextColumn get supersedesItemId => text().nullable()();
+  TextColumn get createdByDeviceId => text().nullable()();
+  DateTimeColumn get clientCreatedAt => dateTime().nullable()();
+
   // Sync Metadata
   TextColumn get syncStatus => text().withDefault(const Constant('pending_insert'))();
   IntColumn get serverVersion => integer().withDefault(const Constant(1))();

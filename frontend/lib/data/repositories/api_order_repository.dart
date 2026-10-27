@@ -110,4 +110,18 @@ class ApiOrderRepository implements IOrderRepository {
     } catch (_) {}
     _localCache.removeWhere((o) => o.id == orderId);
   }
+
+  @override
+  Future<OrderItem> addOrderItem(String orderId, OrderItem item) async {
+    final res = await _ordersApiService.appendOrderItems(orderId, [item.toCreateItemDto()]);
+    if (res.isNotEmpty) {
+      return OrderItem.fromBackendJson(res.first);
+    }
+    return item;
+  }
+
+  @override
+  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+    await _ordersApiService.voidOrderItem(orderId, itemId, voidedBy: voidedBy, reason: reason);
+  }
 }

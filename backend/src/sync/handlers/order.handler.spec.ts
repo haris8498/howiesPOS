@@ -857,5 +857,193 @@ describe('OrderHandler', () => {
       expect(capturedUpdateData.payment_status).toBe('PAID');
     });
   });
-});
 
+  describe('Append-Only Line-Item Ledger & Sync Operations (SYNC-032 / D-05)', () => {
+    it('handle ITEM_ADD appends new item and updates order totals', async () => {
+      let createdItemData: any;
+      let updatedOrderData: any;
+
+      mockOrdersService.getActiveItems = jest.fn().mockResolvedValue([
+        { id: 'item-existing', total_price: 100 },
+        { id: 'item-new', total_price: 50 },
+      ]);
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-add-test',
+            version: 1,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [{ id: 'item-existing', total_price: 100, voidedAt: null }],
+          }),
+          update: jest.fn().mockImplementation(({ data }) => {
+            updatedOrderData = data;
+            return Promise.resolve({
+              id: 'ord-add-test',
+              version: 2,
+              order_number: 'P1-100',
+              status: 'newOrder',
+              updated_at: new Date(),
+            });
+          }),
+        },
+        orderItem: {
+          create: jest.fn().mockImplementation(({ data }) => {
+            createdItemData = data;
+            return Promise.resolve({ id: data.id, ...data });
+          }),
+        },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-item-add-1',
+          entity_type: 'order',
+          entity_id: 'ord-add-test',
+          operation_type: 'ITEM_ADD',
+          base_version: 1,
+          payload: {
+            items: [
+              {
+                id: 'item-new',
+                item_name: 'Cheesy Bread',
+                quantity: 1,
+                unit_price: 50,
+              },
+            ],
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-item-add-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+      expect(createdItemData).toBeTruthy();
+      expect(createdItemData.id).toBe('item-new');
+      expect(createdItemData.item_name).toBe('Cheesy Bread');
+      expect(Number(updatedOrderData.subtotal)).toBe(150);
+      expect(mockChangeLogService.record).toHaveBeenCalled();
+    });
+
+    it('handle ITEM_VOID voids active item and creates tombstone if item not yet arrived', async () => {
+      let tombstoneCreated: any;
+
+      mockOrdersService.getActiveItems = jest.fn().mockResolvedValue([]);
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-void-test',
+            version: 1,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [],
+          }),
+          update: jest.fn().mockResolvedValue({
+            id: 'ord-void-test',
+            version: 2,
+            order_number: 'P1-101',
+            status: 'newOrder',
+            updated_at: new Date(),
+          }),
+        },
+        orderItem: {
+          findUnique: jest.fn().mockResolvedValue(null), // Not arrived yet (out-of-order)
+          create: jest.fn().mockImplementation(({ data }) => {
+            tombstoneCreated = data;
+            return Promise.resolve(data);
+          }),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-item-void-1',
+          entity_type: 'order',
+          entity_id: 'ord-void-test',
+          operation_type: 'ITEM_VOID',
+          base_version: 1,
+          payload: {
+            item_id: 'item-early-void',
+            reason: 'Wrong entry',
+            voided_by: 'cashier-1',
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-item-void-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+      expect(tombstoneCreated).toBeTruthy();
+      expect(tombstoneCreated.id).toBe('item-early-void');
+      expect(tombstoneCreated.voidedAt).toBeTruthy();
+      expect(tombstoneCreated.is_cancelled).toBe(true);
+    });
+
+    it('handle UPDATE does not delete unmentioned active items without fullReplace: true', async () => {
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-no-delete',
+            version: 1,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [
+              { id: 'item-a', item_name: 'Item A', quantity: 1, unit_price: 10, total_price: 10, voidedAt: null, is_cancelled: false },
+              { id: 'item-b', item_name: 'Item B', quantity: 1, unit_price: 20, total_price: 20, voidedAt: null, is_cancelled: false },
+            ],
+            payments: [],
+          }),
+          update: jest.fn().mockResolvedValue({
+            id: 'ord-no-delete',
+            version: 2,
+            updated_at: new Date(),
+          }),
+        },
+        orderItem: {
+          update: jest.fn(),
+          delete: jest.fn(),
+          create: jest.fn(),
+        },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+      };
+
+      mockOrdersService.getActiveItems = jest.fn().mockResolvedValue([
+        { id: 'item-a', total_price: 10 },
+        { id: 'item-b', total_price: 20 },
+      ]);
+
+      // Terminal sends update with only Item A (Item B missing from payload)
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-partial-update',
+          entity_type: 'order',
+          entity_id: 'ord-no-delete',
+          operation_type: 'UPDATE',
+          base_version: 1,
+          payload: {
+            items: [
+              { id: 'item-a', item_name: 'Item A', quantity: 1, unit_price: 10 },
+            ],
+          },
+        },
+        { deviceId: 'POS-02', operationId: 'op-partial-update', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+      // Verify delete was NEVER called
+      expect(mockTx.orderItem.delete).not.toHaveBeenCalled();
+    });
+  });
+
+});

@@ -13,6 +13,7 @@ import { HandlerRegistry } from './handler-registry.service';
 import { OrdersService } from '../../orders/orders.service';
 import { ChangeLogService } from '../change-log.service';
 import { SyncMutationDto } from '../dto/sync-push.dto';
+import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto, CreateOrderPaymentDto } from '../../orders/dto/create-order.dto';
 
 @Injectable()
@@ -44,6 +45,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         return this.handleUpdate(tx, mutation, context);
       case 'DELETE':
         return this.handleDelete(tx, mutation, context);
+      case 'ITEM_ADD':
+        return this.handleItemAdd(tx, mutation, context);
+      case 'ITEM_VOID':
+        return this.handleItemVoid(tx, mutation, context);
       default:
         return {
           operation_id: mutation.operation_id,
@@ -620,8 +625,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
-    // 3. Process Line Items (if provided)
+    // 3. Process Line Items with Append-Only Ledger Semantics (SYNC-032 / D-05)
     if (hasIncomingItems && tx.orderItem) {
+      const fullReplace = payload.fullReplace === true || payload.full_replace === true;
       const currentItems = existingOrder.order_items || [];
       const currentItemsMap = new Map(currentItems.map((i: any) => [i.id, i]));
       const incomingItemIds = new Set<string>();
@@ -650,52 +656,93 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         if (item.id && currentItemsMap.has(item.id)) {
           incomingItemIds.add(item.id);
           const prev = currentItemsMap.get(item.id)!;
-          if (tx.orderItem.update) {
-            await tx.orderItem.update({
-              where: { id: item.id },
-              data: {
-                menu_item_id: validMenuItemId ?? prev.menu_item_id,
-                item_name: itemName,
-                quantity,
-                selected_size:
-                  item.selected_size ||
-                  item.size_name ||
-                  item.sizeName ||
-                  prev.selected_size ||
-                  'Regular',
-                selected_crust:
-                  item.selected_crust ||
-                  item.selectedCrust ||
-                  prev.selected_crust ||
-                  'Original',
-                extra_toppings:
-                  item.extra_toppings ||
-                  item.extraToppings ||
-                  prev.extra_toppings ||
-                  '',
-                unit_price: new Prisma.Decimal(unitPrice),
-                total_price: new Prisma.Decimal(totalPrice),
-                notes: item.notes !== undefined ? item.notes : prev.notes,
-                is_cancelled:
-                  item.is_cancelled !== undefined
-                    ? item.is_cancelled
-                    : prev.is_cancelled,
-                cancelled_at: item.is_cancelled
-                  ? prev.cancelled_at || new Date()
-                  : item.is_cancelled === false
-                  ? null
-                  : prev.cancelled_at,
-                cancel_reason: item.cancel_reason ?? prev.cancel_reason,
-                cancelled_by: item.cancelled_by ?? prev.cancelled_by,
-              },
-            });
+          const isVoidRequested = Boolean(
+            item.is_cancelled === true ||
+            item.voidedAt !== undefined ||
+            item.voided_at !== undefined
+          );
+          const isDetailsChanged =
+            (quantity !== undefined && quantity !== prev.quantity) ||
+            (unitPrice !== undefined && Number(unitPrice) !== Number(prev.unit_price));
+
+          if (isVoidRequested) {
+            if (!prev.voidedAt && tx.orderItem.update) {
+              const now = new Date();
+              await tx.orderItem.update({
+                where: { id: item.id },
+                data: {
+                  voidedAt: now,
+                  voidedBy: item.cancelled_by || item.voided_by || item.voidedBy || 'sync',
+                  is_cancelled: true,
+                  cancelled_at: now,
+                  cancel_reason: item.cancel_reason || 'Voided via sync',
+                  cancelled_by: item.cancelled_by || item.voided_by || item.voidedBy || 'sync',
+                },
+              });
+            }
+          } else if (prev.voidedAt) {
+            // Task 3: Void always wins over a live copy!
+          } else if (isDetailsChanged) {
+            // Task 3: Quantity change = new item with supersedesItemId + void of old one
+            const now = new Date();
+            if (tx.orderItem.update) {
+              await tx.orderItem.update({
+                where: { id: prev.id },
+                data: {
+                  voidedAt: now,
+                  voidedBy: item.cancelled_by || item.voided_by || item.voidedBy || 'sync',
+                  is_cancelled: true,
+                  cancelled_at: now,
+                  cancel_reason: item.cancel_reason || 'Superseded by updated item',
+                  cancelled_by: item.cancelled_by || item.voided_by || item.voidedBy || 'sync',
+                },
+              });
+            }
+
+            const newId = uuidv7();
+            if (tx.orderItem.create) {
+              const createdNew = await tx.orderItem.create({
+                data: {
+                  id: newId,
+                  order_id: orderId,
+                  menu_item_id: validMenuItemId ?? prev.menu_item_id,
+                  item_name: itemName,
+                  quantity,
+                  selected_size:
+                    item.selected_size || item.size_name || item.sizeName || prev.selected_size || 'Regular',
+                  selected_crust:
+                    item.selected_crust || item.selectedCrust || prev.selected_crust || 'Original',
+                  extra_toppings:
+                    item.extra_toppings || item.extraToppings || prev.extra_toppings || '',
+                  unit_price: new Prisma.Decimal(unitPrice),
+                  total_price: new Prisma.Decimal(totalPrice),
+                  notes: item.notes !== undefined ? item.notes : prev.notes,
+                  is_cancelled: false,
+                  voidedAt: null,
+                  supersedesItemId: prev.id,
+                  createdByDeviceId: item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
+                  clientCreatedAt: new Date(),
+                },
+              });
+              if (createdNew?.id) incomingItemIds.add(createdNew.id);
+            }
+          } else {
+            // Active item unchanged
+            if (item.notes !== undefined && item.notes !== prev.notes && tx.orderItem.update) {
+              await tx.orderItem.update({
+                where: { id: item.id },
+                data: { notes: item.notes },
+              });
+            }
           }
         } else {
-          const itemId = item.id || undefined;
+          // Task 1: Client generates UUID v7 ids for every new line item; server stores that id
+          const itemId = item.id ? item.id : uuidv7();
+          const isVoided = Boolean(item.is_cancelled || item.voidedAt || item.voided_at);
           if (tx.orderItem.create) {
             const createdItem = await tx.orderItem.create({
               data: {
-                ...(itemId ? { id: itemId } : {}),
+                id: itemId,
                 order_id: orderId,
                 menu_item_id: validMenuItemId,
                 item_name: itemName,
@@ -708,10 +755,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
                 unit_price: new Prisma.Decimal(unitPrice),
                 total_price: new Prisma.Decimal(totalPrice),
                 notes: item.notes || '',
-                is_cancelled: item.is_cancelled ?? false,
-                cancelled_at: item.is_cancelled ? new Date() : null,
+                is_cancelled: isVoided,
+                cancelled_at: isVoided ? new Date() : null,
                 cancel_reason: item.cancel_reason ?? null,
                 cancelled_by: item.cancelled_by ?? null,
+                voidedAt: isVoided ? new Date() : null,
+                voidedBy: isVoided ? (item.cancelled_by || item.voided_by || 'sync') : null,
+                supersedesItemId: item.supersedesItemId || item.supersedes_item_id || null,
+                createdByDeviceId: item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
+                clientCreatedAt: item.clientCreatedAt ? new Date(item.clientCreatedAt) : new Date(),
               },
             });
             if (createdItem?.id) incomingItemIds.add(createdItem.id);
@@ -719,10 +771,21 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         }
       }
 
-      if (tx.orderItem.delete) {
+      // SYNC-032 / D-05: Items absent from the payload are NOT deleted unless explicit fullReplace: true
+      if (fullReplace && tx.orderItem.update) {
         for (const existingItem of currentItems) {
-          if (!incomingItemIds.has(existingItem.id) && !existingItem.is_cancelled) {
-            await tx.orderItem.delete({ where: { id: existingItem.id } });
+          if (!incomingItemIds.has(existingItem.id) && !existingItem.voidedAt && !existingItem.is_cancelled) {
+            const now = new Date();
+            await tx.orderItem.update({
+              where: { id: existingItem.id },
+              data: {
+                voidedAt: now,
+                voidedBy: 'fullReplace',
+                is_cancelled: true,
+                cancelled_at: now,
+                cancel_reason: 'Removed via full-replace order update',
+              },
+            });
           }
         }
       }
@@ -944,6 +1007,299 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
   // ---------------------------------------------------------------------------
   // DELETE MUTATION HANDLER
   // ---------------------------------------------------------------------------
+
+
+  // ---------------------------------------------------------------------------
+  // ITEM_ADD MUTATION HANDLER (SYNC-032 / D-05)
+  // ---------------------------------------------------------------------------
+
+  private async handleItemAdd(
+    tx: Prisma.TransactionClient,
+    mutation: SyncMutationDto,
+    context: SyncMutationContext,
+  ): Promise<SyncMutationResult> {
+    const payload = mutation.payload || {};
+    const orderId = payload.order_id || payload.orderId || mutation.entity_id;
+    const existingOrder = await tx.order.findUnique({
+      where: { id: orderId },
+      include: { order_items: true, payments: true },
+    });
+
+    if (!existingOrder) {
+      return {
+        operation_id: mutation.operation_id,
+        entity_id: orderId,
+        status: 'FAILED_RETRYABLE',
+        server_version: mutation.base_version ?? 1,
+        server_timestamp: new Date().toISOString(),
+        error_message: `Order '${orderId}' not found for ITEM_ADD`,
+      };
+    }
+
+    const items = Array.isArray(payload.items)
+      ? payload.items
+      : payload.item
+      ? [payload.item]
+      : [payload];
+
+    const existingItems = existingOrder.order_items || [];
+    const existingMap = new Map(existingItems.map((i: any) => [i.id, i]));
+
+    for (const rawItem of items) {
+      const itemId = rawItem.id || mutation.entity_id;
+      if (existingMap.has(itemId)) {
+        // Idempotent: ON CONFLICT DO NOTHING / void always wins
+        const existing = existingMap.get(itemId)!;
+        const isIncomingVoided = Boolean(rawItem.voidedAt || rawItem.voided_at || rawItem.is_cancelled);
+        if (isIncomingVoided && !existing.voidedAt && tx.orderItem?.update) {
+          const now = new Date();
+          await tx.orderItem.update({
+            where: { id: itemId },
+            data: {
+              voidedAt: rawItem.voidedAt ? new Date(rawItem.voidedAt) : (rawItem.voided_at ? new Date(rawItem.voided_at) : now),
+              voidedBy: rawItem.voidedBy || rawItem.voided_by || 'sync',
+              is_cancelled: true,
+              cancelled_at: now,
+              cancel_reason: rawItem.cancel_reason || 'Voided',
+            },
+          });
+        }
+        continue;
+      }
+
+      let validMenuItemId: string | undefined = undefined;
+      if (rawItem.menu_item_id && tx.menuItem?.findUnique) {
+        try {
+          const menuItem = await tx.menuItem.findUnique({ where: { id: rawItem.menu_item_id } });
+          if (menuItem) validMenuItemId = menuItem.id;
+        } catch {
+          validMenuItemId = undefined;
+        }
+      }
+
+      const isVoided = Boolean(rawItem.voidedAt || rawItem.voided_at || rawItem.is_cancelled);
+      const voidedAtDate = rawItem.voidedAt
+        ? new Date(rawItem.voidedAt)
+        : rawItem.voided_at
+        ? new Date(rawItem.voided_at)
+        : isVoided
+        ? new Date()
+        : null;
+
+      const unitPrice = rawItem.unit_price !== undefined ? Number(rawItem.unit_price) : 0;
+      const quantity = rawItem.quantity !== undefined ? Number(rawItem.quantity) : 1;
+
+      if (tx.orderItem?.create) {
+        await tx.orderItem.create({
+          data: {
+            id: itemId,
+            order_id: orderId,
+            menu_item_id: validMenuItemId,
+            item_name: rawItem.item_name || rawItem.itemName || 'Item',
+            quantity,
+            selected_size: rawItem.selected_size || rawItem.sizeName || 'Regular',
+            selected_crust: rawItem.selected_crust || rawItem.selectedCrust || 'Original',
+            extra_toppings: rawItem.extra_toppings || rawItem.extraToppings || '',
+            unit_price: new Prisma.Decimal(unitPrice),
+            total_price: new Prisma.Decimal(this.round(unitPrice * quantity)),
+            notes: rawItem.notes || '',
+            is_cancelled: isVoided,
+            cancelled_at: isVoided ? (rawItem.cancelled_at ? new Date(rawItem.cancelled_at) : voidedAtDate) : null,
+            cancel_reason: rawItem.cancel_reason ?? null,
+            cancelled_by: rawItem.cancelled_by ?? null,
+            voidedAt: voidedAtDate,
+            voidedBy: rawItem.voidedBy || rawItem.voided_by || (isVoided ? (rawItem.cancelled_by ?? 'sync') : null),
+            supersedesItemId: rawItem.supersedesItemId || rawItem.supersedes_item_id || null,
+            createdByDeviceId: rawItem.createdByDeviceId || rawItem.created_by_device_id || context.deviceId || null,
+            clientCreatedAt: rawItem.clientCreatedAt
+              ? new Date(rawItem.clientCreatedAt)
+              : rawItem.client_created_at
+              ? new Date(rawItem.client_created_at)
+              : mutation.created_at
+              ? new Date(mutation.created_at)
+              : new Date(),
+          },
+        });
+      }
+    }
+
+    const activeItems = await this.ordersService.getActiveItems(orderId, tx);
+    const subtotal = this.round(
+      activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
+    );
+
+    const discountPercentage = Number(existingOrder.discount_percentage);
+    const discountAmount =
+      discountPercentage > 0
+        ? this.round((subtotal * discountPercentage) / 100)
+        : Number(existingOrder.discount_amount);
+    const taxableAmount = Math.max(0, subtotal - discountAmount);
+    const taxAmount = Number(existingOrder.tax_amount);
+    const grandTotal = this.round(taxableAmount + taxAmount);
+
+    const updated = await tx.order.update({
+      where: { id: orderId },
+      data: {
+        subtotal: new Prisma.Decimal(subtotal),
+        grand_total: new Prisma.Decimal(grandTotal),
+        version: { increment: 1 },
+      },
+    });
+
+    const newVersion = (updated as any).version ?? ((existingOrder as any).version || 1) + 1;
+    const updatedAt = (updated as any).updated_at || new Date();
+
+    await this.changeLogService.record(
+      tx,
+      'order',
+      updated.id,
+      'UPDATE',
+      newVersion,
+      {
+        id: updated.id,
+        order_number: updated.order_number,
+        status: updated.status,
+        subtotal,
+        grand_total: grandTotal,
+        version: newVersion,
+        updated_at: updatedAt,
+      },
+      false,
+    );
+
+    return {
+      operation_id: mutation.operation_id,
+      entity_id: updated.id,
+      status: 'SYNCED',
+      server_version: newVersion,
+      server_timestamp: this.toIsoString(updatedAt),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // ITEM_VOID MUTATION HANDLER (SYNC-032 / D-05)
+  // ---------------------------------------------------------------------------
+
+  private async handleItemVoid(
+    tx: Prisma.TransactionClient,
+    mutation: SyncMutationDto,
+    context: SyncMutationContext,
+  ): Promise<SyncMutationResult> {
+    const payload = mutation.payload || {};
+    const orderId = payload.order_id || payload.orderId || mutation.entity_id;
+    const itemId = payload.item_id || payload.itemId || payload.id || mutation.entity_id;
+
+    const existingOrder = await tx.order.findUnique({
+      where: { id: orderId },
+      include: { order_items: true },
+    });
+
+    if (!existingOrder) {
+      return {
+        operation_id: mutation.operation_id,
+        entity_id: orderId,
+        status: 'FAILED_RETRYABLE',
+        server_version: mutation.base_version ?? 1,
+        server_timestamp: new Date().toISOString(),
+        error_message: `Order '${orderId}' not found for ITEM_VOID`,
+      };
+    }
+
+    const existingItem = await tx.orderItem.findUnique({
+      where: { id: itemId },
+    });
+
+    const now = new Date();
+    const voidedBy = payload.voided_by || payload.voidedBy || 'sync';
+    const reason = payload.reason || payload.cancel_reason || 'Voided via sync';
+
+    if (existingItem) {
+      if (!existingItem.voidedAt && tx.orderItem?.update) {
+        await tx.orderItem.update({
+          where: { id: itemId },
+          data: {
+            voidedAt: now,
+            voidedBy,
+            is_cancelled: true,
+            cancelled_at: now,
+            cancel_reason: reason,
+            cancelled_by: voidedBy,
+          },
+        });
+      }
+    } else if (tx.orderItem?.create) {
+      // Tombstone insert for commutativity (VOID arriving before ADD)
+      await tx.orderItem.create({
+        data: {
+          id: itemId,
+          order_id: orderId,
+          item_name: payload.item_name || payload.itemName || 'Voided Item',
+          quantity: payload.quantity !== undefined ? Number(payload.quantity) : 1,
+          unit_price: new Prisma.Decimal(0),
+          total_price: new Prisma.Decimal(0),
+          is_cancelled: true,
+          cancelled_at: now,
+          cancel_reason: reason,
+          cancelled_by: voidedBy,
+          voidedAt: now,
+          voidedBy,
+          clientCreatedAt: mutation.created_at ? new Date(mutation.created_at) : now,
+        },
+      });
+    }
+
+    const activeItems = await this.ordersService.getActiveItems(orderId, tx);
+    const subtotal = this.round(
+      activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
+    );
+
+    const discountPercentage = Number(existingOrder.discount_percentage);
+    const discountAmount =
+      discountPercentage > 0
+        ? this.round((subtotal * discountPercentage) / 100)
+        : Number(existingOrder.discount_amount);
+    const taxableAmount = Math.max(0, subtotal - discountAmount);
+    const taxAmount = Number(existingOrder.tax_amount);
+    const grandTotal = this.round(taxableAmount + taxAmount);
+
+    const updated = await tx.order.update({
+      where: { id: orderId },
+      data: {
+        subtotal: new Prisma.Decimal(subtotal),
+        grand_total: new Prisma.Decimal(grandTotal),
+        version: { increment: 1 },
+      },
+    });
+
+    const newVersion = (updated as any).version ?? ((existingOrder as any).version || 1) + 1;
+    const updatedAt = (updated as any).updated_at || new Date();
+
+    await this.changeLogService.record(
+      tx,
+      'order',
+      updated.id,
+      'UPDATE',
+      newVersion,
+      {
+        id: updated.id,
+        order_number: updated.order_number,
+        status: updated.status,
+        subtotal,
+        grand_total: grandTotal,
+        version: newVersion,
+        updated_at: updatedAt,
+      },
+      false,
+    );
+
+    return {
+      operation_id: mutation.operation_id,
+      entity_id: updated.id,
+      status: 'SYNCED',
+      server_version: newVersion,
+      server_timestamp: this.toIsoString(updatedAt),
+    };
+  }
 
   private async handleDelete(
     tx: Prisma.TransactionClient,

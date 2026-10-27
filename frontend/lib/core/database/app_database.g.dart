@@ -1400,6 +1400,63 @@ class $LocalOrderItemsTable extends LocalOrderItems
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _voidedAtMeta = const VerificationMeta(
+    'voidedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> voidedAt = GeneratedColumn<DateTime>(
+    'voided_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _voidedByMeta = const VerificationMeta(
+    'voidedBy',
+  );
+  @override
+  late final GeneratedColumn<String> voidedBy = GeneratedColumn<String>(
+    'voided_by',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _supersedesItemIdMeta = const VerificationMeta(
+    'supersedesItemId',
+  );
+  @override
+  late final GeneratedColumn<String> supersedesItemId = GeneratedColumn<String>(
+    'supersedes_item_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdByDeviceIdMeta = const VerificationMeta(
+    'createdByDeviceId',
+  );
+  @override
+  late final GeneratedColumn<String> createdByDeviceId =
+      GeneratedColumn<String>(
+        'created_by_device_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _clientCreatedAtMeta = const VerificationMeta(
+    'clientCreatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> clientCreatedAt =
+      GeneratedColumn<DateTime>(
+        'client_created_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _syncStatusMeta = const VerificationMeta(
     'syncStatus',
   );
@@ -1438,6 +1495,11 @@ class $LocalOrderItemsTable extends LocalOrderItems
     isCancelled,
     cancelledAt,
     cancelReason,
+    voidedAt,
+    voidedBy,
+    supersedesItemId,
+    createdByDeviceId,
+    clientCreatedAt,
     syncStatus,
     serverVersion,
   ];
@@ -1546,6 +1608,45 @@ class $LocalOrderItemsTable extends LocalOrderItems
         ),
       );
     }
+    if (data.containsKey('voided_at')) {
+      context.handle(
+        _voidedAtMeta,
+        voidedAt.isAcceptableOrUnknown(data['voided_at']!, _voidedAtMeta),
+      );
+    }
+    if (data.containsKey('voided_by')) {
+      context.handle(
+        _voidedByMeta,
+        voidedBy.isAcceptableOrUnknown(data['voided_by']!, _voidedByMeta),
+      );
+    }
+    if (data.containsKey('supersedes_item_id')) {
+      context.handle(
+        _supersedesItemIdMeta,
+        supersedesItemId.isAcceptableOrUnknown(
+          data['supersedes_item_id']!,
+          _supersedesItemIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_by_device_id')) {
+      context.handle(
+        _createdByDeviceIdMeta,
+        createdByDeviceId.isAcceptableOrUnknown(
+          data['created_by_device_id']!,
+          _createdByDeviceIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('client_created_at')) {
+      context.handle(
+        _clientCreatedAtMeta,
+        clientCreatedAt.isAcceptableOrUnknown(
+          data['client_created_at']!,
+          _clientCreatedAtMeta,
+        ),
+      );
+    }
     if (data.containsKey('sync_status')) {
       context.handle(
         _syncStatusMeta,
@@ -1618,6 +1719,26 @@ class $LocalOrderItemsTable extends LocalOrderItems
         DriftSqlType.string,
         data['${effectivePrefix}cancel_reason'],
       ),
+      voidedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}voided_at'],
+      ),
+      voidedBy: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}voided_by'],
+      ),
+      supersedesItemId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}supersedes_item_id'],
+      ),
+      createdByDeviceId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}created_by_device_id'],
+      ),
+      clientCreatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}client_created_at'],
+      ),
       syncStatus: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}sync_status'],
@@ -1648,6 +1769,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
   final bool isCancelled;
   final DateTime? cancelledAt;
   final String? cancelReason;
+  final DateTime? voidedAt;
+  final String? voidedBy;
+  final String? supersedesItemId;
+  final String? createdByDeviceId;
+  final DateTime? clientCreatedAt;
   final String syncStatus;
   final int serverVersion;
   const LocalOrderItem({
@@ -1663,6 +1789,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
     required this.isCancelled,
     this.cancelledAt,
     this.cancelReason,
+    this.voidedAt,
+    this.voidedBy,
+    this.supersedesItemId,
+    this.createdByDeviceId,
+    this.clientCreatedAt,
     required this.syncStatus,
     required this.serverVersion,
   });
@@ -1690,6 +1821,21 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
     }
     if (!nullToAbsent || cancelReason != null) {
       map['cancel_reason'] = Variable<String>(cancelReason);
+    }
+    if (!nullToAbsent || voidedAt != null) {
+      map['voided_at'] = Variable<DateTime>(voidedAt);
+    }
+    if (!nullToAbsent || voidedBy != null) {
+      map['voided_by'] = Variable<String>(voidedBy);
+    }
+    if (!nullToAbsent || supersedesItemId != null) {
+      map['supersedes_item_id'] = Variable<String>(supersedesItemId);
+    }
+    if (!nullToAbsent || createdByDeviceId != null) {
+      map['created_by_device_id'] = Variable<String>(createdByDeviceId);
+    }
+    if (!nullToAbsent || clientCreatedAt != null) {
+      map['client_created_at'] = Variable<DateTime>(clientCreatedAt);
     }
     map['sync_status'] = Variable<String>(syncStatus);
     map['server_version'] = Variable<int>(serverVersion);
@@ -1720,6 +1866,21 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
       cancelReason: cancelReason == null && nullToAbsent
           ? const Value.absent()
           : Value(cancelReason),
+      voidedAt: voidedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(voidedAt),
+      voidedBy: voidedBy == null && nullToAbsent
+          ? const Value.absent()
+          : Value(voidedBy),
+      supersedesItemId: supersedesItemId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(supersedesItemId),
+      createdByDeviceId: createdByDeviceId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(createdByDeviceId),
+      clientCreatedAt: clientCreatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(clientCreatedAt),
       syncStatus: Value(syncStatus),
       serverVersion: Value(serverVersion),
     );
@@ -1743,6 +1904,13 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
       isCancelled: serializer.fromJson<bool>(json['isCancelled']),
       cancelledAt: serializer.fromJson<DateTime?>(json['cancelledAt']),
       cancelReason: serializer.fromJson<String?>(json['cancelReason']),
+      voidedAt: serializer.fromJson<DateTime?>(json['voidedAt']),
+      voidedBy: serializer.fromJson<String?>(json['voidedBy']),
+      supersedesItemId: serializer.fromJson<String?>(json['supersedesItemId']),
+      createdByDeviceId: serializer.fromJson<String?>(
+        json['createdByDeviceId'],
+      ),
+      clientCreatedAt: serializer.fromJson<DateTime?>(json['clientCreatedAt']),
       syncStatus: serializer.fromJson<String>(json['syncStatus']),
       serverVersion: serializer.fromJson<int>(json['serverVersion']),
     );
@@ -1763,6 +1931,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
       'isCancelled': serializer.toJson<bool>(isCancelled),
       'cancelledAt': serializer.toJson<DateTime?>(cancelledAt),
       'cancelReason': serializer.toJson<String?>(cancelReason),
+      'voidedAt': serializer.toJson<DateTime?>(voidedAt),
+      'voidedBy': serializer.toJson<String?>(voidedBy),
+      'supersedesItemId': serializer.toJson<String?>(supersedesItemId),
+      'createdByDeviceId': serializer.toJson<String?>(createdByDeviceId),
+      'clientCreatedAt': serializer.toJson<DateTime?>(clientCreatedAt),
       'syncStatus': serializer.toJson<String>(syncStatus),
       'serverVersion': serializer.toJson<int>(serverVersion),
     };
@@ -1781,6 +1954,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
     bool? isCancelled,
     Value<DateTime?> cancelledAt = const Value.absent(),
     Value<String?> cancelReason = const Value.absent(),
+    Value<DateTime?> voidedAt = const Value.absent(),
+    Value<String?> voidedBy = const Value.absent(),
+    Value<String?> supersedesItemId = const Value.absent(),
+    Value<String?> createdByDeviceId = const Value.absent(),
+    Value<DateTime?> clientCreatedAt = const Value.absent(),
     String? syncStatus,
     int? serverVersion,
   }) => LocalOrderItem(
@@ -1796,6 +1974,17 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
     isCancelled: isCancelled ?? this.isCancelled,
     cancelledAt: cancelledAt.present ? cancelledAt.value : this.cancelledAt,
     cancelReason: cancelReason.present ? cancelReason.value : this.cancelReason,
+    voidedAt: voidedAt.present ? voidedAt.value : this.voidedAt,
+    voidedBy: voidedBy.present ? voidedBy.value : this.voidedBy,
+    supersedesItemId: supersedesItemId.present
+        ? supersedesItemId.value
+        : this.supersedesItemId,
+    createdByDeviceId: createdByDeviceId.present
+        ? createdByDeviceId.value
+        : this.createdByDeviceId,
+    clientCreatedAt: clientCreatedAt.present
+        ? clientCreatedAt.value
+        : this.clientCreatedAt,
     syncStatus: syncStatus ?? this.syncStatus,
     serverVersion: serverVersion ?? this.serverVersion,
   );
@@ -1821,6 +2010,17 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
       cancelReason: data.cancelReason.present
           ? data.cancelReason.value
           : this.cancelReason,
+      voidedAt: data.voidedAt.present ? data.voidedAt.value : this.voidedAt,
+      voidedBy: data.voidedBy.present ? data.voidedBy.value : this.voidedBy,
+      supersedesItemId: data.supersedesItemId.present
+          ? data.supersedesItemId.value
+          : this.supersedesItemId,
+      createdByDeviceId: data.createdByDeviceId.present
+          ? data.createdByDeviceId.value
+          : this.createdByDeviceId,
+      clientCreatedAt: data.clientCreatedAt.present
+          ? data.clientCreatedAt.value
+          : this.clientCreatedAt,
       syncStatus: data.syncStatus.present
           ? data.syncStatus.value
           : this.syncStatus,
@@ -1845,6 +2045,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
           ..write('isCancelled: $isCancelled, ')
           ..write('cancelledAt: $cancelledAt, ')
           ..write('cancelReason: $cancelReason, ')
+          ..write('voidedAt: $voidedAt, ')
+          ..write('voidedBy: $voidedBy, ')
+          ..write('supersedesItemId: $supersedesItemId, ')
+          ..write('createdByDeviceId: $createdByDeviceId, ')
+          ..write('clientCreatedAt: $clientCreatedAt, ')
           ..write('syncStatus: $syncStatus, ')
           ..write('serverVersion: $serverVersion')
           ..write(')'))
@@ -1865,6 +2070,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
     isCancelled,
     cancelledAt,
     cancelReason,
+    voidedAt,
+    voidedBy,
+    supersedesItemId,
+    createdByDeviceId,
+    clientCreatedAt,
     syncStatus,
     serverVersion,
   );
@@ -1884,6 +2094,11 @@ class LocalOrderItem extends DataClass implements Insertable<LocalOrderItem> {
           other.isCancelled == this.isCancelled &&
           other.cancelledAt == this.cancelledAt &&
           other.cancelReason == this.cancelReason &&
+          other.voidedAt == this.voidedAt &&
+          other.voidedBy == this.voidedBy &&
+          other.supersedesItemId == this.supersedesItemId &&
+          other.createdByDeviceId == this.createdByDeviceId &&
+          other.clientCreatedAt == this.clientCreatedAt &&
           other.syncStatus == this.syncStatus &&
           other.serverVersion == this.serverVersion);
 }
@@ -1901,6 +2116,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
   final Value<bool> isCancelled;
   final Value<DateTime?> cancelledAt;
   final Value<String?> cancelReason;
+  final Value<DateTime?> voidedAt;
+  final Value<String?> voidedBy;
+  final Value<String?> supersedesItemId;
+  final Value<String?> createdByDeviceId;
+  final Value<DateTime?> clientCreatedAt;
   final Value<String> syncStatus;
   final Value<int> serverVersion;
   final Value<int> rowid;
@@ -1917,6 +2137,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
     this.isCancelled = const Value.absent(),
     this.cancelledAt = const Value.absent(),
     this.cancelReason = const Value.absent(),
+    this.voidedAt = const Value.absent(),
+    this.voidedBy = const Value.absent(),
+    this.supersedesItemId = const Value.absent(),
+    this.createdByDeviceId = const Value.absent(),
+    this.clientCreatedAt = const Value.absent(),
     this.syncStatus = const Value.absent(),
     this.serverVersion = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1934,6 +2159,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
     this.isCancelled = const Value.absent(),
     this.cancelledAt = const Value.absent(),
     this.cancelReason = const Value.absent(),
+    this.voidedAt = const Value.absent(),
+    this.voidedBy = const Value.absent(),
+    this.supersedesItemId = const Value.absent(),
+    this.createdByDeviceId = const Value.absent(),
+    this.clientCreatedAt = const Value.absent(),
     this.syncStatus = const Value.absent(),
     this.serverVersion = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1956,6 +2186,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
     Expression<bool>? isCancelled,
     Expression<DateTime>? cancelledAt,
     Expression<String>? cancelReason,
+    Expression<DateTime>? voidedAt,
+    Expression<String>? voidedBy,
+    Expression<String>? supersedesItemId,
+    Expression<String>? createdByDeviceId,
+    Expression<DateTime>? clientCreatedAt,
     Expression<String>? syncStatus,
     Expression<int>? serverVersion,
     Expression<int>? rowid,
@@ -1973,6 +2208,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
       if (isCancelled != null) 'is_cancelled': isCancelled,
       if (cancelledAt != null) 'cancelled_at': cancelledAt,
       if (cancelReason != null) 'cancel_reason': cancelReason,
+      if (voidedAt != null) 'voided_at': voidedAt,
+      if (voidedBy != null) 'voided_by': voidedBy,
+      if (supersedesItemId != null) 'supersedes_item_id': supersedesItemId,
+      if (createdByDeviceId != null) 'created_by_device_id': createdByDeviceId,
+      if (clientCreatedAt != null) 'client_created_at': clientCreatedAt,
       if (syncStatus != null) 'sync_status': syncStatus,
       if (serverVersion != null) 'server_version': serverVersion,
       if (rowid != null) 'rowid': rowid,
@@ -1992,6 +2232,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
     Value<bool>? isCancelled,
     Value<DateTime?>? cancelledAt,
     Value<String?>? cancelReason,
+    Value<DateTime?>? voidedAt,
+    Value<String?>? voidedBy,
+    Value<String?>? supersedesItemId,
+    Value<String?>? createdByDeviceId,
+    Value<DateTime?>? clientCreatedAt,
     Value<String>? syncStatus,
     Value<int>? serverVersion,
     Value<int>? rowid,
@@ -2009,6 +2254,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
       isCancelled: isCancelled ?? this.isCancelled,
       cancelledAt: cancelledAt ?? this.cancelledAt,
       cancelReason: cancelReason ?? this.cancelReason,
+      voidedAt: voidedAt ?? this.voidedAt,
+      voidedBy: voidedBy ?? this.voidedBy,
+      supersedesItemId: supersedesItemId ?? this.supersedesItemId,
+      createdByDeviceId: createdByDeviceId ?? this.createdByDeviceId,
+      clientCreatedAt: clientCreatedAt ?? this.clientCreatedAt,
       syncStatus: syncStatus ?? this.syncStatus,
       serverVersion: serverVersion ?? this.serverVersion,
       rowid: rowid ?? this.rowid,
@@ -2054,6 +2304,21 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
     if (cancelReason.present) {
       map['cancel_reason'] = Variable<String>(cancelReason.value);
     }
+    if (voidedAt.present) {
+      map['voided_at'] = Variable<DateTime>(voidedAt.value);
+    }
+    if (voidedBy.present) {
+      map['voided_by'] = Variable<String>(voidedBy.value);
+    }
+    if (supersedesItemId.present) {
+      map['supersedes_item_id'] = Variable<String>(supersedesItemId.value);
+    }
+    if (createdByDeviceId.present) {
+      map['created_by_device_id'] = Variable<String>(createdByDeviceId.value);
+    }
+    if (clientCreatedAt.present) {
+      map['client_created_at'] = Variable<DateTime>(clientCreatedAt.value);
+    }
     if (syncStatus.present) {
       map['sync_status'] = Variable<String>(syncStatus.value);
     }
@@ -2081,6 +2346,11 @@ class LocalOrderItemsCompanion extends UpdateCompanion<LocalOrderItem> {
           ..write('isCancelled: $isCancelled, ')
           ..write('cancelledAt: $cancelledAt, ')
           ..write('cancelReason: $cancelReason, ')
+          ..write('voidedAt: $voidedAt, ')
+          ..write('voidedBy: $voidedBy, ')
+          ..write('supersedesItemId: $supersedesItemId, ')
+          ..write('createdByDeviceId: $createdByDeviceId, ')
+          ..write('clientCreatedAt: $clientCreatedAt, ')
           ..write('syncStatus: $syncStatus, ')
           ..write('serverVersion: $serverVersion, ')
           ..write('rowid: $rowid')
@@ -11621,6 +11891,11 @@ typedef $$LocalOrderItemsTableCreateCompanionBuilder =
       Value<bool> isCancelled,
       Value<DateTime?> cancelledAt,
       Value<String?> cancelReason,
+      Value<DateTime?> voidedAt,
+      Value<String?> voidedBy,
+      Value<String?> supersedesItemId,
+      Value<String?> createdByDeviceId,
+      Value<DateTime?> clientCreatedAt,
       Value<String> syncStatus,
       Value<int> serverVersion,
       Value<int> rowid,
@@ -11639,6 +11914,11 @@ typedef $$LocalOrderItemsTableUpdateCompanionBuilder =
       Value<bool> isCancelled,
       Value<DateTime?> cancelledAt,
       Value<String?> cancelReason,
+      Value<DateTime?> voidedAt,
+      Value<String?> voidedBy,
+      Value<String?> supersedesItemId,
+      Value<String?> createdByDeviceId,
+      Value<DateTime?> clientCreatedAt,
       Value<String> syncStatus,
       Value<int> serverVersion,
       Value<int> rowid,
@@ -11732,6 +12012,31 @@ class $$LocalOrderItemsTableFilterComposer
 
   ColumnFilters<String> get cancelReason => $composableBuilder(
     column: $table.cancelReason,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get voidedAt => $composableBuilder(
+    column: $table.voidedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get voidedBy => $composableBuilder(
+    column: $table.voidedBy,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get supersedesItemId => $composableBuilder(
+    column: $table.supersedesItemId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get createdByDeviceId => $composableBuilder(
+    column: $table.createdByDeviceId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get clientCreatedAt => $composableBuilder(
+    column: $table.clientCreatedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11833,6 +12138,31 @@ class $$LocalOrderItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<DateTime> get voidedAt => $composableBuilder(
+    column: $table.voidedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get voidedBy => $composableBuilder(
+    column: $table.voidedBy,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get supersedesItemId => $composableBuilder(
+    column: $table.supersedesItemId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get createdByDeviceId => $composableBuilder(
+    column: $table.createdByDeviceId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get clientCreatedAt => $composableBuilder(
+    column: $table.clientCreatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get syncStatus => $composableBuilder(
     column: $table.syncStatus,
     builder: (column) => ColumnOrderings(column),
@@ -11917,6 +12247,27 @@ class $$LocalOrderItemsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<DateTime> get voidedAt =>
+      $composableBuilder(column: $table.voidedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get voidedBy =>
+      $composableBuilder(column: $table.voidedBy, builder: (column) => column);
+
+  GeneratedColumn<String> get supersedesItemId => $composableBuilder(
+    column: $table.supersedesItemId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get createdByDeviceId => $composableBuilder(
+    column: $table.createdByDeviceId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get clientCreatedAt => $composableBuilder(
+    column: $table.clientCreatedAt,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get syncStatus => $composableBuilder(
     column: $table.syncStatus,
     builder: (column) => column,
@@ -11993,6 +12344,11 @@ class $$LocalOrderItemsTableTableManager
                 Value<bool> isCancelled = const Value.absent(),
                 Value<DateTime?> cancelledAt = const Value.absent(),
                 Value<String?> cancelReason = const Value.absent(),
+                Value<DateTime?> voidedAt = const Value.absent(),
+                Value<String?> voidedBy = const Value.absent(),
+                Value<String?> supersedesItemId = const Value.absent(),
+                Value<String?> createdByDeviceId = const Value.absent(),
+                Value<DateTime?> clientCreatedAt = const Value.absent(),
                 Value<String> syncStatus = const Value.absent(),
                 Value<int> serverVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -12009,6 +12365,11 @@ class $$LocalOrderItemsTableTableManager
                 isCancelled: isCancelled,
                 cancelledAt: cancelledAt,
                 cancelReason: cancelReason,
+                voidedAt: voidedAt,
+                voidedBy: voidedBy,
+                supersedesItemId: supersedesItemId,
+                createdByDeviceId: createdByDeviceId,
+                clientCreatedAt: clientCreatedAt,
                 syncStatus: syncStatus,
                 serverVersion: serverVersion,
                 rowid: rowid,
@@ -12027,6 +12388,11 @@ class $$LocalOrderItemsTableTableManager
                 Value<bool> isCancelled = const Value.absent(),
                 Value<DateTime?> cancelledAt = const Value.absent(),
                 Value<String?> cancelReason = const Value.absent(),
+                Value<DateTime?> voidedAt = const Value.absent(),
+                Value<String?> voidedBy = const Value.absent(),
+                Value<String?> supersedesItemId = const Value.absent(),
+                Value<String?> createdByDeviceId = const Value.absent(),
+                Value<DateTime?> clientCreatedAt = const Value.absent(),
                 Value<String> syncStatus = const Value.absent(),
                 Value<int> serverVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -12043,6 +12409,11 @@ class $$LocalOrderItemsTableTableManager
                 isCancelled: isCancelled,
                 cancelledAt: cancelledAt,
                 cancelReason: cancelReason,
+                voidedAt: voidedAt,
+                voidedBy: voidedBy,
+                supersedesItemId: supersedesItemId,
+                createdByDeviceId: createdByDeviceId,
+                clientCreatedAt: clientCreatedAt,
                 syncStatus: syncStatus,
                 serverVersion: serverVersion,
                 rowid: rowid,

@@ -65,4 +65,36 @@ class InMemoryOrderRepository implements IOrderRepository {
   Future<void> deleteHeldOrder(String orderId) async {
     _heldOrders.removeWhere((o) => o.id == orderId);
   }
+
+  @override
+  Future<OrderItem> addOrderItem(String orderId, OrderItem item) async {
+    final index = _orders.indexWhere((o) => o.id == orderId);
+    if (index >= 0) {
+      final order = _orders[index];
+      final updatedItems = List<OrderItem>.from(order.items)..add(item);
+      _orders[index] = order.copyWith(items: updatedItems);
+    }
+    return item;
+  }
+
+  @override
+  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+    final index = _orders.indexWhere((o) => o.id == orderId);
+    if (index >= 0) {
+      final order = _orders[index];
+      final updatedItems = order.items.map((i) {
+        if (i.id == itemId) {
+          return i.copyWith(
+            isCancelled: true,
+            cancelledAt: DateTime.now(),
+            cancelReason: reason,
+            voidedAt: DateTime.now(),
+            voidedBy: voidedBy,
+          );
+        }
+        return i;
+      }).toList();
+      _orders[index] = order.copyWith(items: updatedItems);
+    }
+  }
 }

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
   UseInterceptors,
@@ -15,6 +16,8 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
+import { AppendOrderItemsDto } from './dto/append-order-items.dto';
+import { VoidOrderItemDto } from './dto/void-order-item.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/rbac/guards/permissions.guard';
 import { ApiResponse } from '../common/types/api-response.type';
@@ -54,6 +57,12 @@ export class OrdersController {
     };
   }
 
+  /**
+   * Whole-order update (PUT /orders/:id and PATCH /orders/:id).
+   * Reimplemented with append-only ledger diff semantics (SYNC-032 / D-05).
+   * Items absent from payload are NOT removed unless explicit fullReplace: true.
+   */
+  @Put(':id')
   @Patch(':id')
   @UseInterceptors(IdempotencyInterceptor)
   async updateOrder(
@@ -64,6 +73,50 @@ export class OrdersController {
     return {
       success: true,
       message: 'Order updated successfully',
+      data,
+    };
+  }
+
+  /**
+   * Append batch of items to an existing order (POST /orders/:id/items).
+   * Ledger semantics: Items are appended with client UUID v7 IDs.
+   */
+  @Post(':id/items')
+  @UseInterceptors(IdempotencyInterceptor)
+  async appendOrderItems(
+    @Param('id') id: string,
+    @Body() body: AppendOrderItemsDto,
+  ): Promise<ApiResponse<OrderWithDetails>> {
+    const items = body?.items || [];
+    const deviceId = body?.device_id;
+    const data = await this.ordersService.appendOrderItems(id, items, deviceId);
+    return {
+      success: true,
+      message: 'Order items appended successfully',
+      data,
+    };
+  }
+
+  /**
+   * Void a specific item from an order (POST /orders/:id/items/:itemId/void).
+   * Ledger semantics: Item is marked voided; never deleted.
+   */
+  @Post(':id/items/:itemId/void')
+  @UseInterceptors(IdempotencyInterceptor)
+  async voidOrderItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto?: VoidOrderItemDto,
+  ): Promise<ApiResponse<OrderWithDetails>> {
+    const data = await this.ordersService.voidOrderItem(
+      id,
+      itemId,
+      dto?.voided_by || dto?.voidedBy,
+      dto?.reason || dto?.cancel_reason,
+    );
+    return {
+      success: true,
+      message: 'Order item voided successfully',
       data,
     };
   }

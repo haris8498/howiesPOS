@@ -1639,24 +1639,188 @@ class SyncBackgroundWorker {
         if (isDeleted) {
           await db.ordersDao.deleteOrder(entityId);
           return PullApplyResult.applied;
-        } else if (existingOrder != null) {
-          final serverUpdatedAt = change['created_at'] != null
-              ? DateTime.tryParse(change['created_at'].toString()) ?? DateTime.now()
-              : DateTime.now();
+        }
 
+        final serverUpdatedAt = change['created_at'] != null
+            ? DateTime.tryParse(change['created_at'].toString()) ?? DateTime.now()
+            : DateTime.now();
+
+        if (existingOrder != null) {
           await (db.update(db.localOrders)..where((t) => t.id.equals(entityId))).write(
             LocalOrdersCompanion(
               status: Value(payload['status']?.toString() ?? existingOrder.status),
               paymentStatus: Value(payload['payment_status']?.toString() ?? existingOrder.paymentStatus),
               isPaid: Value(payload['is_paid'] == true || existingOrder.isPaid),
+              subtotal: payload['subtotal'] != null
+                  ? Value(double.tryParse(payload['subtotal'].toString()) ?? existingOrder.subtotal)
+                  : const Value.absent(),
+              grandTotal: payload['grand_total'] != null
+                  ? Value(double.tryParse(payload['grand_total'].toString()) ?? existingOrder.grandTotal)
+                  : const Value.absent(),
               serverVersion: Value(recordVersion),
               serverUpdatedAt: Value(serverUpdatedAt),
               syncStatus: const Value('synced'),
             ),
           );
-          return PullApplyResult.applied;
+        } else {
+          await db.into(db.localOrders).insert(
+            LocalOrdersCompanion(
+              id: Value(entityId),
+              orderNumber: Value(payload['order_number']?.toString() ?? 'ORD-$entityId'),
+              orderType: Value(payload['order_type']?.toString() ?? 'dineIn'),
+              shiftId: Value(payload['shift_id']?.toString()),
+              status: Value(payload['status']?.toString() ?? 'newOrder'),
+              subtotal: Value(double.tryParse(payload['subtotal']?.toString() ?? '0') ?? 0.0),
+              discountPercentage: Value(double.tryParse(payload['discount_percentage']?.toString() ?? '0') ?? 0.0),
+              discountAmount: Value(double.tryParse(payload['discount_amount']?.toString() ?? '0') ?? 0.0),
+              taxAmount: Value(double.tryParse(payload['tax_amount']?.toString() ?? '0') ?? 0.0),
+              grandTotal: Value(double.tryParse(payload['grand_total']?.toString() ?? '0') ?? 0.0),
+              paymentStatus: Value(payload['payment_status']?.toString() ?? 'UNPAID'),
+              isPaid: Value(payload['is_paid'] == true || payload['payment_status'] == 'PAID'),
+              isHeld: Value(payload['is_held'] == true),
+              deviceId: Value(payload['device_id']?.toString() ?? 'SERVER'),
+              createdAt: Value(payload['created_at'] != null ? DateTime.tryParse(payload['created_at'].toString()) ?? DateTime.now() : DateTime.now()),
+              serverVersion: Value(recordVersion),
+              serverUpdatedAt: Value(serverUpdatedAt),
+              syncStatus: const Value('synced'),
+            ),
+          );
         }
-        return PullApplyResult.ignoredStale;
+
+        // D-05 (SYNC-032): Merge incoming items using set-union by ID where void always wins over live copy
+        final rawItems = payload['order_items'] is List
+            ? (payload['order_items'] as List)
+            : (payload['items'] is List ? (payload['items'] as List) : null);
+
+        if (rawItems != null) {
+          final existingItems = await db.ordersDao.getOrderItems(entityId);
+          final existingItemMap = {for (final item in existingItems) item.id: item};
+
+          for (final raw in rawItems) {
+            if (raw is! Map<String, dynamic>) continue;
+            final itemId = raw['id']?.toString();
+            if (itemId == null || itemId.isEmpty) continue;
+
+            final incomingVoidedAt = raw['voided_at'] != null
+                ? DateTime.tryParse(raw['voided_at'].toString())
+                : (raw['voidedAt'] != null ? DateTime.tryParse(raw['voidedAt'].toString()) : null);
+            final incomingCancelledAt = raw['cancelled_at'] != null
+                ? DateTime.tryParse(raw['cancelled_at'].toString())
+                : (raw['cancelledAt'] != null ? DateTime.tryParse(raw['cancelledAt'].toString()) : incomingVoidedAt);
+            final incomingIsVoided = raw['is_cancelled'] == true ||
+                raw['isCancelled'] == true ||
+                incomingVoidedAt != null ||
+                incomingCancelledAt != null;
+
+            final existing = existingItemMap[itemId];
+            if (existing != null) {
+              final existingIsVoided = existing.isCancelled || existing.voidedAt != null;
+              // Void always wins: if existing is already voided, do NOT revive it
+              // If incoming is voided and existing is NOT voided, apply void
+              if (incomingIsVoided && !existingIsVoided) {
+                final voidTime = incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now();
+                await (db.update(db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+                  LocalOrderItemsCompanion(
+                    isCancelled: const Value(true),
+                    cancelledAt: Value(voidTime),
+                    cancelReason: Value(raw['cancel_reason']?.toString() ?? raw['cancelReason']?.toString() ?? 'SYNC_VOID'),
+                    voidedAt: Value(voidTime),
+                    voidedBy: Value(raw['voided_by']?.toString() ?? raw['voidedBy']?.toString() ?? raw['cancelled_by']?.toString() ?? raw['cancelledBy']?.toString()),
+                    syncStatus: const Value('synced'),
+                  ),
+                );
+              }
+            } else {
+              // Item does not exist locally: insert it into set-union
+              final effectiveVoidedAt = incomingIsVoided ? (incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now()) : null;
+              await db.into(db.localOrderItems).insert(
+                LocalOrderItemsCompanion(
+                  id: Value(itemId),
+                  orderId: Value(entityId),
+                  menuItemId: Value(raw['menu_item_id']?.toString() ?? raw['menuItemId']?.toString()),
+                  itemName: Value(raw['item_name']?.toString() ?? raw['itemName']?.toString() ?? 'Item'),
+                  sizeName: Value(raw['selected_size']?.toString() ?? raw['selectedSize']?.toString() ?? raw['size_name']?.toString() ?? raw['sizeName']?.toString()),
+                  unitPrice: Value(double.tryParse(raw['unit_price']?.toString() ?? raw['unitPrice']?.toString() ?? '0') ?? 0.0),
+                  quantity: Value((raw['quantity'] as num?)?.toInt() ?? 1),
+                  subtotal: Value(double.tryParse(raw['subtotal']?.toString() ?? '0') ?? 0.0),
+                  notes: Value(raw['notes']?.toString()),
+                  isCancelled: Value(incomingIsVoided),
+                  cancelledAt: Value(effectiveVoidedAt),
+                  cancelReason: Value(raw['cancel_reason']?.toString() ?? raw['cancelReason']?.toString()),
+                  voidedAt: Value(effectiveVoidedAt),
+                  voidedBy: Value(raw['voided_by']?.toString() ?? raw['voidedBy']?.toString()),
+                  supersedesItemId: Value(raw['supersedes_item_id']?.toString() ?? raw['supersedesItemId']?.toString()),
+                  createdByDeviceId: Value(raw['created_by_device_id']?.toString() ?? raw['createdByDeviceId']?.toString()),
+                  clientCreatedAt: Value(raw['client_created_at'] != null ? DateTime.tryParse(raw['client_created_at'].toString()) : null),
+                  syncStatus: const Value('synced'),
+                  serverVersion: Value((raw['server_version'] as num?)?.toInt() ?? 1),
+                ),
+              );
+            }
+          }
+        }
+
+        return PullApplyResult.applied;
+
+      case 'order_item':
+        final orderId = payload['order_id']?.toString() ?? payload['orderId']?.toString();
+        if (orderId == null || orderId.isEmpty) return PullApplyResult.ignoredStale;
+
+        final existing = await (db.select(db.localOrderItems)..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        final incomingVoidedAt = payload['voided_at'] != null
+            ? DateTime.tryParse(payload['voided_at'].toString())
+            : (payload['voidedAt'] != null ? DateTime.tryParse(payload['voidedAt'].toString()) : null);
+        final incomingCancelledAt = payload['cancelled_at'] != null
+            ? DateTime.tryParse(payload['cancelled_at'].toString())
+            : (payload['cancelledAt'] != null ? DateTime.tryParse(payload['cancelledAt'].toString()) : incomingVoidedAt);
+        final incomingIsVoided = isDeleted ||
+            payload['is_cancelled'] == true ||
+            payload['isCancelled'] == true ||
+            incomingVoidedAt != null ||
+            incomingCancelledAt != null;
+
+        if (existing != null) {
+          final existingIsVoided = existing.isCancelled || existing.voidedAt != null;
+          if (incomingIsVoided && !existingIsVoided) {
+            final voidTime = incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now();
+            await (db.update(db.localOrderItems)..where((t) => t.id.equals(entityId))).write(
+              LocalOrderItemsCompanion(
+                isCancelled: const Value(true),
+                cancelledAt: Value(voidTime),
+                cancelReason: Value(payload['cancel_reason']?.toString() ?? payload['cancelReason']?.toString() ?? 'SYNC_VOID'),
+                voidedAt: Value(voidTime),
+                voidedBy: Value(payload['voided_by']?.toString() ?? payload['voidedBy']?.toString() ?? payload['cancelled_by']?.toString() ?? payload['cancelledBy']?.toString()),
+                syncStatus: const Value('synced'),
+              ),
+            );
+          }
+        } else {
+          final effectiveVoidedAt = incomingIsVoided ? (incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now()) : null;
+          await db.into(db.localOrderItems).insert(
+            LocalOrderItemsCompanion(
+              id: Value(entityId),
+              orderId: Value(orderId),
+              menuItemId: Value(payload['menu_item_id']?.toString() ?? payload['menuItemId']?.toString()),
+              itemName: Value(payload['item_name']?.toString() ?? payload['itemName']?.toString() ?? 'Item'),
+              sizeName: Value(payload['selected_size']?.toString() ?? payload['selectedSize']?.toString() ?? payload['size_name']?.toString() ?? payload['sizeName']?.toString()),
+              unitPrice: Value(double.tryParse(payload['unit_price']?.toString() ?? payload['unitPrice']?.toString() ?? '0') ?? 0.0),
+              quantity: Value((payload['quantity'] as num?)?.toInt() ?? 1),
+              subtotal: Value(double.tryParse(payload['subtotal']?.toString() ?? '0') ?? 0.0),
+              notes: Value(payload['notes']?.toString()),
+              isCancelled: Value(incomingIsVoided),
+              cancelledAt: Value(effectiveVoidedAt),
+              cancelReason: Value(payload['cancel_reason']?.toString() ?? payload['cancelReason']?.toString()),
+              voidedAt: Value(effectiveVoidedAt),
+              voidedBy: Value(payload['voided_by']?.toString() ?? payload['voidedBy']?.toString()),
+              supersedesItemId: Value(payload['supersedes_item_id']?.toString() ?? payload['supersedesItemId']?.toString()),
+              createdByDeviceId: Value(payload['created_by_device_id']?.toString() ?? payload['createdByDeviceId']?.toString()),
+              clientCreatedAt: Value(payload['client_created_at'] != null ? DateTime.tryParse(payload['client_created_at'].toString()) : null),
+              syncStatus: const Value('synced'),
+              serverVersion: Value(recordVersion),
+            ),
+          );
+        }
+        return PullApplyResult.applied;
 
       case 'menu_category':
       case 'category':

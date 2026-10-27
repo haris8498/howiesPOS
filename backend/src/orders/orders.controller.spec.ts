@@ -52,6 +52,8 @@ describe('OrdersController', () => {
             getOrderById: jest.fn().mockResolvedValue(mockOrder),
             createOrder: jest.fn().mockResolvedValue(mockOrder),
             updateOrder: jest.fn().mockResolvedValue(mockOrder),
+            appendOrderItems: jest.fn().mockResolvedValue(mockOrder),
+            voidOrderItem: jest.fn().mockResolvedValue(mockOrder),
             updateOrderStatus: jest.fn().mockResolvedValue({
               ...mockOrder,
               status: 'preparing',
@@ -129,5 +131,28 @@ describe('OrdersController', () => {
   it('should delete order', async () => {
     const result = await controller.deleteOrder('ord-1');
     expect(result.success).toBe(true);
+  });
+
+  it('should append order items (POST /orders/:id/items)', async () => {
+    const result = await controller.appendOrderItems('ord-1', {
+      items: [
+        {
+          item_name: 'Garlic Bread',
+          quantity: 1,
+          unit_price: 300.0,
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.message).toBe('Order items appended successfully');
+  });
+
+  it('should void order item (POST /orders/:id/items/:itemId/void)', async () => {
+    const result = await controller.voidOrderItem('ord-1', 'item-1', {
+      reason: 'Guest changed mind',
+      voided_by: 'Cashier Elena',
+    });
+    expect(result.success).toBe(true);
+    expect(result.message).toBe('Order item voided successfully');
   });
 });

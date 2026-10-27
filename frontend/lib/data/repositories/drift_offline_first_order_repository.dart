@@ -151,6 +151,11 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
               isCancelled: Value(item.isCancelled),
               cancelledAt: Value(item.cancelledAt),
               cancelReason: Value(item.cancelReason),
+              voidedAt: Value(item.voidedAt),
+              voidedBy: Value(item.voidedBy),
+              supersedesItemId: Value(item.supersedesItemId),
+              createdByDeviceId: Value(item.createdByDeviceId ?? _deviceId),
+              clientCreatedAt: Value(item.clientCreatedAt ?? DateTime.now()),
               syncStatus: const Value('pending_insert'),
               serverVersion: const Value(1),
             ),
@@ -268,31 +273,96 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
         ),
       );
 
-      // Re-write order items if provided
+      // Append-only ledger updates: diff -> ledger ops (D-05 / SYNC-032)
       if (order.items.isNotEmpty) {
-        await (_db.delete(_db.localOrderItems)..where((t) => t.orderId.equals(order.id))).go();
+        final existingItems = await _db.ordersDao.getOrderItems(order.id);
+        final existingMap = {for (final i in existingItems) i.id: i};
+
         for (final item in order.items) {
-          final itemId = (item.id != null && item.id!.isNotEmpty && item.id!.length == 36)
-              ? item.id!
-              : _uuid.v7();
-          await _db.into(_db.localOrderItems).insert(
-            LocalOrderItemsCompanion(
-              id: Value(itemId),
-              orderId: Value(order.id),
-              menuItemId: Value(item.item.id.isNotEmpty ? item.item.id : null),
-              itemName: Value(item.item.name),
-              sizeName: Value(item.selectedSize),
-              unitPrice: Value(item.unitPrice),
-              quantity: Value(item.quantity),
-              subtotal: Value(item.totalPrice),
-              notes: Value(item.notes.isNotEmpty ? item.notes : null),
-              isCancelled: Value(item.isCancelled),
-              cancelledAt: Value(item.cancelledAt),
-              cancelReason: Value(item.cancelReason),
-              syncStatus: const Value('pending_update'),
-              serverVersion: const Value(1),
-            ),
-          );
+          if (item.id != null && existingMap.containsKey(item.id)) {
+            final oldItem = existingMap[item.id]!;
+            final isVoidedOrCancelled = item.isCancelled || item.voidedAt != null;
+            final wasVoidedOrCancelled = oldItem.isCancelled || oldItem.voidedAt != null;
+
+            if (isVoidedOrCancelled && !wasVoidedOrCancelled) {
+              final voidTime = item.voidedAt ?? item.cancelledAt ?? DateTime.now();
+              await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(item.id!))).write(
+                LocalOrderItemsCompanion(
+                  isCancelled: const Value(true),
+                  cancelledAt: Value(voidTime),
+                  cancelReason: Value(item.cancelReason),
+                  voidedAt: Value(voidTime),
+                  voidedBy: Value(item.voidedBy ?? item.cancelledBy ?? 'LOCAL_EDIT'),
+                  syncStatus: const Value('pending_update'),
+                ),
+              );
+            } else if (!isVoidedOrCancelled &&
+                (oldItem.quantity != item.quantity ||
+                    oldItem.sizeName != item.selectedSize ||
+                    oldItem.notes != (item.notes.isNotEmpty ? item.notes : null) ||
+                    oldItem.unitPrice != item.unitPrice)) {
+              // Item modified: void old item and insert new superseding item
+              final voidTime = DateTime.now();
+              await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(item.id!))).write(
+                LocalOrderItemsCompanion(
+                  isCancelled: const Value(true),
+                  cancelledAt: Value(voidTime),
+                  cancelReason: const Value('MODIFIED'),
+                  voidedAt: Value(voidTime),
+                  voidedBy: const Value('LOCAL_EDIT'),
+                  syncStatus: const Value('pending_update'),
+                ),
+              );
+
+              final newId = _uuid.v7();
+              await _db.into(_db.localOrderItems).insert(
+                LocalOrderItemsCompanion(
+                  id: Value(newId),
+                  orderId: Value(order.id),
+                  menuItemId: Value(item.item.id.isNotEmpty ? item.item.id : null),
+                  itemName: Value(item.item.name),
+                  sizeName: Value(item.selectedSize),
+                  unitPrice: Value(item.unitPrice),
+                  quantity: Value(item.quantity),
+                  subtotal: Value(item.totalPrice),
+                  notes: Value(item.notes.isNotEmpty ? item.notes : null),
+                  supersedesItemId: Value(oldItem.id),
+                  createdByDeviceId: Value(_deviceId),
+                  clientCreatedAt: Value(DateTime.now()),
+                  syncStatus: const Value('pending_insert'),
+                  serverVersion: const Value(1),
+                ),
+              );
+            }
+          } else {
+            // New item appended
+            final itemId = (item.id != null && item.id!.isNotEmpty && item.id!.length == 36)
+                ? item.id!
+                : _uuid.v7();
+            await _db.into(_db.localOrderItems).insert(
+              LocalOrderItemsCompanion(
+                id: Value(itemId),
+                orderId: Value(order.id),
+                menuItemId: Value(item.item.id.isNotEmpty ? item.item.id : null),
+                itemName: Value(item.item.name),
+                sizeName: Value(item.selectedSize),
+                unitPrice: Value(item.unitPrice),
+                quantity: Value(item.quantity),
+                subtotal: Value(item.totalPrice),
+                notes: Value(item.notes.isNotEmpty ? item.notes : null),
+                isCancelled: Value(item.isCancelled),
+                cancelledAt: Value(item.cancelledAt),
+                cancelReason: Value(item.cancelReason),
+                voidedAt: Value(item.voidedAt),
+                voidedBy: Value(item.voidedBy),
+                supersedesItemId: Value(item.supersedesItemId),
+                createdByDeviceId: Value(item.createdByDeviceId ?? _deviceId),
+                clientCreatedAt: Value(item.clientCreatedAt ?? DateTime.now()),
+                syncStatus: const Value('pending_insert'),
+                serverVersion: const Value(1),
+              ),
+            );
+          }
         }
       }
 
@@ -475,6 +545,128 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
     });
   }
 
+  @override
+  Future<OrderItem> addOrderItem(String orderId, OrderItem item) async {
+    return await _db.transaction(() async {
+      final itemId = (item.id != null && item.id!.isNotEmpty && item.id!.length == 36)
+          ? item.id!
+          : _uuid.v7();
+      final now = DateTime.now();
+      final effectiveItem = item.copyWith(
+        id: itemId,
+        createdByDeviceId: item.createdByDeviceId ?? _deviceId,
+        clientCreatedAt: item.clientCreatedAt ?? now,
+      );
+
+      await _db.into(_db.localOrderItems).insert(
+        LocalOrderItemsCompanion(
+          id: Value(effectiveItem.id!),
+          orderId: Value(orderId),
+          menuItemId: Value(effectiveItem.item.id.isNotEmpty ? effectiveItem.item.id : null),
+          itemName: Value(effectiveItem.item.name),
+          sizeName: Value(effectiveItem.selectedSize),
+          unitPrice: Value(effectiveItem.unitPrice),
+          quantity: Value(effectiveItem.quantity),
+          subtotal: Value(effectiveItem.totalPrice),
+          notes: Value(effectiveItem.notes.isNotEmpty ? effectiveItem.notes : null),
+          supersedesItemId: Value(effectiveItem.supersedesItemId),
+          createdByDeviceId: Value(effectiveItem.createdByDeviceId),
+          clientCreatedAt: Value(effectiveItem.clientCreatedAt),
+          syncStatus: const Value('pending_insert'),
+          serverVersion: const Value(1),
+        ),
+      );
+
+      final allItems = await _db.ordersDao.getOrderItems(orderId);
+      final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null);
+      final newSubtotal = activeItems.fold<double>(0.0, (sum, i) => sum + i.subtotal);
+
+      final existingOrder = await _db.ordersDao.getOrderById(orderId);
+      if (existingOrder != null) {
+        final newGrandTotal = (newSubtotal - existingOrder.discountAmount + existingOrder.taxAmount).clamp(0.0, double.infinity);
+        await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
+          LocalOrdersCompanion(
+            subtotal: Value(newSubtotal),
+            grandTotal: Value(newGrandTotal),
+            syncStatus: const Value('pending_update'),
+            clientUpdatedAt: Value(now),
+          ),
+        );
+      }
+
+      final opId = _uuid.v7();
+      await _db.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: Value(_deviceId),
+          entityType: const Value('order'),
+          entityId: Value(orderId),
+          operationType: const Value('ITEM_ADD'),
+          dependencyOrder: const Value(2),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode(effectiveItem.toCreateItemDto())),
+          createdAt: Value(now),
+        ),
+      );
+
+      return effectiveItem;
+    });
+  }
+
+  @override
+  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+    await _db.transaction(() async {
+      final now = DateTime.now();
+      await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+        LocalOrderItemsCompanion(
+          isCancelled: const Value(true),
+          cancelledAt: Value(now),
+          cancelReason: Value(reason),
+          voidedAt: Value(now),
+          voidedBy: Value(voidedBy ?? 'USER'),
+          syncStatus: const Value('pending_update'),
+        ),
+      );
+
+      final allItems = await _db.ordersDao.getOrderItems(orderId);
+      final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null);
+      final newSubtotal = activeItems.fold<double>(0.0, (sum, i) => sum + i.subtotal);
+
+      final existingOrder = await _db.ordersDao.getOrderById(orderId);
+      if (existingOrder != null) {
+        final newGrandTotal = (newSubtotal - existingOrder.discountAmount + existingOrder.taxAmount).clamp(0.0, double.infinity);
+        await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
+          LocalOrdersCompanion(
+            subtotal: Value(newSubtotal),
+            grandTotal: Value(newGrandTotal),
+            syncStatus: const Value('pending_update'),
+            clientUpdatedAt: Value(now),
+          ),
+        );
+      }
+
+      final opId = _uuid.v7();
+      await _db.outboxDao.insertEntry(
+        SyncOutboxCompanion(
+          operationId: Value(opId),
+          deviceId: Value(_deviceId),
+          entityType: const Value('order'),
+          entityId: Value(orderId),
+          operationType: const Value('ITEM_VOID'),
+          dependencyOrder: const Value(2),
+          status: const Value(SyncOutboxStatus.pending),
+          payload: Value(jsonEncode({
+            'item_id': itemId,
+            'voided_by': voidedBy ?? 'USER',
+            'reason': reason,
+            'voided_at': now.toIso8601String(),
+          })),
+          createdAt: Value(now),
+        ),
+      );
+    });
+  }
+
   /// Reactive stream of all orders from local SQLite WAL
   Stream<List<OrderModel>> watchAllOrders() {
     return _db.ordersDao.watchAllOrders().asyncMap((orders) async {
@@ -540,9 +732,15 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           extraToppings: const [],
           notes: i.notes ?? '',
           backendUnitPrice: i.unitPrice,
-          isCancelled: i.isCancelled,
-          cancelledAt: i.cancelledAt,
+          isCancelled: i.isCancelled || i.voidedAt != null,
+          cancelledAt: i.cancelledAt ?? i.voidedAt,
           cancelReason: i.cancelReason,
+          cancelledBy: i.voidedBy,
+          voidedAt: i.voidedAt,
+          voidedBy: i.voidedBy,
+          supersedesItemId: i.supersedesItemId,
+          createdByDeviceId: i.createdByDeviceId,
+          clientCreatedAt: i.clientCreatedAt,
         );
       }).toList(),
       createdAt: o.createdAt,

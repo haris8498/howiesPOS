@@ -66,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? openEncryptedConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -77,6 +77,14 @@ class AppDatabase extends _$AppDatabase {
           // Version 2: SYNC-012/TBL-12: Add is_deleted to local_restaurant_tables
           if (from < 2) {
             await m.addColumn(localRestaurantTables, localRestaurantTables.isDeleted);
+          }
+          // Version 3: D-05 (SYNC-032): Order line-item ledger columns
+          if (from < 3) {
+            await m.addColumn(localOrderItems, localOrderItems.voidedAt);
+            await m.addColumn(localOrderItems, localOrderItems.voidedBy);
+            await m.addColumn(localOrderItems, localOrderItems.supersedesItemId);
+            await m.addColumn(localOrderItems, localOrderItems.createdByDeviceId);
+            await m.addColumn(localOrderItems, localOrderItems.clientCreatedAt);
           }
         },
         beforeOpen: (OpeningDetails details) async {

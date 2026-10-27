@@ -419,10 +419,20 @@ model OrderItem {
   cancel_reason  String?   @map("cancel_reason") @db.VarChar(255)
   cancelled_by   String?   @map("cancelled_by") @db.VarChar(50)
 
+  // Append-only line-item ledger (SYNC-032 / D-05)
+  voidedAt             DateTime? @map("voided_at") @db.Timestamp()
+  voidedBy             String?   @map("voided_by") @db.VarChar(50)
+  supersedesItemId     String?   @map("supersedes_item_id") @db.VarChar(36)
+  createdByDeviceId    String?   @map("created_by_device_id") @db.VarChar(50)
+  clientCreatedAt      DateTime? @map("client_created_at") @db.Timestamp()
+
   // Relationships
   order          Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
   menu_item      MenuItem? @relation(fields: [menu_item_id], references: [id])
 
+  @@index([order_id])
+  @@index([supersedesItemId])
+  @@index([voidedAt])
   @@map("order_items")
 }
 

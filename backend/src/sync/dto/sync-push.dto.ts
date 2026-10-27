@@ -25,7 +25,7 @@ export class SyncMutationDto {
 
   @IsString()
   @IsNotEmpty({ message: 'operation_type is required' })
-  @IsIn(['INSERT', 'UPDATE', 'DELETE', 'insert', 'update', 'delete'])
+  @IsIn(['INSERT', 'UPDATE', 'DELETE', 'ITEM_ADD', 'ITEM_VOID', 'insert', 'update', 'delete', 'item_add', 'item_void'])
   operation_type!: string;
 
   @IsInt()

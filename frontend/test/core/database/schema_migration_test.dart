@@ -14,8 +14,8 @@ void main() {
       await db.close();
     });
 
-    test('Schema version is 2 and all 20 tables are initialized with is_deleted column', () async {
-      expect(db.schemaVersion, equals(2));
+    test('Schema version is 3 and all 20 tables are initialized with D-05 ledger columns', () async {
+      expect(db.schemaVersion, equals(3));
 
       // Execute query to ensure database opens and schema migration runs
       final tables = await db.customSelect(
@@ -57,6 +57,15 @@ void main() {
       final columnNames = tableColumns.map((row) => row.read<String>('name')).toSet();
       expect(columnNames.contains('is_deleted'), isTrue,
           reason: 'Expected is_deleted column to exist on local_restaurant_tables');
+
+      // Verify D-05 (SYNC-032) ledger columns on local_order_items
+      final orderItemColumns = await db.customSelect("PRAGMA table_info('local_order_items');").get();
+      final itemColNames = orderItemColumns.map((row) => row.read<String>('name')).toSet();
+      expect(itemColNames.contains('voided_at'), isTrue);
+      expect(itemColNames.contains('voided_by'), isTrue);
+      expect(itemColNames.contains('supersedes_item_id'), isTrue);
+      expect(itemColNames.contains('created_by_device_id'), isTrue);
+      expect(itemColNames.contains('client_created_at'), isTrue);
     });
 
     test('beforeOpen enforces foreign keys PRAGMA', () async {

@@ -6,10 +6,11 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { Order, Prisma } from '@prisma/client';
+import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { v7 as uuidv7 } from 'uuid';
+import { CreateOrderDto, CreateOrderItemDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
@@ -467,21 +468,48 @@ export class OrdersService {
         }
       }
 
-      // 8. Create order items
+      // 8. Create order items (Task 1: preserve client UUID v7 & ledger fields)
       await tx.orderItem.createMany({
-        data: sanitizedItems.map((item) => ({
-          ...(item.id ? { id: item.id } : {}),
-          order_id: createdOrder.id,
-          menu_item_id: item.menu_item_id,
-          item_name: item.item_name,
-          quantity: item.quantity,
-          selected_size: item.selected_size ?? 'Regular',
-          selected_crust: item.selected_crust ?? 'Original',
-          extra_toppings: item.extra_toppings ?? '',
-          unit_price: item.unit_price,
-          total_price: this.round(item.unit_price * item.quantity),
-          notes: item.notes ?? '',
-        })),
+        data: sanitizedItems.map((item) => {
+          const isVoided = Boolean(item.is_cancelled || item.voidedAt || item.voided_at);
+          const voidedDate = item.voidedAt
+            ? new Date(item.voidedAt)
+            : item.voided_at
+            ? new Date(item.voided_at)
+            : isVoided
+            ? new Date()
+            : null;
+          return {
+            ...(item.id ? { id: item.id } : {}),
+            order_id: createdOrder.id,
+            menu_item_id: item.menu_item_id,
+            item_name: item.item_name,
+            quantity: item.quantity,
+            selected_size: item.selected_size ?? 'Regular',
+            selected_crust: item.selected_crust ?? 'Original',
+            extra_toppings: item.extra_toppings ?? '',
+            unit_price: item.unit_price,
+            total_price: this.round(item.unit_price * item.quantity),
+            notes: item.notes ?? '',
+            is_cancelled: isVoided,
+            cancelled_at: isVoided ? (item.cancelled_at ? new Date(item.cancelled_at) : voidedDate) : null,
+            cancel_reason: item.cancel_reason ?? null,
+            cancelled_by: item.cancelled_by ?? null,
+            voidedAt: voidedDate,
+            voidedBy: item.voidedBy || item.voided_by || (isVoided ? (item.cancelled_by ?? 'staff') : null),
+            supersedesItemId: item.supersedesItemId || (item as any).supersedes_item_id || null,
+            createdByDeviceId: item.createdByDeviceId || (item as any).created_by_device_id || null,
+            clientCreatedAt: item.clientCreatedAt
+              ? new Date(item.clientCreatedAt)
+              : (item as any).client_created_at
+              ? new Date((item as any).client_created_at)
+              : item.created_at
+              ? new Date(item.created_at)
+              : dto.created_at
+              ? new Date(dto.created_at)
+              : new Date(),
+          };
+        }),
       });
 
       // 9. Payments
@@ -585,8 +613,9 @@ export class OrdersService {
         dto.subtotal !== undefined ? this.round(dto.subtotal) : Number(existing.subtotal);
 
       if (dto.items && dto.items.length > 0) {
+        const fullReplace = dto.fullReplace === true || (dto as any).full_replace === true;
         const existingItems = existing.order_items || [];
-        const existingItemsMap = new Map(existingItems.map((i) => [i.id, i]));
+        const existingItemsMap = new Map(existingItems.map((i: any) => [i.id, i]));
         const incomingItemIds = new Set<string>();
 
         const sanitizedItems = await Promise.all(
@@ -606,32 +635,93 @@ export class OrdersService {
 
         for (const item of sanitizedItems) {
           if (item.id && existingItemsMap.has(item.id)) {
-            // Update existing item in-place, preserving its ID and audit properties
-            incomingItemIds.add(item.id);
             const prev = existingItemsMap.get(item.id)!;
             const unitPrice = item.unit_price !== undefined ? item.unit_price : Number(prev.unit_price);
-            await tx.orderItem.update({
-              where: { id: item.id },
-              data: {
-                menu_item_id: item.menu_item_id ?? prev.menu_item_id,
-                item_name: item.item_name ?? prev.item_name,
-                quantity: item.quantity,
-                selected_size: item.selected_size ?? prev.selected_size,
-                selected_crust: item.selected_crust ?? prev.selected_crust,
-                extra_toppings: item.extra_toppings ?? prev.extra_toppings,
-                unit_price: new Prisma.Decimal(unitPrice),
-                total_price: new Prisma.Decimal(this.round(unitPrice * item.quantity)),
-                notes: item.notes ?? prev.notes,
-                is_cancelled: item.is_cancelled !== undefined ? item.is_cancelled : prev.is_cancelled,
-                cancelled_at: item.is_cancelled ? (prev.cancelled_at || new Date()) : (item.is_cancelled === false ? null : prev.cancelled_at),
-                cancel_reason: item.cancel_reason ?? prev.cancel_reason,
-                cancelled_by: item.cancelled_by ?? prev.cancelled_by,
-              },
-            });
+            const isVoidRequested = Boolean(
+              item.is_cancelled === true ||
+              item.voidedAt !== undefined ||
+              item.voided_at !== undefined
+            );
+            const isDetailsChanged =
+              (item.quantity !== undefined && item.quantity !== prev.quantity) ||
+              (item.unit_price !== undefined && Number(item.unit_price) !== Number(prev.unit_price)) ||
+              (item.selected_size !== undefined && item.selected_size !== prev.selected_size) ||
+              (item.selected_crust !== undefined && item.selected_crust !== prev.selected_crust);
+
+            if (isVoidRequested) {
+              incomingItemIds.add(item.id);
+              if (!prev.voidedAt) {
+                const now = new Date();
+                await tx.orderItem.update({
+                  where: { id: item.id },
+                  data: {
+                    voidedAt: now,
+                    voidedBy: item.cancelled_by || item.voided_by || (item as any).voidedBy || 'staff',
+                    is_cancelled: true,
+                    cancelled_at: now,
+                    cancel_reason: item.cancel_reason || 'Voided',
+                    cancelled_by: item.cancelled_by || item.voided_by || (item as any).voidedBy || 'staff',
+                  },
+                });
+              }
+            } else if (prev.voidedAt) {
+              // Task 3: Void always wins over a live copy! Never revive a voided item.
+              incomingItemIds.add(item.id);
+            } else if (isDetailsChanged) {
+              // Task 3: Ledger semantics: items are never updated or deleted.
+              // Quantity/modifier change = new item with supersedesItemId + void of old one.
+              const now = new Date();
+              await tx.orderItem.update({
+                where: { id: prev.id },
+                data: {
+                  voidedAt: now,
+                  voidedBy: item.cancelled_by || item.voided_by || (item as any).voidedBy || 'system',
+                  is_cancelled: true,
+                  cancelled_at: now,
+                  cancel_reason: item.cancel_reason || 'Superseded by updated item',
+                  cancelled_by: item.cancelled_by || item.voided_by || (item as any).voidedBy || 'system',
+                },
+              });
+
+              const newId = uuidv7();
+              const createdNew = await tx.orderItem.create({
+                data: {
+                  id: newId,
+                  order_id: id,
+                  menu_item_id: item.menu_item_id ?? prev.menu_item_id,
+                  item_name: item.item_name ?? prev.item_name,
+                  quantity: item.quantity,
+                  selected_size: item.selected_size ?? prev.selected_size,
+                  selected_crust: item.selected_crust ?? prev.selected_crust,
+                  extra_toppings: item.extra_toppings ?? prev.extra_toppings,
+                  unit_price: new Prisma.Decimal(unitPrice),
+                  total_price: new Prisma.Decimal(this.round(unitPrice * item.quantity)),
+                  notes: item.notes ?? prev.notes,
+                  is_cancelled: false,
+                  voidedAt: null,
+                  supersedesItemId: prev.id,
+                  createdByDeviceId: item.createdByDeviceId || (item as any).created_by_device_id || null,
+                  clientCreatedAt: new Date(),
+                },
+              });
+              incomingItemIds.add(createdNew.id);
+            } else {
+              // Unchanged active item: preserve as-is
+              incomingItemIds.add(item.id);
+              if (item.notes !== undefined && item.notes !== prev.notes) {
+                await tx.orderItem.update({
+                  where: { id: item.id },
+                  data: { notes: item.notes },
+                });
+              }
+            }
           } else {
-            // Create newly added item
+            // Task 1: Client generates UUID v7 ids for every new line item; server stores that id
+            const itemId = item.id ? item.id : uuidv7();
+            const isVoided = Boolean(item.is_cancelled || item.voidedAt || item.voided_at);
             const createdItem = await tx.orderItem.create({
               data: {
+                id: itemId,
                 order_id: id,
                 menu_item_id: item.menu_item_id,
                 item_name: item.item_name,
@@ -642,30 +732,45 @@ export class OrdersService {
                 unit_price: new Prisma.Decimal(item.unit_price),
                 total_price: new Prisma.Decimal(this.round(item.unit_price * item.quantity)),
                 notes: item.notes ?? '',
-                is_cancelled: item.is_cancelled ?? false,
-                cancelled_at: item.is_cancelled ? new Date() : null,
+                is_cancelled: isVoided,
+                cancelled_at: isVoided ? new Date() : null,
                 cancel_reason: item.cancel_reason ?? null,
                 cancelled_by: item.cancelled_by ?? null,
+                voidedAt: isVoided ? new Date() : null,
+                voidedBy: isVoided ? (item.cancelled_by || item.voided_by || 'staff') : null,
+                supersedesItemId: item.supersedesItemId || (item as any).supersedes_item_id || null,
+                createdByDeviceId: item.createdByDeviceId || (item as any).created_by_device_id || null,
+                clientCreatedAt: item.clientCreatedAt ? new Date(item.clientCreatedAt) : new Date(),
               },
             });
             incomingItemIds.add(createdItem.id);
           }
         }
 
-        // Never delete cancelled items (required for receipt strikethrough audit and historical reports)
-        // Only delete active un-cancelled items that were removed from the updated item list
-        for (const existingItem of existingItems) {
-          if (!incomingItemIds.has(existingItem.id) && !existingItem.is_cancelled) {
-            await tx.orderItem.delete({ where: { id: existingItem.id } });
+        // SYNC-032 / D-05: Items absent from the payload are NOT removed unless explicit fullReplace: true
+        if (fullReplace) {
+          for (const existingItem of existingItems) {
+            if (!incomingItemIds.has(existingItem.id) && !existingItem.voidedAt && !existingItem.is_cancelled) {
+              const now = new Date();
+              await tx.orderItem.update({
+                where: { id: existingItem.id },
+                data: {
+                  voidedAt: now,
+                  voidedBy: 'fullReplace',
+                  is_cancelled: true,
+                  cancelled_at: now,
+                  cancel_reason: 'Removed via full-replace order update',
+                },
+              });
+            }
           }
         }
 
-        // Recalculate active subtotal from non-cancelled items
-        const allCurrentItems = await tx.orderItem.findMany({ where: { order_id: id } });
-        const activeItems = allCurrentItems.filter((i) => !i.is_cancelled);
+        // Recalculate active subtotal from getActiveItems (Task 5)
+        const activeItems = await this.getActiveItems(id, tx);
         if (dto.subtotal === undefined) {
           subtotal = this.round(
-            activeItems.reduce((sum, i) => sum + Number(i.total_price), 0),
+            activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
           );
         }
       }
@@ -997,6 +1102,244 @@ export class OrdersService {
   // -------------------------------------------------------------------------
   // CANCEL ORDER ITEM
   // -------------------------------------------------------------------------
+
+  /**
+   * Expose getActiveItems(orderId, tx) in the orders service as the single source
+   * of active items per SYNC-032 / D-05. Active items have voidedAt == null && is_cancelled == false.
+   */
+  async getActiveItems(orderId: string, tx?: Prisma.TransactionClient): Promise<OrderItem[]> {
+    const client = tx || this.prisma;
+    return client.orderItem.findMany({
+      where: {
+        order_id: orderId,
+        voidedAt: null,
+        is_cancelled: false,
+      },
+      orderBy: {
+        clientCreatedAt: 'asc',
+      },
+    });
+  }
+
+  /**
+   * Append batch of items to an order (POST /orders/:id/items).
+   * Ledger semantics: Items are appended with client UUID v7 IDs (or newly generated UUID v7).
+   * Existing active items are never overwritten or deleted.
+   * Merge rule: set-union by id; a void always wins over a live copy. Inserts are idempotent.
+   */
+  async appendOrderItems(
+    orderId: string,
+    items: CreateOrderItemDto[],
+    deviceId?: string,
+    txInput?: Prisma.TransactionClient,
+  ): Promise<OrderWithDetails> {
+    const execute = async (tx: Prisma.TransactionClient) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: ORDER_INCLUDE,
+      });
+      if (!order) {
+        throw new NotFoundException(`Order with ID '${orderId}' not found`);
+      }
+
+      const existingItems = await tx.orderItem.findMany({
+        where: { order_id: orderId },
+      });
+      const existingMap = new Map(existingItems.map((i: any) => [i.id, i]));
+
+      for (const item of items) {
+        const itemId = item.id ? item.id : uuidv7();
+        if (existingMap.has(itemId)) {
+          // Idempotent: ON CONFLICT DO NOTHING
+          // Merge rule: a void always wins over a live copy
+          const existing = existingMap.get(itemId)!;
+          const isIncomingVoided = Boolean(item.voidedAt || item.voided_at || item.is_cancelled);
+          if (isIncomingVoided && !existing.voidedAt) {
+            const now = new Date();
+            await tx.orderItem.update({
+              where: { id: itemId },
+              data: {
+                voidedAt: item.voidedAt ? new Date(item.voidedAt) : (item.voided_at ? new Date(item.voided_at) : now),
+                voidedBy: item.voidedBy || item.voided_by || 'staff',
+                is_cancelled: true,
+                cancelled_at: item.cancelled_at ? new Date(item.cancelled_at) : now,
+                cancel_reason: item.cancel_reason || 'Voided',
+                cancelled_by: item.cancelled_by || item.voidedBy || item.voided_by || 'staff',
+              },
+            });
+          }
+          continue;
+        }
+
+        let validMenuItemId: string | undefined = undefined;
+        if (item.menu_item_id) {
+          try {
+            const menuItem = await tx.menuItem.findUnique({ where: { id: item.menu_item_id } });
+            if (menuItem) validMenuItemId = menuItem.id;
+          } catch {
+            validMenuItemId = undefined;
+          }
+        }
+
+        const isVoided = Boolean(item.voidedAt || item.voided_at || item.is_cancelled);
+        const voidedAtDate = item.voidedAt
+          ? new Date(item.voidedAt)
+          : item.voided_at
+          ? new Date(item.voided_at)
+          : isVoided
+          ? new Date()
+          : null;
+
+        await tx.orderItem.create({
+          data: {
+            id: itemId,
+            order_id: orderId,
+            menu_item_id: validMenuItemId,
+            item_name: item.item_name,
+            quantity: item.quantity,
+            selected_size: item.selected_size ?? 'Regular',
+            selected_crust: item.selected_crust ?? 'Original',
+            extra_toppings: item.extra_toppings ?? '',
+            unit_price: new Prisma.Decimal(item.unit_price),
+            total_price: new Prisma.Decimal(this.round(item.unit_price * item.quantity)),
+            notes: item.notes ?? '',
+            is_cancelled: isVoided,
+            cancelled_at: isVoided ? (item.cancelled_at ? new Date(item.cancelled_at) : voidedAtDate) : null,
+            cancel_reason: item.cancel_reason ?? null,
+            cancelled_by: item.cancelled_by ?? null,
+            voidedAt: voidedAtDate,
+            voidedBy: item.voidedBy || item.voided_by || (isVoided ? (item.cancelled_by ?? 'staff') : null),
+            supersedesItemId: item.supersedesItemId || item.supersedes_item_id || null,
+            createdByDeviceId: item.createdByDeviceId || item.created_by_device_id || deviceId || null,
+            clientCreatedAt: item.clientCreatedAt
+              ? new Date(item.clientCreatedAt)
+              : item.client_created_at
+              ? new Date(item.client_created_at)
+              : new Date(),
+          },
+        });
+      }
+
+      // Recompute subtotal from active items
+      const activeItems = await this.getActiveItems(orderId, tx);
+      const subtotal = this.round(
+        activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
+      );
+
+      const discountPercentage = Number(order.discount_percentage);
+      const discountAmount =
+        discountPercentage > 0
+          ? this.round((subtotal * discountPercentage) / 100)
+          : Number(order.discount_amount);
+      const taxableAmount = Math.max(0, subtotal - discountAmount);
+      const taxAmount = Number(order.tax_amount);
+      const grandTotal = this.round(taxableAmount + taxAmount);
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          subtotal: new Prisma.Decimal(subtotal),
+          grand_total: new Prisma.Decimal(grandTotal),
+          version: { increment: 1 },
+        },
+      });
+
+      const res = tx.order.findUniqueOrThrow
+        ? await tx.order.findUniqueOrThrow({
+            where: { id: orderId },
+            include: ORDER_INCLUDE,
+          })
+        : await tx.order.findUnique({
+            where: { id: orderId },
+            include: ORDER_INCLUDE,
+          });
+      return res as OrderWithDetails;
+    };
+
+    return txInput ? execute(txInput) : this.prisma.$transaction(execute);
+  }
+
+  /**
+   * Void an order line item (POST /orders/:id/items/:itemId/void).
+   * Ledger semantics: Items are never deleted. Voiding marks voidedAt and is_cancelled.
+   * If already voided, returns idempotently.
+   */
+  async voidOrderItem(
+    orderId: string,
+    itemId: string,
+    voidedBy?: string,
+    reason?: string,
+    txInput?: Prisma.TransactionClient,
+  ): Promise<OrderWithDetails> {
+    const execute = async (tx: Prisma.TransactionClient) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: ORDER_INCLUDE,
+      });
+      if (!order) {
+        throw new NotFoundException(`Order with ID '${orderId}' not found`);
+      }
+
+      const item = await tx.orderItem.findUnique({
+        where: { id: itemId },
+      });
+      if (!item || item.order_id !== orderId) {
+        throw new NotFoundException(`Order item with ID '${itemId}' not found in order '${orderId}'`);
+      }
+
+      if (!item.voidedAt) {
+        const now = new Date();
+        await tx.orderItem.update({
+          where: { id: itemId },
+          data: {
+            voidedAt: now,
+            voidedBy: voidedBy || 'staff',
+            is_cancelled: true,
+            cancelled_at: now,
+            cancel_reason: reason || 'Voided',
+            cancelled_by: voidedBy || 'staff',
+          },
+        });
+      }
+
+      const activeItems = await this.getActiveItems(orderId, tx);
+      const subtotal = this.round(
+        activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
+      );
+
+      const discountPercentage = Number(order.discount_percentage);
+      const discountAmount =
+        discountPercentage > 0
+          ? this.round((subtotal * discountPercentage) / 100)
+          : Number(order.discount_amount);
+      const taxableAmount = Math.max(0, subtotal - discountAmount);
+      const taxAmount = Number(order.tax_amount);
+      const grandTotal = this.round(taxableAmount + taxAmount);
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          subtotal: new Prisma.Decimal(subtotal),
+          grand_total: new Prisma.Decimal(grandTotal),
+          version: { increment: 1 },
+        },
+      });
+
+      const res = tx.order.findUniqueOrThrow
+        ? await tx.order.findUniqueOrThrow({
+            where: { id: orderId },
+            include: ORDER_INCLUDE,
+          })
+        : await tx.order.findUnique({
+            where: { id: orderId },
+            include: ORDER_INCLUDE,
+          });
+      return res as OrderWithDetails;
+    };
+
+    return txInput ? execute(txInput) : this.prisma.$transaction(execute);
+  }
+
   async cancelOrderItem(
     orderId: string,
     dto: { item_id: string; cancel_quantity?: number; reason?: string; cancelled_by?: string },

@@ -19,6 +19,137 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     return into(syncOutbox).insert(entry);
   }
 
+  /// Checks whether any ancestor mutation in the dependency chain ended in FAILED_FATAL or QUARANTINED.
+  Future<bool> hasFatalAncestor(SyncOutboxEntry entry, {Set<String>? visited}) async {
+    final visitedOpIds = visited ?? <String>{};
+    if (visitedOpIds.contains(entry.operationId)) {
+      return false; // Break dependency cycles
+    }
+    visitedOpIds.add(entry.operationId);
+
+    // 1. Check explicit dependency field (dependsOnOperationId)
+    if (entry.dependsOnOperationId != null) {
+      final parent = await getEntryByOperationId(entry.dependsOnOperationId!);
+      if (parent != null) {
+        if (parent.status == SyncOutboxStatus.failedFatal ||
+            parent.status == statusQuarantined ||
+            parent.status == statusDeadLetter) {
+          return true;
+        }
+        // Transitively check grandparent
+        if (await hasFatalAncestor(parent, visited: visitedOpIds)) {
+          return true;
+        }
+      }
+    }
+
+    // 2. Check same entity aggregate (earlier mutation on the same entity that failed fatally)
+    final fatalEntitySibling = await (select(syncOutbox)
+          ..where((t) =>
+              t.entityType.equals(entry.entityType) &
+              t.entityId.equals(entry.entityId) &
+              t.id.isSmallerThanValue(entry.id) &
+              (t.status.equals(SyncOutboxStatus.failedFatal) |
+                  t.status.equals(statusQuarantined) |
+                  t.status.equals(statusDeadLetter)))
+          ..limit(1))
+        .getSingleOrNull();
+
+    if (fatalEntitySibling != null) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /// Cascades a fatal failure from an ancestor mutation to all its dependent children.
+  /// Quarantines dependent children with status FAILED_FATAL and reason PARENT_FAILED_FATAL.
+  Future<int> cascadeFatalChildren(
+    String parentOperationId, {
+    String reason = 'PARENT_FAILED_FATAL',
+    Set<String>? visitedOperationIds,
+  }) async {
+    final visited = visitedOperationIds ?? <String>{};
+    if (visited.contains(parentOperationId)) {
+      return 0;
+    }
+    visited.add(parentOperationId);
+
+    final parent = await getEntryByOperationId(parentOperationId);
+    if (parent == null) return 0;
+
+    const terminalStatuses = [
+      SyncOutboxStatus.synced,
+      SyncOutboxStatus.failedFatal,
+      statusQuarantined,
+      statusDeadLetter,
+    ];
+
+    // Find direct dependent children:
+    // (a) Dependent via dependsOnOperationId
+    // (b) Dependent via same entity aggregate (subsequent un-synced operations for same entity)
+    final directChildren = await (select(syncOutbox)
+          ..where((t) =>
+              (t.dependsOnOperationId.equals(parentOperationId) |
+                  (t.entityType.equals(parent.entityType) &
+                      t.entityId.equals(parent.entityId) &
+                      t.id.isBiggerThanValue(parent.id))) &
+              t.status.isNotIn(terminalStatuses)))
+        .get();
+
+    if (directChildren.isEmpty) {
+      return 0;
+    }
+
+    int cascadedCount = 0;
+    for (final child in directChildren) {
+      final conflictDetailsJson = jsonEncode({
+        'reason': reason,
+        'parentOperationId': parentOperationId,
+        'parentEntityType': parent.entityType,
+        'parentEntityId': parent.entityId,
+      });
+
+      final updated = await (update(syncOutbox)..where((t) => t.id.equals(child.id))).write(
+        SyncOutboxCompanion(
+          status: const Value(SyncOutboxStatus.failedFatal),
+          lastError: Value('PARENT_FAILED_FATAL: Dependency $parentOperationId failed fatally'),
+          conflictDetails: Value(conflictDetailsJson),
+          retryCount: const Value(99),
+        ),
+      );
+
+      if (updated > 0) {
+        cascadedCount += updated;
+
+        try {
+          await db.into(db.syncConflicts).insert(
+                SyncConflictsCompanion(
+                  id: Value(const Uuid().v7()),
+                  operationId: Value(child.operationId),
+                  entityType: Value(child.entityType),
+                  entityId: Value(child.entityId),
+                  conflictType: const Value(ConflictType.fatalError),
+                  resolutionStatus: const Value(ConflictResolutionStatus.pending),
+                  errorMessage: Value('PARENT_FAILED_FATAL: Dependency $parentOperationId failed fatally'),
+                  payload: Value(child.payload),
+                  createdAt: Value(DateTime.now()),
+                ),
+              );
+        } catch (_) {}
+
+        // Transitively cascade to children of this child
+        cascadedCount += await cascadeFatalChildren(
+          child.operationId,
+          reason: reason,
+          visitedOperationIds: visited,
+        );
+      }
+    }
+
+    return cascadedCount;
+  }
+
   /// Queries batch of entries ready for push transmission per Spec §6.1, §6.3:
   /// - Only 'PENDING' or due 'FAILED_RETRYABLE' (next_retry_at IS NULL or <= now).
   /// - Excludes 'AUTH_PAUSED' (Deviation #3), 'IN_FLIGHT', 'SYNCED', 'FAILED_FATAL', 'CONFLICT'.
@@ -55,13 +186,22 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
         (t) => OrderingTerm.asc(t.createdAt),
       ]);
 
-    if (blockedKeys.isEmpty) {
-      return (query..limit(limit)).get();
-    }
-
     final candidates = await query.get();
     final result = <SyncOutboxEntry>[];
     for (final candidate in candidates) {
+      if (candidate.dependsOnOperationId != null &&
+          await hasFatalAncestor(candidate)) {
+        await markFailedFatal(
+          candidate.id,
+          error: 'PARENT_FAILED_FATAL: Ancestor operation failed fatally',
+          conflictDetails: jsonEncode({
+            'reason': 'PARENT_FAILED_FATAL',
+            'dependsOnOperationId': candidate.dependsOnOperationId,
+          }),
+        );
+        continue;
+      }
+
       final key = '${candidate.entityType}:${candidate.entityId}';
       if (!blockedKeys.contains(key)) {
         result.add(candidate);
@@ -98,7 +238,29 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     required String error,
     required int retryCount,
     required DateTime nextRetryAt,
-  }) {
+  }) async {
+    final entry = await (select(syncOutbox)..where((t) => t.id.equals(id))).getSingleOrNull();
+    if (entry == null) return 0;
+
+    // Never overwrite an already fatal or quarantined entry back to retryable
+    if (entry.status == SyncOutboxStatus.failedFatal ||
+        entry.status == statusQuarantined ||
+        entry.status == statusDeadLetter) {
+      return 0;
+    }
+
+    // Never mark retryable if an ancestor ended in FAILED_FATAL
+    if (await hasFatalAncestor(entry)) {
+      return await markFailedFatal(
+        id,
+        error: 'PARENT_FAILED_FATAL: Ancestor operation failed fatally',
+        conflictDetails: jsonEncode({
+          'reason': 'PARENT_FAILED_FATAL',
+          'dependsOnOperationId': entry.dependsOnOperationId,
+        }),
+      );
+    }
+
     return (update(syncOutbox)..where((t) => t.id.equals(id))).write(
       SyncOutboxCompanion(
         status: const Value(SyncOutboxStatus.failedRetryable),
@@ -128,14 +290,22 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     );
   }
 
-  Future<int> markFailedFatal(int id, {required String error, String? conflictDetails}) {
-    return (update(syncOutbox)..where((t) => t.id.equals(id))).write(
+  Future<int> markFailedFatal(int id, {required String error, String? conflictDetails}) async {
+    final entry = await (select(syncOutbox)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+    final count = await (update(syncOutbox)..where((t) => t.id.equals(id))).write(
       SyncOutboxCompanion(
         status: const Value(SyncOutboxStatus.failedFatal),
         lastError: Value(error),
         conflictDetails: Value(conflictDetails),
       ),
     );
+
+    if (entry != null) {
+      await cascadeFatalChildren(entry.operationId, reason: 'PARENT_FAILED_FATAL');
+    }
+
+    return count;
   }
 
   Future<int> markConflict(int id, {required String conflictDetails}) {
@@ -161,7 +331,7 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
       'userName': userName,
       'entryIds': entryIds,
       'timestamp': DateTime.now().toIso8601String(),
-      'details': ?details,
+      'details': details,
     });
 
     await db.into(db.syncConflicts).insert(
@@ -279,6 +449,8 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     String userId = 'system',
     String userName = 'System',
   }) async {
+    final entry = await (select(syncOutbox)..where((t) => t.id.equals(id))).getSingleOrNull();
+
     final count = await (update(syncOutbox)..where((t) => t.id.equals(id))).write(
       SyncOutboxCompanion(
         status: const Value(statusQuarantined),
@@ -296,6 +468,10 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
         entryIds: [id],
         details: reason,
       );
+
+      if (entry != null) {
+        await cascadeFatalChildren(entry.operationId, reason: 'PARENT_FAILED_FATAL');
+      }
     }
 
     return count;

@@ -1551,6 +1551,149 @@ class SyncBackgroundWorker {
         if (list.isNotEmpty) await db.catalogDao.upsertRestaurantTables(list);
       }
 
+      // 10C. Active orders from Bootstrap
+      if (data['active_orders'] is List) {
+        for (final order in (data['active_orders'] as List).whereType<Map<String, dynamic>>()) {
+          final orderId = order['id']?.toString();
+          if (orderId == null || orderId.isEmpty) continue;
+
+          // 3. Local pending work wins: skip any order that has a pending/unsynced outbox mutation locally
+          if (await _hasPendingOutbox(orderId)) {
+            continue;
+          }
+
+          final existingOrder = await db.ordersDao.getOrderById(orderId);
+          if (existingOrder != null && existingOrder.syncStatus != 'synced') {
+            continue;
+          }
+
+          final recordVersion = (order['version'] as num?)?.toInt() ?? 1;
+          if (existingOrder != null && existingOrder.serverVersion > recordVersion) {
+            continue;
+          }
+
+          final serverUpdatedAt = order['updated_at'] != null
+              ? DateTime.tryParse(order['updated_at'].toString()) ?? DateTime.now()
+              : (order['created_at'] != null ? DateTime.tryParse(order['created_at'].toString()) ?? DateTime.now() : DateTime.now());
+
+          final orderCompanion = LocalOrdersCompanion(
+            id: Value(orderId),
+            orderNumber: Value(order['order_number']?.toString() ?? 'ORD-$orderId'),
+            orderType: Value(order['order_type']?.toString() ?? 'dineIn'),
+            shiftId: Value(order['shift_id']?.toString()),
+            status: Value(order['status']?.toString() ?? 'newOrder'),
+            subtotal: Value(double.tryParse(order['subtotal']?.toString() ?? '0') ?? 0.0),
+            discountPercentage: Value(double.tryParse(order['discount_percentage']?.toString() ?? '0') ?? 0.0),
+            discountAmount: Value(double.tryParse(order['discount_amount']?.toString() ?? '0') ?? 0.0),
+            taxAmount: Value(double.tryParse(order['tax_amount']?.toString() ?? '0') ?? 0.0),
+            grandTotal: Value(double.tryParse(order['grand_total']?.toString() ?? '0') ?? 0.0),
+            paymentStatus: Value(order['payment_status']?.toString() ?? 'UNPAID'),
+            isPaid: Value(order['is_paid'] == true || order['payment_status'] == 'PAID'),
+            isHeld: Value(order['is_held'] == true),
+            deviceId: Value(order['device_id']?.toString() ?? 'SERVER'),
+            createdAt: Value(order['created_at'] != null
+                ? DateTime.tryParse(order['created_at'].toString()) ?? DateTime.now()
+                : DateTime.now()),
+            serverVersion: Value(recordVersion),
+            serverUpdatedAt: Value(serverUpdatedAt),
+            syncStatus: const Value('synced'),
+          );
+
+          await db.ordersDao.upsertOrder(orderCompanion);
+
+          // Link occupied table if dine_in_detail specifies table_id
+          final dineInDetail = order['dine_in_detail'];
+          if (dineInDetail is Map<String, dynamic>) {
+            final tableId = dineInDetail['table_id']?.toString();
+            if (tableId != null && tableId.isNotEmpty) {
+              final tbl = await (db.select(db.localRestaurantTables)..where((t) => t.id.equals(tableId))).getSingleOrNull();
+              if (tbl != null && tbl.activeOrderId == null) {
+                await (db.update(db.localRestaurantTables)..where((t) => t.id.equals(tableId))).write(
+                  LocalRestaurantTablesCompanion(
+                    status: const Value('occupied'),
+                    activeOrderId: Value(orderId),
+                  ),
+                );
+              }
+            }
+          }
+
+          // Ingest items
+          final rawItems = order['order_items'] is List
+              ? (order['order_items'] as List)
+              : (order['items'] is List ? (order['items'] as List) : null);
+
+          if (rawItems != null) {
+            final existingItems = await db.ordersDao.getOrderItems(orderId);
+            final existingItemMap = {for (final item in existingItems) item.id: item};
+
+            for (final raw in rawItems) {
+              if (raw is! Map<String, dynamic>) continue;
+              final itemId = raw['id']?.toString();
+              if (itemId == null || itemId.isEmpty) continue;
+
+              final incomingVoidedAt = raw['voided_at'] != null
+                  ? DateTime.tryParse(raw['voided_at'].toString())
+                  : (raw['voidedAt'] != null ? DateTime.tryParse(raw['voidedAt'].toString()) : null);
+              final incomingCancelledAt = raw['cancelled_at'] != null
+                  ? DateTime.tryParse(raw['cancelled_at'].toString())
+                  : (raw['cancelledAt'] != null ? DateTime.tryParse(raw['cancelledAt'].toString()) : incomingVoidedAt);
+              final incomingIsVoided = raw['is_cancelled'] == true ||
+                  raw['isCancelled'] == true ||
+                  incomingVoidedAt != null ||
+                  incomingCancelledAt != null;
+
+              final existing = existingItemMap[itemId];
+              if (existing != null) {
+                final existingIsVoided = existing.isCancelled || existing.voidedAt != null;
+                // Void always wins: if existing is already voided, do NOT revive it
+                // If incoming is voided and existing is NOT voided, apply void
+                if (incomingIsVoided && !existingIsVoided) {
+                  final voidTime = incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now();
+                  await db.ordersDao.updateOrderItem(
+                    itemId,
+                    LocalOrderItemsCompanion(
+                      isCancelled: const Value(true),
+                      cancelledAt: Value(voidTime),
+                      cancelReason: Value(raw['cancel_reason']?.toString() ?? raw['cancelReason']?.toString() ?? 'SYNC_VOID'),
+                      voidedAt: Value(voidTime),
+                      voidedBy: Value(raw['voided_by']?.toString() ?? raw['voidedBy']?.toString() ?? raw['cancelled_by']?.toString() ?? raw['cancelledBy']?.toString()),
+                      syncStatus: const Value('synced'),
+                    ),
+                  );
+                }
+              } else {
+                // Item does not exist locally: insert it into set-union
+                final effectiveVoidedAt = incomingIsVoided ? (incomingVoidedAt ?? incomingCancelledAt ?? DateTime.now()) : null;
+                await db.ordersDao.upsertOrderItem(
+                  LocalOrderItemsCompanion(
+                    id: Value(itemId),
+                    orderId: Value(orderId),
+                    menuItemId: Value(raw['menu_item_id']?.toString() ?? raw['menuItemId']?.toString()),
+                    itemName: Value(raw['item_name']?.toString() ?? raw['itemName']?.toString() ?? 'Item'),
+                    sizeName: Value(raw['selected_size']?.toString() ?? raw['selectedSize']?.toString() ?? raw['size_name']?.toString() ?? raw['sizeName']?.toString()),
+                    unitPrice: Value(double.tryParse(raw['unit_price']?.toString() ?? raw['unitPrice']?.toString() ?? '0') ?? 0.0),
+                    quantity: Value((raw['quantity'] as num?)?.toInt() ?? 1),
+                    subtotal: Value(double.tryParse(raw['subtotal']?.toString() ?? '0') ?? 0.0),
+                    notes: Value(raw['notes']?.toString()),
+                    isCancelled: Value(incomingIsVoided),
+                    cancelledAt: Value(effectiveVoidedAt),
+                    cancelReason: Value(raw['cancel_reason']?.toString() ?? raw['cancelReason']?.toString()),
+                    voidedAt: Value(effectiveVoidedAt),
+                    voidedBy: Value(raw['voided_by']?.toString() ?? raw['voidedBy']?.toString()),
+                    supersedesItemId: Value(raw['supersedes_item_id']?.toString() ?? raw['supersedesItemId']?.toString()),
+                    createdByDeviceId: Value(raw['created_by_device_id']?.toString() ?? raw['createdByDeviceId']?.toString()),
+                    clientCreatedAt: Value(raw['client_created_at'] != null ? DateTime.tryParse(raw['client_created_at'].toString()) : null),
+                    syncStatus: const Value('synced'),
+                    serverVersion: Value((raw['server_version'] as num?)?.toInt() ?? (raw['version'] as num?)?.toInt() ?? 1),
+                  ),
+                );
+              }
+            }
+          }
+        }
+      }
+
       // 11. Initial cursor sequence
       final maxSeq = (data['max_global_sequence'] as num?)?.toInt() ?? 0;
       await db.syncCursorsDao.setCursor(
@@ -1561,6 +1704,12 @@ class SyncBackgroundWorker {
       );
     });
   }
+
+    @visibleForTesting
+  Future<void> ingestBootstrapData(Map<String, dynamic> data) => _applyBootstrapData(data);
+
+  @visibleForTesting
+  Future<void> applyBootstrapData(Map<String, dynamic> data) => _applyBootstrapData(data);
 
   @visibleForTesting
   Future<PullApplyResult> applyPullChange(Map<String, dynamic> change) => _applyPullChange(change);

@@ -578,6 +578,27 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
     return row.read(countExpr) ?? 0;
   }
 
+  /// Counts pending and retryable order mutations in outbox (excluding quarantined, fatal, and conflict) (MNY-06).
+  Future<int> getPendingOrderCount() async {
+    final countExpr = syncOutbox.id.count();
+    final query = selectOnly(syncOutbox)
+      ..addColumns([countExpr])
+      ..where(syncOutbox.entityType.equals('order') &
+          syncOutbox.status.isIn(nonTerminalStatuses));
+    final row = await query.getSingle();
+    return row.read(countExpr) ?? 0;
+  }
+
+  /// Reactive stream of pending and retryable order mutations count (MNY-06).
+  Stream<int> watchPendingOrderCount() {
+    final countExpr = syncOutbox.id.count();
+    final query = selectOnly(syncOutbox)
+      ..addColumns([countExpr])
+      ..where(syncOutbox.entityType.equals('order') &
+          syncOutbox.status.isIn(nonTerminalStatuses));
+    return query.map((row) => row.read(countExpr) ?? 0).watchSingle();
+  }
+
   /// Reactive stream of non-terminal outbox rows count.
   Stream<int> watchNonTerminalCount() {
     final countExpr = syncOutbox.id.count();

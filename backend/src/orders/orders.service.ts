@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
   ConflictException,
   Injectable,
   Logger,
@@ -16,6 +18,10 @@ import { CreateOrderDto, CreateOrderItemDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
+import { ConfigService } from '@nestjs/config';
+import { PasswordService } from '../auth/password.service';
+import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { RefundOrderDto } from './dto/refund-order.dto';
 
 /** Standard include clause reused across all queries */
 const ORDER_INCLUDE = {
@@ -48,6 +54,7 @@ export class OrdersService {
     @Optional() private readonly kitchenGateway?: KitchenGateway,
     @Optional() private readonly pricingService?: PricingService,
     @Optional() private readonly changeLogService?: ChangeLogService,
+    @Optional() private readonly passwordService?: PasswordService,
   ) {}
 
   private round(val: number): number {
@@ -1635,6 +1642,207 @@ export class OrdersService {
         `Cancelled item '${item.item_name}' from order '${order.order_number}'. New grand total: PKR ${grandTotal}`,
       );
       return updatedOrder as OrderWithDetails;
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // SUPERVISOR REFUND ORDER (POST /orders/:id/refund)
+  // -------------------------------------------------------------------------
+  /**
+   * Supervisor-authorized refund/void for paid orders (POST /api/orders/:id/refund).
+   * Follow-up to #13: Sanctioned supervisor refund path with order_adjustments audit ledger.
+   */
+  async refundOrder(
+    orderId: string,
+    dto: RefundOrderDto,
+    actor?: AuthenticatedUser,
+  ): Promise<{ adjustment_id: string; order: OrderWithDetails }> {
+    if (!dto.supervisor_pin || typeof dto.supervisor_pin !== 'string' || dto.supervisor_pin.trim() === '') {
+      throw new UnauthorizedException('Supervisor PIN is required');
+    }
+
+    const pin = dto.supervisor_pin.trim();
+    const supervisorRoles = ['manager', 'supervisor', 'admin', 'owner', 'superadmin', 'super admin'];
+    const passwordSvc = this.passwordService ?? new PasswordService(new ConfigService());
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Fetch order with details and existing adjustments
+      const existing = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          ...ORDER_INCLUDE,
+          order_adjustments: true,
+        },
+      });
+
+      if (!existing) {
+        throw new NotFoundException(`Order with ID '${orderId}' not found`);
+      }
+
+      // 2. Validate paid status and not already refunded
+      const isAlreadyRefunded =
+        existing.payment_status === 'REFUNDED' ||
+        ((existing as any).order_adjustments &&
+          (existing as any).order_adjustments.some((a: any) => a.type === 'REFUND'));
+
+      if (isAlreadyRefunded) {
+        throw new BadRequestException(`Order '${existing.order_number}' is already refunded.`);
+      }
+
+      const isPaid = existing.is_paid || existing.payment_status === 'PAID';
+      if (!isPaid) {
+        throw new BadRequestException(
+          `Order '${existing.order_number}' is not paid (${existing.payment_status}). Only paid orders can be refunded.`,
+        );
+      }
+
+      if (existing.status === 'cancelled') {
+        throw new BadRequestException(`Order '${existing.order_number}' is cancelled and cannot be refunded.`);
+      }
+
+      // 3. Verify supervisor PIN and role
+      let supervisor: any = null;
+      if (dto.supervisor_id) {
+        const user = await tx.staffUser.findFirst({
+          where: {
+            OR: [{ id: dto.supervisor_id }, { username: dto.supervisor_id }],
+            is_active: true,
+          },
+        });
+        if (!user) {
+          throw new UnauthorizedException('Supervisor not found or account is inactive');
+        }
+        const role = (user.role || '').toLowerCase().trim();
+        if (!supervisorRoles.includes(role)) {
+          throw new ForbiddenException('User is not authorized as a supervisor/manager');
+        }
+        const isPinValid = await passwordSvc.verify(user.password_hash, pin);
+        if (!isPinValid) {
+          throw new UnauthorizedException('Invalid supervisor PIN');
+        }
+        supervisor = user;
+      } else {
+        const activeUsers = await tx.staffUser.findMany({
+          where: { is_active: true },
+        });
+
+        let matchedUser: any = null;
+        for (const u of activeUsers) {
+          const isMatch = await passwordSvc.verify(u.password_hash, pin);
+          if (isMatch) {
+            matchedUser = u;
+            break;
+          }
+        }
+
+        if (!matchedUser) {
+          throw new UnauthorizedException('Invalid supervisor PIN');
+        }
+
+        const role = (matchedUser.role || '').toLowerCase().trim();
+        if (!supervisorRoles.includes(role)) {
+          throw new ForbiddenException('User is not authorized as a supervisor/manager');
+        }
+
+        supervisor = matchedUser;
+      }
+
+      // 4. Create adjustment audit row in order_adjustments ledger
+      const adjustmentId = uuidv7();
+      const cashierId = dto.cashier_id || actor?.id || null;
+      const deviceId = dto.device_id || existing.device_id || null;
+      const shiftId = dto.shift_id || existing.shift_id || null;
+
+      const adjustment = await (tx as any).orderAdjustment.create({
+        data: {
+          id: adjustmentId,
+          order_id: existing.id,
+          type: 'REFUND',
+          amount: existing.grand_total,
+          reason: dto.reason,
+          refund_method: dto.refund_method,
+          supervisor_id: supervisor.id,
+          cashier_id: cashierId,
+          device_id: deviceId,
+          shift_id: shiftId,
+        },
+      });
+
+      // 5. Update order state: set to refunded/cancelled, bump version
+      const newVersion = (existing.version || 1) + 1;
+      const updatedAt = new Date();
+
+      const updated = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: 'cancelled',
+          payment_status: 'REFUNDED',
+          is_paid: false,
+          version: newVersion,
+          updated_at: updatedAt,
+        },
+        include: ORDER_INCLUDE,
+      });
+
+      // 6. Release table if Dine-In
+      if (existing.dine_in_detail?.table_id) {
+        const table = await tx.restaurantTable.findFirst({
+          where: { active_order_id: orderId },
+        });
+        if (table) {
+          await tx.restaurantTable.update({
+            where: { id: table.id },
+            data: {
+              active_order_id: null,
+              status: 'available',
+              current_bill_amount: new Prisma.Decimal(0),
+            },
+          });
+        }
+      }
+
+      // 7. Emit version bump and change-log record (#11 pattern)
+      const changeLogPayload = {
+        id: updated.id,
+        order_number: updated.order_number ?? existing.order_number,
+        order_type: updated.order_type ?? existing.order_type,
+        status: updated.status,
+        subtotal: Number(updated.subtotal ?? existing.subtotal),
+        discount_amount: Number(updated.discount_amount ?? existing.discount_amount),
+        tax_amount: Number(updated.tax_amount ?? existing.tax_amount),
+        grand_total: Number(updated.grand_total ?? existing.grand_total),
+        payment_status: updated.payment_status,
+        is_paid: updated.is_paid,
+        paid_at: undefined,
+        version: newVersion,
+        origin_device_id: deviceId,
+        updated_at: updatedAt,
+      };
+
+      const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+      if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+        await changeLog.record(
+          tx,
+          'order',
+          orderId,
+          'UPDATE',
+          newVersion,
+          changeLogPayload,
+          false,
+        );
+      }
+
+      this.logger.log(
+        `Refunded order '${existing.order_number}' (${orderId}) authorized by supervisor '${supervisor.username}' (${supervisor.id}). Adjustment ID: ${adjustment.id}`,
+      );
+
+      return {
+        adjustment_id: adjustment.id,
+        order: {
+          ...updated,
+          version: newVersion,
+        } as OrderWithDetails,
+      };
     });
   }
 }

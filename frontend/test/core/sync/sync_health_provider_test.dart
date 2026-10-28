@@ -82,6 +82,7 @@ void main() {
               status: SyncOutboxStatus.authPaused,
               retryCount: 0,
               createdAt: DateTime.now(),
+              schemaVersion: 1,
             ),
           ])),
         ],

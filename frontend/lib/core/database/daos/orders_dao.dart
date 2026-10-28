@@ -91,6 +91,24 @@ class OrdersDao extends DatabaseAccessor<AppDatabase> with _$OrdersDaoMixin {
     );
   }
 
+  Future<int> markOrderItemVoided({
+    required String itemId,
+    required DateTime voidedAt,
+    required String voidedBy,
+    String? reason,
+  }) {
+    return (update(localOrderItems)..where((t) => t.id.equals(itemId))).write(
+      LocalOrderItemsCompanion(
+        isCancelled: const Value(true),
+        cancelledAt: Value(voidedAt),
+        cancelReason: Value(reason),
+        voidedAt: Value(voidedAt),
+        voidedBy: Value(voidedBy),
+        syncStatus: const Value('pending_update'),
+      ),
+    );
+  }
+
   Future<int> deleteOrder(String id) {
     return (delete(localOrders)..where((t) => t.id.equals(id))).go();
   }

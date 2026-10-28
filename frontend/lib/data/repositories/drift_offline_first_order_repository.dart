@@ -656,6 +656,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           dependencyOrder: const Value(2),
           status: const Value(SyncOutboxStatus.pending),
           payload: Value(jsonEncode({
+            'order_id': orderId,
             'item_id': itemId,
             'voided_by': voidedBy ?? 'USER',
             'reason': reason,

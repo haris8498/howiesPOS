@@ -74,17 +74,11 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
         },
         onUpgrade: (Migrator m, int from, int to) async {
-          // Version 2: SYNC-012/TBL-12: Add is_deleted to local_restaurant_tables
           if (from < 2) {
-            await m.addColumn(localRestaurantTables, localRestaurantTables.isDeleted);
+            await _migrateTo2(m);
           }
-          // Version 3: D-05 (SYNC-032): Order line-item ledger columns
           if (from < 3) {
-            await m.addColumn(localOrderItems, localOrderItems.voidedAt);
-            await m.addColumn(localOrderItems, localOrderItems.voidedBy);
-            await m.addColumn(localOrderItems, localOrderItems.supersedesItemId);
-            await m.addColumn(localOrderItems, localOrderItems.createdByDeviceId);
-            await m.addColumn(localOrderItems, localOrderItems.clientCreatedAt);
+            await _migrateTo3(m);
           }
         },
         beforeOpen: (OpeningDetails details) async {
@@ -99,6 +93,20 @@ class AppDatabase extends _$AppDatabase {
           );
         },
       );
+
+  /// Version 2: SYNC-012/TBL-12: Add is_deleted to local_restaurant_tables
+  Future<void> _migrateTo2(Migrator m) async {
+    await m.addColumn(localRestaurantTables, localRestaurantTables.isDeleted);
+  }
+
+  /// Version 3: D-05 (SYNC-032): Order line-item ledger columns
+  Future<void> _migrateTo3(Migrator m) async {
+    await m.addColumn(localOrderItems, localOrderItems.voidedAt);
+    await m.addColumn(localOrderItems, localOrderItems.voidedBy);
+    await m.addColumn(localOrderItems, localOrderItems.supersedesItemId);
+    await m.addColumn(localOrderItems, localOrderItems.createdByDeviceId);
+    await m.addColumn(localOrderItems, localOrderItems.clientCreatedAt);
+  }
 
   /// Convenience retention pruning method (30-day synced) per Directive Q9.2.
   Future<RetentionPruneResult> pruneSyncedDataOlderThan({

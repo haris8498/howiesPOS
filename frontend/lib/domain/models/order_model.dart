@@ -562,7 +562,7 @@ class OrderModel {
       case 'ready': parsedStatus = OrderStatus.ready; break;
       case 'served': parsedStatus = OrderStatus.served; break;
       case 'completed': parsedStatus = OrderStatus.completed; break;
-      case 'cancelled': case 'rejected': parsedStatus = OrderStatus.cancelled; break;
+      case 'cancelled': case 'rejected': case 'refunded': parsedStatus = OrderStatus.cancelled; break;
     }
 
     // ── Items ──────────────────────────────────────────────

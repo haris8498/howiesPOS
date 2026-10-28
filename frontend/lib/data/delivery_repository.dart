@@ -258,10 +258,11 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     required String paymentStatus,
     required String itemsSummary,
     required List<Map<String, dynamic>> items,
+    String? existingOrderId,
   }) async {
     final now = DateTime.now();
     final tempOrderNum = 'HH-${(now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0')}';
-    final rawOrderId = const Uuid().v4();
+    final rawOrderId = existingOrderId ?? const Uuid().v4();
 
     final effectiveItems = items.map((it) {
       final itemName = it['item_name']?.toString() ?? it['name']?.toString() ?? 'Delivery Meal';
@@ -303,7 +304,8 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       items: effectiveItems,
     );
 
-    // 1. SAVE TO LOCAL DRIFT DATABASE & SYNC OUTBOX ATOMICALLY (§5.2, §11, §12)
+    // 1. OFFLINE_FIRST_ENABLED=true: route checkout only through orderRepositoryProvider (local write + outbox).
+    // Remove the direct HTTP create and the fallback new-order path (§Wave 5a / #10).
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
@@ -352,15 +354,21 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
           ),
         );
         await orderRepo.saveOrder(orderModel);
+        _ref!.read(syncBackgroundWorkerProvider).triggerPush();
       } catch (err) {
         print('Error saving delivery order to local SQLite/outbox: $err');
       }
+
+      state = state.copyWith(
+        deliveries: [createdOrder, ...state.deliveries.where((d) => d.orderId != rawOrderId && d.id != createdOrder.id)],
+      );
+      return createdOrder;
     }
 
-    // 2. Optimistic UI update
+    // 2. OFFLINE_FIRST_ENABLED=false: keep the online-only path working.
+    // A timeout must not create a second order with a new ID. Reuse the same client-generated order ID/idempotency key on any retry.
     state = state.copyWith(deliveries: [createdOrder, ...state.deliveries.where((d) => d.orderId != rawOrderId)]);
 
-    // 3. Attempt direct HTTP push if online; if offline, SyncOutbox will push automatically
     try {
       final res = await _ordersApiService.createOrder({
         'id': rawOrderId,
@@ -383,21 +391,11 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
 
       if (res['id'] != null) {
         createdOrder = DeliveryOrder.fromBackendJson(res);
-        if (FeatureFlags.offlineFirstEnabled && _ref != null) {
-          try {
-            final db = _ref!.read(appDatabaseProvider);
-            await db.ordersDao.markOrderSynced(rawOrderId, 1, DateTime.now());
-            await (db.delete(db.syncOutbox)..where((t) => t.entityId.equals(rawOrderId))).go();
-          } catch (_) {}
-        }
       }
+      await loadDeliveryData(silent: true);
     } catch (e) {
-      print('Delivery order queued safely in local Drift SQLite outbox: $e');
-      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
-        try {
-          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
-        } catch (_) {}
-      }
+      print('Online delivery order creation error (idempotency key preserved: $rawOrderId): $e');
+      rethrow;
     }
 
     state = state.copyWith(deliveries: [createdOrder, ...state.deliveries.where((d) => d.orderId != rawOrderId && d.id != createdOrder.id)]);

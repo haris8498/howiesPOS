@@ -1,3 +1,8 @@
+import 'package:drift/drift.dart' show Value;
+import '../../config/feature_flags.dart';
+import '../../core/database/app_database.dart';
+import '../../core/sync/sync_providers.dart';
+import '../../shared/widgets/refund_order_dialog.dart';
 import '../../domain/models/order_model.dart';
 import '../../services/api/api_providers.dart';
 import 'package:flutter/material.dart';
@@ -243,14 +248,16 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
     required bool isDark,
     required VoidCallback onTap,
     bool isEnabled = true,
+    String? subtitle,
+    String? tooltip,
   }) {
-    return InkWell(
+    final buttonContent = InkWell(
       onTap: isEnabled ? onTap : null,
       borderRadius: BorderRadius.circular(16),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        height: subtitle != null ? 56 : 52,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: isFilled
               ? (isEnabled ? color : color.withValues(alpha: 0.5))
@@ -281,16 +288,33 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  color: isFilled ? Colors.white : color,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                  letterSpacing: 0.2,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isFilled ? Colors.white : color,
+                      fontWeight: FontWeight.w800,
+                      fontSize: subtitle != null ? 12.5 : 13,
+                      letterSpacing: 0.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (subtitle != null)
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: isFilled ? Colors.white.withValues(alpha: 0.85) : color.withValues(alpha: 0.85),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 9.5,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
               ),
             ),
             if (!isFilled)
@@ -303,6 +327,14 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
         ),
       ),
     );
+
+    if (tooltip != null || subtitle != null) {
+      return Tooltip(
+        message: tooltip ?? subtitle ?? '',
+        child: buttonContent,
+      );
+    }
+    return buttonContent;
   }
 
   @override
@@ -361,6 +393,11 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
     final bool isDelivered = selectedDel?.status == DeliveryStatus.delivered;
     final bool canEdit = selectedDel != null && !isPaid && !isDelivered && !selectedDel.isBillPrinted && selectedDel.status == DeliveryStatus.pending;
     final bool canReceivePayment = selectedDel != null && !isPaid;
+    final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
+    final bool canRefundDel = selectedDel != null &&
+        isPaid &&
+        selectedDel.status != DeliveryStatus.cancelled &&
+        selectedDel.status.name.toLowerCase() != 'refunded';
     final bool hasAssignPerm = ref.watch(roleRightsProvider).isActionGranted(
       authState.currentUser.role,
       'del_assign',
@@ -482,30 +519,43 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
                   const SizedBox(height: 10),
 
-                  // Button 4: Receive Payment (Solid Green)
-                  _buildDeliveryActionPillButton(
-                    title: selectedDel != null ? 'Receive Payment (PKR ${selectedDel.totalAmount.toStringAsFixed(0)})' : 'Receive Payment',
-                    icon: Icons.attach_money_rounded,
-                    color: const Color(0xFF16A34A),
-                    isFilled: true,
-                    isDark: isDark,
-                    isEnabled: canReceivePayment,
-                    onTap: () {
-                      if (selectedDel == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select an active delivery order first.')),
-                        );
-                        return;
-                      }
-                      if (isPaid) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Order #${selectedDel.orderNumber} is already paid.')),
-                        );
-                        return;
-                      }
-                      _showFinalBillModal(context, selectedDel, isDark);
-                    },
-                  ),
+                  // Button 4: Refund Order (if paid) OR Receive Payment (Solid Green)
+                  if (canRefundDel) ...[
+                    _buildDeliveryActionPillButton(
+                      title: 'Refund Order',
+                      subtitle: isOnline ? null : 'Refund requires an internet connection',
+                      icon: Icons.assignment_return_rounded,
+                      color: const Color(0xFFDC2626),
+                      isFilled: true,
+                      isDark: isDark,
+                      isEnabled: isOnline,
+                      onTap: () => _handleRefundDeliveryOrder(context, ref, selectedDel, delNotifier),
+                    ),
+                  ] else ...[
+                    _buildDeliveryActionPillButton(
+                      title: selectedDel != null ? 'Receive Payment (PKR ${selectedDel.totalAmount.toStringAsFixed(0)})' : 'Receive Payment',
+                      icon: Icons.attach_money_rounded,
+                      color: const Color(0xFF16A34A),
+                      isFilled: true,
+                      isDark: isDark,
+                      isEnabled: canReceivePayment,
+                      onTap: () {
+                        if (selectedDel == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Please select an active delivery order first.')),
+                          );
+                          return;
+                        }
+                        if (isPaid) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Order #${selectedDel.orderNumber} is already paid.')),
+                          );
+                          return;
+                        }
+                        _showFinalBillModal(context, selectedDel, isDark);
+                      },
+                    ),
+                  ],
 
                   const SizedBox(height: 10),
 
@@ -877,6 +927,10 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
     final bool canEditSelected = !isLockedFromEdit;
     final bool canSettleSelected = !isPaid;
+    final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
+    final bool canRefundOrder = isPaid &&
+        del.status != DeliveryStatus.cancelled &&
+        del.status.name.toLowerCase() != 'refunded';
     final bool hasAssignPerm = ref.watch(roleRightsProvider).isActionGranted(
       authState.currentUser.role,
       'del_assign',
@@ -962,24 +1016,37 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
                           const SizedBox(height: 10),
 
-                          // Button 4: Receive Payment
-                          _buildDeliveryActionPillButton(
-                            title: 'Receive Payment (PKR ${del.totalAmount.toStringAsFixed(0)})',
-                            icon: Icons.attach_money_rounded,
-                            color: const Color(0xFF16A34A),
-                            isFilled: true,
-                            isDark: isDark,
-                            isEnabled: canSettleSelected,
-                            onTap: () {
-                              if (isPaid) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Order #${del.orderNumber} is already paid.')),
-                                );
-                                return;
-                              }
-                              _showFinalBillModal(context, del, isDark);
-                            },
-                          ),
+                          // Button 4: Refund Order (if paid) OR Receive Payment
+                          if (canRefundOrder) ...[
+                            _buildDeliveryActionPillButton(
+                              title: 'Refund Order',
+                              subtitle: isOnline ? null : 'Refund requires an internet connection',
+                              icon: Icons.assignment_return_rounded,
+                              color: const Color(0xFFDC2626),
+                              isFilled: true,
+                              isDark: isDark,
+                              isEnabled: isOnline,
+                              onTap: () => _handleRefundDeliveryOrder(context, ref, del, delNotifier),
+                            ),
+                          ] else ...[
+                            _buildDeliveryActionPillButton(
+                              title: 'Receive Payment (PKR ${del.totalAmount.toStringAsFixed(0)})',
+                              icon: Icons.attach_money_rounded,
+                              color: const Color(0xFF16A34A),
+                              isFilled: true,
+                              isDark: isDark,
+                              isEnabled: canSettleSelected,
+                              onTap: () {
+                                if (isPaid) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Order #${del.orderNumber} is already paid.')),
+                                  );
+                                  return;
+                                }
+                                _showFinalBillModal(context, del, isDark);
+                              },
+                            ),
+                          ],
 
                           const SizedBox(height: 10),
 
@@ -1380,6 +1447,30 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                                           ),
                                         ],
                                       ),
+                                      if (canRefundOrder) ...[
+                                        const SizedBox(height: 12),
+                                        Tooltip(
+                                          message: isOnline ? '' : 'Refund requires an internet connection',
+                                          child: ElevatedButton.icon(
+                                            onPressed: isOnline
+                                                ? () => _handleRefundDeliveryOrder(context, ref, del, delNotifier)
+                                                : null,
+                                            icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                                            label: Text(
+                                              isOnline ? 'Refund Order' : 'Refund requires an internet connection',
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                            ),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFFDC2626),
+                                              foregroundColor: Colors.white,
+                                              disabledBackgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                              disabledForegroundColor: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                                              padding: const EdgeInsets.symmetric(vertical: 14),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
@@ -1399,6 +1490,57 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
     );
   }
 
+
+  // Handle Delivery Order Refund (Supervisor PIN protected)
+  Future<void> _handleRefundDeliveryOrder(
+    BuildContext context,
+    WidgetRef ref,
+    DeliveryOrder del,
+    DeliveryNotifier delNotifier,
+  ) async {
+    final isOnline = ref.read(connectivityNotifierProvider).isOnline;
+    if (!isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Refund requires an internet connection'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final targetOrderId = del.orderId.isNotEmpty ? del.orderId : del.id.replaceAll('del-', '');
+    final ordersApiService = ref.read(ordersApiServiceProvider);
+
+    final result = await RefundOrderDialog.show(
+      context,
+      orderId: targetOrderId,
+      orderNumber: del.orderNumber,
+      grandTotal: del.totalAmount,
+      ordersApiService: ordersApiService,
+    );
+
+    if (result != null && context.mounted) {
+      if (FeatureFlags.offlineFirstEnabled) {
+        try {
+          final db = ref.read(appDatabaseProvider);
+          await (db.update(db.localOrders)..where((t) => t.id.equals(targetOrderId)))
+              .write(const LocalOrdersCompanion(status: Value('cancelled')));
+        } catch (_) {}
+      }
+
+      await delNotifier.loadDeliveryData();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Delivery order #${del.orderNumber} has been successfully refunded.'),
+            backgroundColor: const Color(0xFF16A34A),
+          ),
+        );
+      }
+    }
+  }
 
   // Cancel Delivery Order Item Dialog
   void _showCancelDeliveryItemDialog(

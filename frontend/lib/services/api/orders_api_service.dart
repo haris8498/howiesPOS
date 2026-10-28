@@ -156,6 +156,28 @@ class OrdersApiService {
     return {};
   }
 
+  /// POST /api/orders/:id/refund (Wave 5C #13)
+  Future<Map<String, dynamic>> refundOrder(
+    String orderId, {
+    required String supervisorPin,
+    required String reason,
+    required String refundMethod,
+  }) async {
+    final body = <String, dynamic>{
+      'supervisor_pin': supervisorPin,
+      'reason': reason,
+      'refund_method': refundMethod,
+    };
+    final response = await _apiClient.post('orders/$orderId/refund', body: body);
+    if (response is Map<String, dynamic>) {
+      if (response['data'] is Map<String, dynamic>) {
+        return response['data'] as Map<String, dynamic>;
+      }
+      return response;
+    }
+    throw const ApiException('Failed to refund order');
+  }
+
   /// DELETE /api/orders/:id
   Future<void> deleteOrder(String id) async {
     await _apiClient.delete('orders/$id');

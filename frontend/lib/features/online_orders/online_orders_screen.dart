@@ -1,8 +1,12 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
+import '../../config/feature_flags.dart';
+import '../../core/database/app_database.dart';
+import '../../core/sync/sync_providers.dart';
 import '../../data/auth_repository.dart';
 import '../../data/delivery_repository.dart';
 import '../../data/online_orders_repository.dart';
@@ -10,7 +14,9 @@ import '../../data/role_rights_repository.dart';
 import '../../domain/models/online_order_model.dart';
 import '../../domain/models/order_model.dart';
 import '../../domain/models/user_role.dart';
+import '../../services/api/api_providers.dart';
 import '../../services/receipt_printer_service.dart';
+import '../../shared/widgets/refund_order_dialog.dart';
 
 class OnlineOrdersScreen extends ConsumerStatefulWidget {
   const OnlineOrdersScreen({super.key});
@@ -2622,21 +2628,50 @@ class _OnlineOrdersScreenState extends ConsumerState<OnlineOrdersScreen> {
                               ),
                             ),
 
-                            // 3. Receive Payment
-                            ElevatedButton.icon(
-                              onPressed: () => _showFullBillAndPayDialog(context, order, isDark),
-                              icon: const Icon(Icons.attach_money_rounded, size: 16, color: Colors.white),
-                              label: Text(
-                                'Receive Payment (PKR ${order.grandTotal.toStringAsFixed(0)})',
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                            if (order.isPaid || isCompleted) ...[
+                              Builder(
+                                builder: (ctx) {
+                                  final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
+                                  return Tooltip(
+                                    message: isOnline ? '' : 'Refund requires an internet connection',
+                                    child: ElevatedButton.icon(
+                                      onPressed: isOnline
+                                          ? () => _handleRefundOnlineOrder(context, order)
+                                          : null,
+                                      icon: const Icon(Icons.assignment_return_rounded, size: 16, color: Colors.white),
+                                      label: Text(
+                                        isOnline ? 'Refund Order' : 'Refund requires an internet connection',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFFDC2626),
+                                        disabledBackgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                        disabledForegroundColor: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                                        elevation: 2,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF2E7D32), // Green
-                                elevation: 2,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                            ] else ...[
+                              // 3. Receive Payment
+                              ElevatedButton.icon(
+                                onPressed: () => _showFullBillAndPayDialog(context, order, isDark),
+                                icon: const Icon(Icons.attach_money_rounded, size: 16, color: Colors.white),
+                                label: Text(
+                                  'Receive Payment (PKR ${order.grandTotal.toStringAsFixed(0)})',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2E7D32), // Green
+                                  elevation: 2,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                ),
                               ),
-                            ),
+                            ],
 
                             // 4. Change Rider
                             ElevatedButton.icon(
@@ -2665,6 +2700,53 @@ class _OnlineOrdersScreenState extends ConsumerState<OnlineOrdersScreen> {
         ],
       ),
     );
+  }
+
+  // Handle Online Order Refund (Supervisor PIN protected)
+  Future<void> _handleRefundOnlineOrder(
+    BuildContext context,
+    OnlineOrderModel order,
+  ) async {
+    final isOnline = ref.read(connectivityNotifierProvider).isOnline;
+    if (!isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Refund requires an internet connection'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final ordersApiService = ref.read(ordersApiServiceProvider);
+    final result = await RefundOrderDialog.show(
+      context,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      grandTotal: order.grandTotal,
+      ordersApiService: ordersApiService,
+    );
+
+    if (result != null && context.mounted) {
+      if (FeatureFlags.offlineFirstEnabled) {
+        try {
+          final db = ref.read(appDatabaseProvider);
+          await (db.update(db.localOrders)..where((t) => t.id.equals(order.id)))
+              .write(const LocalOrdersCompanion(status: Value('cancelled')));
+        } catch (_) {}
+      }
+
+      await ref.read(onlineOrdersProvider.notifier).loadOnlineOrders();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order #${order.orderNumber} has been successfully refunded.'),
+            backgroundColor: const Color(0xFF16A34A),
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildInfoRow({

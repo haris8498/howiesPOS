@@ -35,7 +35,10 @@ class OrdersDao extends DatabaseAccessor<AppDatabase> with _$OrdersDaoMixin {
       for (final payment in payments) {
         await into(localOrderPayments).insert(payment);
       }
-      await into(syncOutbox).insert(outboxEntry);
+      final outboxWithVersion = outboxEntry.schemaVersion.present
+          ? outboxEntry
+          : outboxEntry.copyWith(schemaVersion: const Value(kCurrentOutboxPayloadVersion));
+      await into(syncOutbox).insert(outboxWithVersion);
       if (printJob != null) {
         await into(offlinePrintJobs).insert(printJob);
       }

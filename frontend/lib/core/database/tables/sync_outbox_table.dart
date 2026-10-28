@@ -1,5 +1,8 @@
 import 'package:drift/drift.dart';
 
+/// Current outbox payload / mutation schema version per Spec §6.1 / OBX-12 (GitHub #21).
+const int kCurrentOutboxPayloadVersion = 1;
+
 /// Standard Outbox queue states per Spec §6.2 and Approved Deviation #3.
 class SyncOutboxStatus {
   SyncOutboxStatus._();
@@ -36,4 +39,5 @@ class SyncOutbox extends Table {
   DateTimeColumn get ackedAt => dateTime().nullable()();
   TextColumn get lastError => text().nullable()();
   TextColumn get conflictDetails => text().nullable()();
+  IntColumn get schemaVersion => integer().withDefault(const Constant(kCurrentOutboxPayloadVersion))();
 }

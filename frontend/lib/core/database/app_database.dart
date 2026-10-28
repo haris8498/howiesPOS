@@ -66,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? openEncryptedConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -79,6 +79,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 3) {
             await _migrateTo3(m);
+          }
+          if (from < 4) {
+            await _migrateTo4(m);
           }
         },
         beforeOpen: (OpeningDetails details) async {
@@ -106,6 +109,11 @@ class AppDatabase extends _$AppDatabase {
     await m.addColumn(localOrderItems, localOrderItems.supersedesItemId);
     await m.addColumn(localOrderItems, localOrderItems.createdByDeviceId);
     await m.addColumn(localOrderItems, localOrderItems.clientCreatedAt);
+  }
+
+  /// Version 4: OBX-12 (#21): Add schema_version to sync_outbox
+  Future<void> _migrateTo4(Migrator m) async {
+    await m.addColumn(syncOutbox, syncOutbox.schemaVersion);
   }
 
   /// Convenience retention pruning method (30-day synced) per Directive Q9.2.

@@ -3398,6 +3398,18 @@ class $SyncOutboxTable extends SyncOutbox
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _schemaVersionMeta = const VerificationMeta(
+    'schemaVersion',
+  );
+  @override
+  late final GeneratedColumn<int> schemaVersion = GeneratedColumn<int>(
+    'schema_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(kCurrentOutboxPayloadVersion),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -3418,6 +3430,7 @@ class $SyncOutboxTable extends SyncOutbox
     ackedAt,
     lastError,
     conflictDetails,
+    schemaVersion,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3569,6 +3582,15 @@ class $SyncOutboxTable extends SyncOutbox
         ),
       );
     }
+    if (data.containsKey('schema_version')) {
+      context.handle(
+        _schemaVersionMeta,
+        schemaVersion.isAcceptableOrUnknown(
+          data['schema_version']!,
+          _schemaVersionMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -3650,6 +3672,10 @@ class $SyncOutboxTable extends SyncOutbox
         DriftSqlType.string,
         data['${effectivePrefix}conflict_details'],
       ),
+      schemaVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}schema_version'],
+      )!,
     );
   }
 
@@ -3678,6 +3704,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
   final DateTime? ackedAt;
   final String? lastError;
   final String? conflictDetails;
+  final int schemaVersion;
   const SyncOutboxEntry({
     required this.id,
     required this.operationId,
@@ -3697,6 +3724,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
     this.ackedAt,
     this.lastError,
     this.conflictDetails,
+    required this.schemaVersion,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3731,6 +3759,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
     if (!nullToAbsent || conflictDetails != null) {
       map['conflict_details'] = Variable<String>(conflictDetails);
     }
+    map['schema_version'] = Variable<int>(schemaVersion);
     return map;
   }
 
@@ -3766,6 +3795,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
       conflictDetails: conflictDetails == null && nullToAbsent
           ? const Value.absent()
           : Value(conflictDetails),
+      schemaVersion: Value(schemaVersion),
     );
   }
 
@@ -3795,6 +3825,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
       ackedAt: serializer.fromJson<DateTime?>(json['ackedAt']),
       lastError: serializer.fromJson<String?>(json['lastError']),
       conflictDetails: serializer.fromJson<String?>(json['conflictDetails']),
+      schemaVersion: serializer.fromJson<int>(json['schemaVersion']),
     );
   }
   @override
@@ -3819,6 +3850,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
       'ackedAt': serializer.toJson<DateTime?>(ackedAt),
       'lastError': serializer.toJson<String?>(lastError),
       'conflictDetails': serializer.toJson<String?>(conflictDetails),
+      'schemaVersion': serializer.toJson<int>(schemaVersion),
     };
   }
 
@@ -3841,6 +3873,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
     Value<DateTime?> ackedAt = const Value.absent(),
     Value<String?> lastError = const Value.absent(),
     Value<String?> conflictDetails = const Value.absent(),
+    int? schemaVersion,
   }) => SyncOutboxEntry(
     id: id ?? this.id,
     operationId: operationId ?? this.operationId,
@@ -3864,6 +3897,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
     conflictDetails: conflictDetails.present
         ? conflictDetails.value
         : this.conflictDetails,
+    schemaVersion: schemaVersion ?? this.schemaVersion,
   );
   SyncOutboxEntry copyWithCompanion(SyncOutboxCompanion data) {
     return SyncOutboxEntry(
@@ -3903,6 +3937,9 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
       conflictDetails: data.conflictDetails.present
           ? data.conflictDetails.value
           : this.conflictDetails,
+      schemaVersion: data.schemaVersion.present
+          ? data.schemaVersion.value
+          : this.schemaVersion,
     );
   }
 
@@ -3926,7 +3963,8 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
           ..write('sentAt: $sentAt, ')
           ..write('ackedAt: $ackedAt, ')
           ..write('lastError: $lastError, ')
-          ..write('conflictDetails: $conflictDetails')
+          ..write('conflictDetails: $conflictDetails, ')
+          ..write('schemaVersion: $schemaVersion')
           ..write(')'))
         .toString();
   }
@@ -3951,6 +3989,7 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
     ackedAt,
     lastError,
     conflictDetails,
+    schemaVersion,
   );
   @override
   bool operator ==(Object other) =>
@@ -3973,7 +4012,8 @@ class SyncOutboxEntry extends DataClass implements Insertable<SyncOutboxEntry> {
           other.sentAt == this.sentAt &&
           other.ackedAt == this.ackedAt &&
           other.lastError == this.lastError &&
-          other.conflictDetails == this.conflictDetails);
+          other.conflictDetails == this.conflictDetails &&
+          other.schemaVersion == this.schemaVersion);
 }
 
 class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
@@ -3995,6 +4035,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
   final Value<DateTime?> ackedAt;
   final Value<String?> lastError;
   final Value<String?> conflictDetails;
+  final Value<int> schemaVersion;
   const SyncOutboxCompanion({
     this.id = const Value.absent(),
     this.operationId = const Value.absent(),
@@ -4014,6 +4055,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
     this.ackedAt = const Value.absent(),
     this.lastError = const Value.absent(),
     this.conflictDetails = const Value.absent(),
+    this.schemaVersion = const Value.absent(),
   });
   SyncOutboxCompanion.insert({
     this.id = const Value.absent(),
@@ -4034,6 +4076,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
     this.ackedAt = const Value.absent(),
     this.lastError = const Value.absent(),
     this.conflictDetails = const Value.absent(),
+    this.schemaVersion = const Value.absent(),
   }) : operationId = Value(operationId),
        deviceId = Value(deviceId),
        entityType = Value(entityType),
@@ -4059,6 +4102,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
     Expression<DateTime>? ackedAt,
     Expression<String>? lastError,
     Expression<String>? conflictDetails,
+    Expression<int>? schemaVersion,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -4080,6 +4124,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
       if (ackedAt != null) 'acked_at': ackedAt,
       if (lastError != null) 'last_error': lastError,
       if (conflictDetails != null) 'conflict_details': conflictDetails,
+      if (schemaVersion != null) 'schema_version': schemaVersion,
     });
   }
 
@@ -4102,6 +4147,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
     Value<DateTime?>? ackedAt,
     Value<String?>? lastError,
     Value<String?>? conflictDetails,
+    Value<int>? schemaVersion,
   }) {
     return SyncOutboxCompanion(
       id: id ?? this.id,
@@ -4122,6 +4168,7 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
       ackedAt: ackedAt ?? this.ackedAt,
       lastError: lastError ?? this.lastError,
       conflictDetails: conflictDetails ?? this.conflictDetails,
+      schemaVersion: schemaVersion ?? this.schemaVersion,
     );
   }
 
@@ -4184,6 +4231,9 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
     if (conflictDetails.present) {
       map['conflict_details'] = Variable<String>(conflictDetails.value);
     }
+    if (schemaVersion.present) {
+      map['schema_version'] = Variable<int>(schemaVersion.value);
+    }
     return map;
   }
 
@@ -4207,7 +4257,8 @@ class SyncOutboxCompanion extends UpdateCompanion<SyncOutboxEntry> {
           ..write('sentAt: $sentAt, ')
           ..write('ackedAt: $ackedAt, ')
           ..write('lastError: $lastError, ')
-          ..write('conflictDetails: $conflictDetails')
+          ..write('conflictDetails: $conflictDetails, ')
+          ..write('schemaVersion: $schemaVersion')
           ..write(')'))
         .toString();
   }
@@ -13173,6 +13224,7 @@ typedef $$SyncOutboxTableCreateCompanionBuilder =
       Value<DateTime?> ackedAt,
       Value<String?> lastError,
       Value<String?> conflictDetails,
+      Value<int> schemaVersion,
     });
 typedef $$SyncOutboxTableUpdateCompanionBuilder =
     SyncOutboxCompanion Function({
@@ -13194,6 +13246,7 @@ typedef $$SyncOutboxTableUpdateCompanionBuilder =
       Value<DateTime?> ackedAt,
       Value<String?> lastError,
       Value<String?> conflictDetails,
+      Value<int> schemaVersion,
     });
 
 class $$SyncOutboxTableFilterComposer
@@ -13292,6 +13345,11 @@ class $$SyncOutboxTableFilterComposer
 
   ColumnFilters<String> get conflictDetails => $composableBuilder(
     column: $table.conflictDetails,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -13394,6 +13452,11 @@ class $$SyncOutboxTableOrderingComposer
     column: $table.conflictDetails,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SyncOutboxTableAnnotationComposer
@@ -13476,6 +13539,11 @@ class $$SyncOutboxTableAnnotationComposer
     column: $table.conflictDetails,
     builder: (column) => column,
   );
+
+  GeneratedColumn<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
+    builder: (column) => column,
+  );
 }
 
 class $$SyncOutboxTableTableManager
@@ -13527,6 +13595,7 @@ class $$SyncOutboxTableTableManager
                 Value<DateTime?> ackedAt = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
                 Value<String?> conflictDetails = const Value.absent(),
+                Value<int> schemaVersion = const Value.absent(),
               }) => SyncOutboxCompanion(
                 id: id,
                 operationId: operationId,
@@ -13546,6 +13615,7 @@ class $$SyncOutboxTableTableManager
                 ackedAt: ackedAt,
                 lastError: lastError,
                 conflictDetails: conflictDetails,
+                schemaVersion: schemaVersion,
               ),
           createCompanionCallback:
               ({
@@ -13567,6 +13637,7 @@ class $$SyncOutboxTableTableManager
                 Value<DateTime?> ackedAt = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
                 Value<String?> conflictDetails = const Value.absent(),
+                Value<int> schemaVersion = const Value.absent(),
               }) => SyncOutboxCompanion.insert(
                 id: id,
                 operationId: operationId,
@@ -13586,6 +13657,7 @@ class $$SyncOutboxTableTableManager
                 ackedAt: ackedAt,
                 lastError: lastError,
                 conflictDetails: conflictDetails,
+                schemaVersion: schemaVersion,
               ),
           withReferenceMapper: (p0) => p0
               .map(

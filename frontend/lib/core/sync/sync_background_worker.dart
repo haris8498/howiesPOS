@@ -681,6 +681,7 @@ class SyncBackgroundWorker {
         'entity_id': entry.entityId,
         'operation_type': entry.operationType,
         'base_version': entry.baseVersion,
+        'schema_version': entry.schemaVersion,
         'dependency_order': entry.dependencyOrder,
         if (entry.dependsOnOperationId != null)
           'depends_on_operation_id': entry.dependsOnOperationId,

@@ -3,9 +3,10 @@ import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { KitchenModule } from '../kitchen/kitchen.module';
 import { PricingModule } from '../pricing/pricing.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [forwardRef(() => KitchenModule), PricingModule],
+  imports: [forwardRef(() => KitchenModule), PricingModule, AuthModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService, PricingModule],

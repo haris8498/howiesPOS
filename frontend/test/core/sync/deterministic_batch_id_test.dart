@@ -20,6 +20,7 @@ void main() {
         status: 'PENDING',
         retryCount: 0,
         createdAt: DateTime.now(),
+        schemaVersion: 1,
       );
 
       final entry2 = SyncOutboxEntry(
@@ -35,6 +36,7 @@ void main() {
         status: 'PENDING',
         retryCount: 0,
         createdAt: DateTime.now(),
+        schemaVersion: 1,
       );
 
       final batchIdForward = SyncBackgroundWorker.computeBatchId([entry1, entry2]);

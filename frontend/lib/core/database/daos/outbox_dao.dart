@@ -16,7 +16,10 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
 
   /// Inserts a new mutation into the outbox queue.
   Future<int> insertEntry(SyncOutboxCompanion entry) {
-    return into(syncOutbox).insert(entry);
+    final entryWithVersion = entry.schemaVersion.present
+        ? entry
+        : entry.copyWith(schemaVersion: const Value(kCurrentOutboxPayloadVersion));
+    return into(syncOutbox).insert(entryWithVersion);
   }
 
   /// Checks whether any ancestor mutation in the dependency chain ended in FAILED_FATAL or QUARANTINED.

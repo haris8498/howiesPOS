@@ -291,6 +291,7 @@ class TableNotifier extends StateNotifier<TableState> {
           entityId: Value(tableId),
           operationType: const Value('UPDATE'),
           baseVersion: Value(currentVer),
+          schemaVersion: const Value(kCurrentOutboxPayloadVersion),
           dependencyOrder: const Value(3),
           status: const Value(SyncOutboxStatus.pending),
           payload: Value(jsonEncode({
@@ -354,6 +355,7 @@ class TableNotifier extends StateNotifier<TableState> {
           entityId: Value(tableId),
           operationType: const Value('UPDATE'),
           baseVersion: Value(currentVer),
+          schemaVersion: const Value(kCurrentOutboxPayloadVersion),
           dependencyOrder: const Value(3),
           status: const Value(SyncOutboxStatus.pending),
           payload: Value(jsonEncode({
@@ -437,6 +439,7 @@ class TableNotifier extends StateNotifier<TableState> {
             entityId: Value(tableId),
             operationType: const Value('UPDATE'),
             baseVersion: Value(currentVer),
+            schemaVersion: const Value(kCurrentOutboxPayloadVersion),
             dependencyOrder: const Value(3),
             status: const Value(SyncOutboxStatus.pending),
             payload: Value(jsonEncode({
@@ -511,6 +514,7 @@ class TableNotifier extends StateNotifier<TableState> {
               entityId: Value(fromTableId),
               operationType: const Value('UPDATE'),
               baseVersion: Value(fromVer),
+              schemaVersion: const Value(kCurrentOutboxPayloadVersion),
               dependencyOrder: const Value(3),
               status: const Value(SyncOutboxStatus.pending),
               payload: Value(jsonEncode({
@@ -531,6 +535,7 @@ class TableNotifier extends StateNotifier<TableState> {
               entityId: Value(toTableId),
               operationType: const Value('UPDATE'),
               baseVersion: Value(toVer),
+              schemaVersion: const Value(kCurrentOutboxPayloadVersion),
               dependencyOrder: const Value(3),
               status: const Value(SyncOutboxStatus.pending),
               payload: Value(jsonEncode({
@@ -593,6 +598,7 @@ class TableNotifier extends StateNotifier<TableState> {
             entityId: Value(tableId),
             operationType: const Value('UPDATE'),
             baseVersion: Value(currentVer),
+            schemaVersion: const Value(kCurrentOutboxPayloadVersion),
             dependencyOrder: const Value(3),
             status: const Value(SyncOutboxStatus.pending),
             payload: Value(jsonEncode({

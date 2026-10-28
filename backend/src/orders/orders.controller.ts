@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -18,6 +20,9 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
 import { AppendOrderItemsDto } from './dto/append-order-items.dto';
 import { VoidOrderItemDto } from './dto/void-order-item.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/rbac/guards/permissions.guard';
 import { ApiResponse } from '../common/types/api-response.type';
@@ -145,6 +150,20 @@ export class OrdersController {
       message: 'Order item cancelled successfully',
       data,
     };
+  }
+
+  /**
+   * Refund a paid order (POST /api/orders/:id/refund).
+   * Supervisor PIN authorized full-order refund writing to order_adjustments ledger.
+   */
+  @Post(':id/refund')
+  @HttpCode(HttpStatus.CREATED)
+  async refundOrder(
+    @Param('id') id: string,
+    @Body() dto: RefundOrderDto,
+    @CurrentUser() user?: AuthenticatedUser,
+  ): Promise<{ adjustment_id: string; order: OrderWithDetails }> {
+    return this.ordersService.refundOrder(id, dto, user);
   }
 
   @Delete(':id')

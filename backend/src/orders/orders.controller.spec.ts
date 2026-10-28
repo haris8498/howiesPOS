@@ -58,6 +58,10 @@ describe('OrdersController', () => {
               ...mockOrder,
               status: 'preparing',
             }),
+            refundOrder: jest.fn().mockResolvedValue({
+              adjustment_id: 'adj-1',
+              order: { ...mockOrder, status: 'cancelled', payment_status: 'REFUNDED' },
+            }),
             deleteOrder: jest.fn().mockResolvedValue({ message: 'Order deleted' }),
           },
         },
@@ -154,5 +158,16 @@ describe('OrdersController', () => {
     });
     expect(result.success).toBe(true);
     expect(result.message).toBe('Order item voided successfully');
+  });
+
+  it('should refund order (POST /orders/:id/refund)', async () => {
+    const result = await controller.refundOrder('ord-1', {
+      supervisor_pin: '1234',
+      reason: 'Wrong item charged',
+      refund_method: 'cash',
+    });
+    expect(result.adjustment_id).toBe('adj-1');
+    expect(result.order.status).toBe('cancelled');
+    expect(result.order.payment_status).toBe('REFUNDED');
   });
 });

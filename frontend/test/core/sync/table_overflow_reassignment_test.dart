@@ -36,8 +36,8 @@ void main() {
       await db.close();
     });
 
-    test('Drift database schema version is 3 with overflow columns in LocalRestaurantTables', () async {
-      expect(db.schemaVersion, 3);
+    test('Drift database schema version is 4 with overflow columns in LocalRestaurantTables', () async {
+      expect(db.schemaVersion, 4);
 
       // Verify inserting and reading an overflow table in Drift
       await db.into(db.localRestaurantTables).insert(

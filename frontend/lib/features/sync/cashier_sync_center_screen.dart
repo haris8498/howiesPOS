@@ -1,10 +1,16 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../config/app_colors.dart';
 import '../../config/app_theme.dart';
+import '../../config/feature_flags.dart';
+import '../../core/database/app_database.dart';
+import '../../core/sync/sync_providers.dart';
 import '../../domain/models/cashier_sync_model.dart';
+import '../../services/api/api_providers.dart';
+import '../../shared/widgets/refund_order_dialog.dart';
 import 'cashier_sync_center_provider.dart';
 
 class CashierSyncCenterScreen extends ConsumerStatefulWidget {
@@ -1395,6 +1401,63 @@ class _CashierSyncCenterScreenState extends ConsumerState<CashierSyncCenterScree
           ),
         ),
         actions: [
+          if (order.isPaid &&
+              order.status.toLowerCase() != 'refunded' &&
+              order.status.toLowerCase() != 'cancelled') ...[
+            Builder(
+              builder: (ctxBtn) {
+                final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
+                return Tooltip(
+                  message: isOnline ? '' : 'Refund requires an internet connection',
+                  child: ElevatedButton.icon(
+                    onPressed: isOnline
+                        ? () async {
+                            final ordersApiService = ref.read(ordersApiServiceProvider);
+                            final result = await RefundOrderDialog.show(
+                              context,
+                              orderId: order.id,
+                              orderNumber: order.orderNumber,
+                              grandTotal: order.grandTotal,
+                              ordersApiService: ordersApiService,
+                            );
+
+                            if (result != null && context.mounted) {
+                              Navigator.pop(ctx);
+                              if (FeatureFlags.offlineFirstEnabled) {
+                                try {
+                                  final db = ref.read(appDatabaseProvider);
+                                  await (db.update(db.localOrders)..where((t) => t.id.equals(order.id)))
+                                      .write(const LocalOrdersCompanion(status: Value('cancelled')));
+                                } catch (_) {}
+                              }
+                              await ref.read(cashierSyncCenterProvider.notifier).loadInitialData();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Order #${order.orderNumber} has been successfully refunded.'),
+                                    backgroundColor: const Color(0xFF16A34A),
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        : null,
+                    icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                    label: Text(
+                      isOnline ? 'Refund Order' : 'Refund requires an internet connection',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFDC2626),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                      disabledForegroundColor: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Close', style: TextStyle(fontWeight: FontWeight.bold)),

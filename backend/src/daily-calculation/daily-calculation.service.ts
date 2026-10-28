@@ -266,6 +266,9 @@ export class DailyCalculationService {
         online_count: 0,
         starting_cash: activeSessionInfo.starting_cash || 0,
         total_change_cash: activeSessionInfo.total_change_cash || 0,
+        cash_refunds_total: 0,
+        expected_cash_in_hand: 0,
+        expected_drawer_cash: 0,
         has_active_session: false,
       };
     }
@@ -337,8 +340,55 @@ export class DailyCalculationService {
       }
     }
 
+    // Query refund adjustments processed during this active shift
+    const refundAdjustments = (this.prisma as any).orderAdjustment?.findMany
+      ? await (this.prisma as any).orderAdjustment.findMany({
+          where: {
+            shift_id: activeSessionId,
+            type: 'REFUND',
+          },
+          include: {
+            order: {
+              select: {
+                id: true,
+                shift_id: true,
+                payments: true,
+              },
+            },
+          },
+        })
+      : [];
+
+    let cashRefundsTotal = 0;
+    for (const adj of refundAdjustments) {
+      // Cross-shift refund: adjustment.shift_id == active shift AND the original order's shift differs from it
+      // Same-shift refunds are already excluded from total_cash_sales because the order status was set to 'cancelled'
+      const origShiftId = adj.order?.shift_id;
+      const isCrossShift = !origShiftId || origShiftId !== activeSessionId;
+
+      if (isCrossShift) {
+        const method = (adj.refund_method || '').toLowerCase();
+        if (method === 'cash') {
+          cashRefundsTotal += Number(adj.amount || 0);
+        } else if (method === 'original') {
+          const payments = adj.order?.payments || [];
+          if (payments.length === 0) {
+            cashRefundsTotal += Number(adj.amount || 0);
+          } else {
+            const cashPaid = payments
+              .filter((p: any) => (p.payment_method || '').toLowerCase() === 'cash')
+              .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+            if (cashPaid > 0) {
+              cashRefundsTotal += Math.min(Number(adj.amount || 0), cashPaid);
+            }
+          }
+        }
+      }
+    }
+
     const startingCash = activeSessionInfo.starting_cash || 0;
     const totalChangeCash = activeSessionInfo.total_change_cash || startingCash;
+    const expectedDrawerCash = Number((startingCash + totalCashSales - cashRefundsTotal).toFixed(2));
 
     const shiftDateObj = activeSessionInfo.session
       ? new Date(activeSessionInfo.session.date || activeSessionInfo.session.created_at)
@@ -365,6 +415,9 @@ export class DailyCalculationService {
       total_discounts: Number(totalDiscounts.toFixed(2)),
       total_tax: Number(totalTax.toFixed(2)),
       total_orders_count: orders.length,
+      cash_refunds_total: Number(cashRefundsTotal.toFixed(2)),
+      expected_cash_in_hand: expectedDrawerCash,
+      expected_drawer_cash: expectedDrawerCash,
       dine_in_count: dineInCount,
       takeaway_count: takeawayCount,
       online_count: onlineCount,
@@ -509,6 +562,7 @@ export class DailyCalculationService {
     }
 
     const live = await this.getLiveSummary(dto.date, cashierId);
+    const cashRefundsTotal = Number(live.cash_refunds_total || 0);
 
     const startingCash = Number(dto.starting_cash !== undefined ? dto.starting_cash : (dto.opening_float !== undefined ? dto.opening_float : (live.starting_cash || 0)));
     const cashSubmitted = Number(dto.cash_submitted !== undefined ? dto.cash_submitted : (dto.total_cash_submitted !== undefined ? dto.total_cash_submitted : 0));
@@ -528,10 +582,10 @@ export class DailyCalculationService {
     const submittedAmount = dto.total_cash !== undefined
       ? Number(dto.total_cash)
       : (dto.total_cash_submitted !== undefined ? Number(dto.total_cash_submitted) : Number(dto.cash_submitted || 0));
-    const expectedSubmitted = Math.max(0, live.total_cash_sales - totalExpenses);
-    const expectedCounted = startingCash + live.total_cash_sales;
+    const expectedSubmitted = Math.max(0, live.total_cash_sales - cashRefundsTotal - totalExpenses);
+    const expectedCounted = startingCash + live.total_cash_sales - cashRefundsTotal;
 
-    const expectedCash = startingCash + live.total_cash_sales - cashSkimming - totalExpenses;
+    const expectedCash = startingCash + live.total_cash_sales - cashRefundsTotal - cashSkimming - totalExpenses;
     const variance = dto.cash_variance !== undefined
       ? Number(dto.cash_variance)
       : (submittedAmount - expectedSubmitted);
@@ -588,6 +642,7 @@ export class DailyCalculationService {
           opening_float: new Prisma.Decimal(startingCash),
           total_cash_submitted: new Prisma.Decimal(cashSubmitted),
           total_cash_expenses: new Prisma.Decimal(totalExpenses),
+          cash_refunds_total: new Prisma.Decimal(cashRefundsTotal),
           expected_cash_in_hand: new Prisma.Decimal(expectedCash),
           variance_amount: new Prisma.Decimal(variance),
           cash_variance: new Prisma.Decimal(cashVariance),
@@ -701,6 +756,8 @@ export class DailyCalculationService {
         rec.total_discounts = new Prisma.Decimal(live.total_discounts);
         rec.total_tax = new Prisma.Decimal(live.total_tax);
         rec.total_orders_count = live.total_orders_count;
+        rec.cash_refunds_total = new Prisma.Decimal(live.cash_refunds_total);
+        rec.expected_cash_in_hand = new Prisma.Decimal(live.expected_cash_in_hand);
         rec.dine_in_count = live.dine_in_count;
         rec.takeaway_count = live.takeaway_count;
         rec.online_count = live.online_count;

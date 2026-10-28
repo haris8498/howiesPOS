@@ -324,6 +324,7 @@ model Order {
   created_at           DateTime @default(now()) @map("created_at") @db.Timestamp()
   version              Int      @default(1) @map("version")
   updated_at           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp()
+  is_late_synced       Boolean  @default(false) @map("is_late_synced")
 
   // Relationships
   daily_calculation    DailyCalculation? @relation(fields: [shift_id], references: [id], onDelete: SetNull)
@@ -683,6 +684,9 @@ model DailyCalculation {
 
   total_cash_submitted Decimal            @default(0.00) @map("total_cash_submitted") @db.Decimal(12, 2)
   total_cash_expenses  Decimal            @default(0.00) @map("total_cash_expenses") @db.Decimal(12, 2)
+  cash_refunds_total   Decimal            @default(0.00) @map("cash_refunds_total") @db.Decimal(12, 2)
+  late_synced_cash_total Decimal          @default(0.00) @map("late_synced_cash_total") @db.Decimal(12, 2)
+  late_synced_order_count Int             @default(0) @map("late_synced_order_count")
   
   // Variance
   expected_cash_in_hand Decimal           @default(0.00) @map("expected_cash_in_hand") @db.Decimal(12, 2)

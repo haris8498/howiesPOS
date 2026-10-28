@@ -34,6 +34,30 @@ class SuccessfulOrdersApiService extends OrdersApiService {
   }
 }
 
+class CapturingOrdersApiService extends OrdersApiService {
+  final List<Map<String, dynamic>> capturedDtos;
+
+  CapturingOrdersApiService(this.capturedDtos);
+
+  @override
+  Future<Map<String, dynamic>> createOrder(Map<String, dynamic> dto) async {
+    capturedDtos.add(Map<String, dynamic>.from(dto));
+    return {
+      'id': dto['id'] ?? 'ord-captured-1',
+      'order_number': dto['order_number'] ?? 'HH-261026-1002',
+      'order_type': dto['order_type'] ?? 'takeaway',
+      'status': 'newOrder',
+      'subtotal': 1200.0,
+      'discount_amount': 0.0,
+      'tax_amount': 0.0,
+      'grand_total': 1200.0,
+      'is_paid': false,
+      'payment_status': 'UNPAID',
+      'created_at': DateTime.now().toIso8601String(),
+    };
+  }
+}
+
 void main() {
   group('ApiOrderRepository Tests (SYNC-009: Online mode error propagation)', () {
     test('saveOrder propagates exceptions on API failure instead of silently swallowing', () async {
@@ -100,5 +124,39 @@ void main() {
       expect(result.id, equals('ord-online-1'));
       expect(result.orderNumber, equals('HH-261026-1001'));
     });
+
+    test('Flag-off path: submits order with client-generated ID and preserves idempotency key on retry (#10)', () async {
+      final capturedDtos = <Map<String, dynamic>>[];
+      final mockService = CapturingOrdersApiService(capturedDtos);
+      final repo = ApiOrderRepository(ordersApiService: mockService);
+
+      const clientOrderId = '018f3a5b-9b4c-7c0a-9d3f-5c1234567890';
+      final order = OrderModel(
+        id: clientOrderId,
+        orderNumber: 'HH-261026-1002',
+        type: OrderType.takeaway,
+        status: OrderStatus.newOrder,
+        items: const [],
+        subtotalOverride: 1200,
+        discountAmount: 0,
+        taxAmount: 0,
+        grandTotalOverride: 1200,
+        isPaid: false,
+        createdAt: DateTime.now(),
+      );
+
+      // Flag-off path submits directly to OrdersApiService
+      final result = await repo.saveOrder(order);
+      expect(result, isNotNull);
+      expect(capturedDtos.length, equals(1));
+      expect(capturedDtos.first['id'], equals(clientOrderId));
+
+      // Retry submission (e.g. after a simulated timeout) reuses exact same client order ID
+      await repo.saveOrder(order);
+      expect(capturedDtos.length, equals(2));
+      expect(capturedDtos[1]['id'], equals(clientOrderId),
+          reason: 'Retry in online-only mode must preserve client order ID / idempotency key');
+    });
   });
 }
+

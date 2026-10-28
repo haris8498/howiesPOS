@@ -1040,6 +1040,16 @@ export class OrdersService {
       throw new NotFoundException(`Order with ID '${id}' not found`);
     }
 
+    // Guard: paid and completed orders are permanent financial records — never delete or cancel them
+    if (dto.status === 'cancelled' || dto.status === 'void') {
+      if (existing.is_paid || existing.status === 'completed') {
+        throw new BadRequestException(
+          `Order '${existing.order_number}' is ${existing.is_paid ? 'paid' : 'completed'} and cannot be deleted. ` +
+          `Paid/completed orders are permanent financial records.`,
+        );
+      }
+    }
+
     if (dto.status === 'cancelled') {
       await this.prisma.orderItem.updateMany({
         where: { order_id: id, is_cancelled: false },

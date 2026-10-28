@@ -1607,6 +1607,20 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
+    // Guard: paid and completed orders are permanent financial records — reject deletion
+    if (existing.is_paid || existing.status === 'completed') {
+      return {
+        operation_id: mutation.operation_id,
+        entity_id: orderId,
+        status: 'FAILED_FATAL',
+        server_version: (existing as any).version ?? 1,
+        server_timestamp: new Date().toISOString(),
+        error_message:
+          `Order '${existing.order_number}' is ${existing.is_paid ? 'paid' : 'completed'} and cannot be deleted. ` +
+          `Paid/completed orders are permanent financial records.`,
+      };
+    }
+
     const updated = await tx.order.update({
       where: { id: orderId },
       data: {

@@ -3179,6 +3179,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   bool _isLoadingMenu = false;
   bool _isSubmittingOrder = false;
   String? _activeOrderId;
+  String? _pendingNewOrderId;
 
   List<String> _categories = [
     'All',
@@ -4051,6 +4052,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                 ? null
                                 : () async {
                                     setState(() => _isSubmittingOrder = true);
+                                    try {
                                     // Serialize cart items to persist in RestaurantTable
                                     final itemMaps = _cartItems
                                         .map((c) => {
@@ -4074,11 +4076,29 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                       'unit_price': c.item.price,
                                     }).toList();
 
-                                    // 1. Save directly to Backend PostgreSQL Database
-                                    final ordersApi = widget.ref.read(ordersApiServiceProvider);
-                                    try {
-                                      if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
-                                        // Update / Modify existing order in PostgreSQL database
+                                    final orderItems = _cartItems.map((c) {
+                                      final itemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
+                                          ? c.item.id!
+                                          : const Uuid().v7();
+                                      return OrderItem(
+                                        id: const Uuid().v7(),
+                                        item: MenuItem(
+                                          id: itemId,
+                                          name: c.item.name,
+                                          category: c.item.category,
+                                          description: '',
+                                          basePrice: c.item.price,
+                                          imageUrl: c.item.imagePath,
+                                        ),
+                                        quantity: c.quantity,
+                                        backendUnitPrice: c.item.price,
+                                      );
+                                    }).toList();
+
+                                    if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
+                                      // Existing order modification flow (unchanged)
+                                      final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                                      try {
                                         final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
                                           'order_type': 'dineIn',
                                           if (table.id.isNotEmpty) 'table_id': table.id,
@@ -4090,68 +4110,41 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                         effectiveOrderId = updatedOrder['id']?.toString() ?? updatedOrder['data']?['id']?.toString() ?? effectiveOrderId;
                                         effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? updatedOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
                                         debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
-                                      } else {
-                                        // Insert New Dine-In Order into PostgreSQL Database
-                                        final orderDto = {
-                                          'order_type': 'dineIn',
-                                          if (table.id.isNotEmpty) 'table_id': table.id,
-                                          'guest_count': table.capacity > 0 ? table.capacity : 1,
-                                          'status': 'accepted',
-                                          'is_paid': false,
-                                          'payment_status': 'UNPAID',
-                                          'subtotal': _totalBill,
-                                          'grand_total': _totalBill,
-                                          'items': itemsPayload,
-                                        };
-
-                                        final createdOrder = await ordersApi.createOrder(orderDto);
-                                        effectiveOrderId = createdOrder['id']?.toString() ?? createdOrder['data']?['id']?.toString() ?? effectiveOrderId;
-                                        effectiveOrderNumber = createdOrder['order_number']?.toString() ?? createdOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
-                                        debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                      } catch (apiErr) {
+                                        debugPrint('⚠️ Orders API call error modifying dine-in order: $apiErr');
                                       }
-                                    } catch (apiErr) {
-                                      debugPrint('⚠️ Orders API call error (fallback to local offline store): $apiErr');
-                                    }
 
-                                    // 2. Also persist offline in Drift SQLite if enabled
-                                    if (FeatureFlags.offlineFirstEnabled) {
-                                      try {
-                                        final orderRepo = widget.ref.read(orderRepositoryProvider);
-                                        final orderItems = _cartItems.map((c) {
-                                          final itemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
-                                              ? c.item.id!
-                                              : const Uuid().v7();
-                                          return OrderItem(
-                                            id: const Uuid().v7(),
-                                            item: MenuItem(
-                                              id: itemId,
-                                              name: c.item.name,
-                                              category: c.item.category,
-                                              description: '',
-                                              basePrice: c.item.price,
-                                              imageUrl: c.item.imagePath,
-                                            ),
-                                            quantity: c.quantity,
-                                            backendUnitPrice: c.item.price,
-                                          );
-                                        }).toList();
-
-                                        final finalOrderId = effectiveOrderId ?? const Uuid().v7();
-                                        final existing = await orderRepo.getOrderById(finalOrderId);
-                                        if (existing != null) {
-                                          final updated = existing.copyWith(
-                                            items: orderItems,
-                                            subtotalOverride: _totalBill,
-                                            grandTotalOverride: _totalBill,
-                                            status: OrderStatus.accepted,
-                                          );
-                                          final saved = await orderRepo.updateOrder(updated);
-                                          effectiveOrderId ??= saved.id;
-                                          effectiveOrderNumber ??= saved.orderNumber;
-                                        } else {
+                                      if (FeatureFlags.offlineFirstEnabled) {
+                                        try {
+                                          final orderRepo = widget.ref.read(orderRepositoryProvider);
+                                          final existing = effectiveOrderId != null ? await orderRepo.getOrderById(effectiveOrderId) : null;
+                                          if (existing != null) {
+                                            final updated = existing.copyWith(
+                                              items: orderItems,
+                                              subtotalOverride: _totalBill,
+                                              grandTotalOverride: _totalBill,
+                                              status: OrderStatus.accepted,
+                                            );
+                                            final saved = await orderRepo.updateOrder(updated);
+                                            effectiveOrderId = saved.id;
+                                            effectiveOrderNumber = saved.orderNumber;
+                                          }
+                                          widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
+                                        } catch (driftErr) {
+                                          debugPrint('⚠️ Drift offline order update error: $driftErr');
+                                        }
+                                      }
+                                    } else {
+                                      // New order creation / checkout flow (Fix for Wave 5a #10: eliminate dual-write)
+                                      if (FeatureFlags.offlineFirstEnabled) {
+                                        // 1. With OFFLINE_FIRST_ENABLED=true: route checkout only through orderRepositoryProvider (local write + outbox).
+                                        // Remove the direct HTTP create and the fallback new-order path.
+                                        try {
+                                          final orderRepo = widget.ref.read(orderRepositoryProvider);
+                                          final clientOrderId = const Uuid().v7();
                                           final newOrder = OrderModel(
-                                            id: finalOrderId,
-                                            orderNumber: effectiveOrderNumber ?? '',
+                                            id: clientOrderId,
+                                            orderNumber: '',
                                             type: OrderType.dineIn,
                                             status: OrderStatus.accepted,
                                             items: orderItems,
@@ -4160,19 +4153,46 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                             grandTotalOverride: _totalBill,
                                             dineInDetail: DineInOrderDetail(
                                               id: const Uuid().v7(),
-                                              orderId: finalOrderId,
+                                              orderId: clientOrderId,
                                               tableId: table.id,
                                               guestCount: table.capacity > 0 ? table.capacity : 1,
                                               waiterName: 'Cashier',
                                             ),
                                           );
                                           final saved = await orderRepo.saveOrder(newOrder);
-                                          effectiveOrderId ??= saved.id;
-                                          effectiveOrderNumber ??= saved.orderNumber;
+                                          effectiveOrderId = saved.id;
+                                          effectiveOrderNumber = saved.orderNumber;
+                                          widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
+                                          debugPrint('✅ Dine-in Order committed locally + outbox: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        } catch (driftErr) {
+                                          debugPrint('⚠️ Drift offline order save error: $driftErr');
                                         }
-                                        widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
-                                      } catch (driftErr) {
-                                        debugPrint('⚠️ Drift offline order save error: $driftErr');
+                                      } else {
+                                        // 2. With OFFLINE_FIRST_ENABLED=false: keep the online-only path working.
+                                        // A timeout must not create a second order with a new ID. Reuse the same client-generated order ID/idempotency key on any retry.
+                                        final clientOrderId = _pendingNewOrderId ??= const Uuid().v7();
+                                        final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                                        try {
+                                          final orderDto = {
+                                            'id': clientOrderId,
+                                            'order_type': 'dineIn',
+                                            if (table.id.isNotEmpty) 'table_id': table.id,
+                                            'guest_count': table.capacity > 0 ? table.capacity : 1,
+                                            'status': 'accepted',
+                                            'is_paid': false,
+                                            'payment_status': 'UNPAID',
+                                            'subtotal': _totalBill,
+                                            'grand_total': _totalBill,
+                                            'items': itemsPayload,
+                                          };
+                                          final createdOrder = await ordersApi.createOrder(orderDto);
+                                          effectiveOrderId = createdOrder['id']?.toString() ?? createdOrder['data']?['id']?.toString() ?? clientOrderId;
+                                          effectiveOrderNumber = createdOrder['order_number']?.toString() ?? createdOrder['data']?['order_number']?.toString();
+                                          _pendingNewOrderId = null; // Clear on success
+                                          debugPrint('✅ Dine-in Order saved in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        } catch (apiErr) {
+                                          debugPrint('⚠️ Orders API call error in online-only mode (idempotency key preserved: $clientOrderId): $apiErr');
+                                        }
                                       }
                                     }
 
@@ -4216,6 +4236,11 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                           backgroundColor: effectiveOrderId != null ? AppColors.success : const Color(0xFFD97706),
                                         ),
                                       );
+                                    }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => _isSubmittingOrder = false);
+                                      }
                                     }
                                   },
                             icon: _isSubmittingOrder

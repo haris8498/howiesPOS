@@ -261,6 +261,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     List<Map<String, dynamic>>? items,
     Map<String, dynamic>? managerApproval,
     String? approvedByManagerId,
+    String? existingOrderId,
   }) async {
     final nextToken = state.tokenCounter;
     final effectiveDiscount = discountPercentage > 0
@@ -302,7 +303,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       );
     }).toList();
 
-    final orderId = const Uuid().v4();
+    final orderId = existingOrderId ?? const Uuid().v4();
     final newOrder = TakeawayOrder(
       id: orderId,
       tokenNumber: tokenStr,
@@ -320,7 +321,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       items: fallbackItems,
     );
 
-    // 1. SAVE TO LOCAL DRIFT DATABASE & SYNC OUTBOX ATOMICALLY (§5.2, §11, §12)
+    // 1. OFFLINE_FIRST_ENABLED=true: route checkout only through orderRepositoryProvider (local write + outbox).
+    // Remove the direct HTTP create and the fallback new-order path (§Wave 5a / #10).
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
@@ -353,20 +355,27 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
           ),
         );
         await orderRepo.saveOrder(orderModel);
+        _ref!.read(syncBackgroundWorkerProvider).triggerPush();
       } catch (err) {
         print('Error saving takeaway order to local SQLite/outbox: $err');
       }
+
+      state = state.copyWith(
+        orders: [newOrder, ...state.orders.where((o) => o.id != orderId)],
+        tokenCounter: nextToken + 1,
+      );
+      return;
     }
 
-    // 2. Optimistic UI update
+    // 2. OFFLINE_FIRST_ENABLED=false: keep the online-only path working.
+    // A timeout must not create a second order with a new ID. Reuse the same client-generated order ID/idempotency key on any retry.
     state = state.copyWith(
       orders: [newOrder, ...state.orders.where((o) => o.id != orderId)],
       tokenCounter: nextToken + 1,
     );
 
-    // 3. Attempt direct HTTP push if online; if offline, SyncOutbox will push automatically
     try {
-      final res = await _ordersApiService.createOrder({
+      await _ordersApiService.createOrder({
         'id': orderId,
         'order_type': 'takeaway',
         'token_number': tokenStr,
@@ -386,22 +395,10 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
         if (managerApproval != null) 'manager_approval': managerApproval,
       });
 
-      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
-        try {
-          final db = _ref!.read(appDatabaseProvider);
-          await db.ordersDao.markOrderSynced(orderId, 1, DateTime.now());
-          await (db.delete(db.syncOutbox)..where((t) => t.entityId.equals(orderId))).go();
-        } catch (_) {}
-      }
-
       await loadTakeawayOrders(silent: true);
     } catch (e) {
-      print('Takeaway order queued safely in local Drift SQLite outbox: $e');
-      if (FeatureFlags.offlineFirstEnabled && _ref != null) {
-        try {
-          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
-        } catch (_) {}
-      }
+      print('Online takeaway order creation error (idempotency key preserved: $orderId): $e');
+      rethrow;
     }
   }
 

@@ -448,7 +448,49 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
     }
 
     const startingCashNum = Number(existing.starting_cash || 0);
-    const expectedCash = startingCashNum + totalCashSales;
+    // Check cross-shift cash refunds processed during this shift
+    const refundAdjustments = (tx as any).orderAdjustment?.findMany
+      ? await (tx as any).orderAdjustment.findMany({
+          where: {
+            shift_id: existing.id,
+            type: 'REFUND',
+          },
+          include: {
+            order: {
+              select: {
+                id: true,
+                shift_id: true,
+                payments: true,
+              },
+            },
+          },
+        })
+      : [];
+
+    let cashRefundsTotal = 0;
+    for (const adj of refundAdjustments) {
+      const origShiftId = adj.order?.shift_id;
+      if (!origShiftId || origShiftId !== existing.id) {
+        const method = (adj.refund_method || '').toLowerCase();
+        if (method === 'cash') {
+          cashRefundsTotal += Number(adj.amount || 0);
+        } else if (method === 'original') {
+          const payments = adj.order?.payments || [];
+          if (payments.length === 0) {
+            cashRefundsTotal += Number(adj.amount || 0);
+          } else {
+            const cashPaid = payments
+              .filter((p: any) => (p.payment_method || '').toLowerCase() === 'cash')
+              .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+            if (cashPaid > 0) {
+              cashRefundsTotal += Math.min(Number(adj.amount || 0), cashPaid);
+            }
+          }
+        }
+      }
+    }
+
+    const expectedCash = startingCashNum + totalCashSales - cashRefundsTotal;
     const finalVariance = payload.cash_variance !== undefined
       ? Number(payload.cash_variance)
       : (actualCash - expectedCash);
@@ -458,6 +500,7 @@ export class ShiftHandler implements SyncEntityHandler, OnModuleInit {
       data: {
         status,
         cash_submitted: new Prisma.Decimal(actualCash),
+        cash_refunds_total: new Prisma.Decimal(cashRefundsTotal),
         expected_cash_in_hand: new Prisma.Decimal(expectedCash),
         cash_variance: new Prisma.Decimal(finalVariance),
         variance_amount: new Prisma.Decimal(payload.variance_amount !== undefined ? Number(payload.variance_amount) : finalVariance),

@@ -1751,7 +1751,31 @@ export class OrdersService {
       const adjustmentId = uuidv7();
       const cashierId = dto.cashier_id || actor?.id || null;
       const deviceId = dto.device_id || existing.device_id || null;
-      const shiftId = dto.shift_id || existing.shift_id || null;
+      let shiftId = dto.shift_id || null;
+      if (!shiftId) {
+        try {
+          const activeShift = (tx as any).dailyCalculation?.findFirst
+            ? (await (tx as any).dailyCalculation.findFirst({
+                where: {
+                  status: 'ACTIVE',
+                  ...(cashierId ? { cashier_id: cashierId } : {}),
+                },
+                orderBy: { created_at: 'desc' },
+                select: { id: true },
+              })) ||
+              (await (tx as any).dailyCalculation.findFirst({
+                where: { status: 'ACTIVE' },
+                orderBy: { created_at: 'desc' },
+                select: { id: true },
+              }))
+            : null;
+          if (activeShift) {
+            shiftId = activeShift.id;
+          }
+        } catch (err) {
+          this.logger.warn(`Could not resolve active shift for refund adjustment: ${err}`);
+        }
+      }
 
       const adjustment = await (tx as any).orderAdjustment.create({
         data: {

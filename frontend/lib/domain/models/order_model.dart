@@ -457,6 +457,7 @@ class OrderModel {
     final typeStr = type.name; // 'online' | 'takeaway' | 'dineIn'
 
     final base = <String, dynamic>{
+      if (id.isNotEmpty) 'id': id,
       if (shiftId != null) 'shift_id': shiftId,
       'order_number': orderNumber,
       'order_type': typeStr,
@@ -513,6 +514,9 @@ class OrderModel {
       case OrderType.takeaway:
       case OrderType.takeAway: // legacy alias for takeaway
         if (takeawayDetail != null) {
+          base['token_number'] = takeawayDetail!.tokenNumber;
+          base['customer_name'] = takeawayDetail!.customerName;
+          base['customer_phone'] = takeawayDetail!.customerPhone;
           base['takeaway_detail'] = takeawayDetail!.toJson()
             ..remove('id')
             ..remove('order_id');

@@ -377,6 +377,95 @@ void main() {
       expect(matchingOutbox.length, equals(1),
           reason: 'Checkout retry after simulated timeout must create exactly one outbox row');
     });
+
+    test('13. Offline void marks the item voided, queues exactly one outbox mutation, and updates the order total', () async {
+      final orderId = uuid.v7();
+      final item1Id = uuid.v7();
+      final item2Id = uuid.v7();
+
+      const wingsMenuItem = MenuItem(
+        id: 'item-002',
+        name: 'Buffalo Wings',
+        category: 'Sides',
+        description: 'Spicy Buffalo Wings',
+        basePrice: 8.50,
+        imageUrl: '',
+      );
+
+      final initialOrder = OrderModel(
+        id: orderId,
+        orderNumber: 'HH-VOID-1',
+        type: OrderType.dineIn,
+        status: OrderStatus.accepted,
+        items: [
+          OrderItem(
+            id: item1Id,
+            item: testMenuItem,
+            quantity: 1,
+            selectedSize: 'Large',
+            backendUnitPrice: 12.00,
+          ),
+          OrderItem(
+            id: item2Id,
+            item: wingsMenuItem,
+            quantity: 1,
+            selectedSize: 'Regular',
+            backendUnitPrice: 8.50,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        subtotalOverride: 20.50,
+        discountPercentage: 0.0,
+        discountAmount: 0.0,
+        taxAmount: 0.0,
+        grandTotalOverride: 20.50,
+        paymentStatus: 'UNPAID',
+        isPaid: false,
+      );
+
+      await repository.saveOrder(initialOrder);
+
+      // Verify initial state
+      final initialOrderInDb = await db.ordersDao.getOrderById(orderId);
+      expect(initialOrderInDb!.subtotal, equals(20.50));
+      expect(initialOrderInDb.grandTotal, equals(20.50));
+
+      // Perform offline void of the wings item
+      await repository.voidOrderItem(
+        orderId,
+        item2Id,
+        voidedBy: 'Cashier Elena',
+        reason: 'Customer changed mind',
+      );
+
+      // 1. Verify item is marked voided with D-05 ledger columns
+      final items = await db.ordersDao.getOrderItems(orderId);
+      expect(items.length, equals(2));
+      final voidedItem = items.firstWhere((i) => i.id == item2Id);
+      expect(voidedItem.isCancelled, isTrue);
+      expect(voidedItem.voidedAt, isNotNull);
+      expect(voidedItem.voidedBy, equals('Cashier Elena'));
+      expect(voidedItem.cancelReason, equals('Customer changed mind'));
+
+      // 2. Verify exactly one ITEM_VOID outbox mutation is queued matching handleItemVoid
+      final allOutbox = await db.outboxDao.getAllEntries();
+      final voidMutations = allOutbox.where((e) => e.entityId == orderId && e.operationType == 'ITEM_VOID').toList();
+      expect(voidMutations.length, equals(1));
+      final voidMutation = voidMutations.first;
+      expect(voidMutation.status, equals(SyncOutboxStatus.pending));
+      expect(voidMutation.entityType, equals('order'));
+      final payload = jsonDecode(voidMutation.payload) as Map<String, dynamic>;
+      expect(payload['order_id'], equals(orderId));
+      expect(payload['item_id'], equals(item2Id));
+      expect(payload['voided_by'], equals('Cashier Elena'));
+      expect(payload['reason'], equals('Customer changed mind'));
+      expect(payload['voided_at'], isNotNull);
+
+      // 3. Verify local order total is recalculated
+      final updatedOrder = await db.ordersDao.getOrderById(orderId);
+      expect(updatedOrder!.subtotal, equals(12.00));
+      expect(updatedOrder.grandTotal, equals(12.00));
+    });
   });
 }
 

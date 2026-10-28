@@ -35,6 +35,13 @@ class TokenStorage {
   /// Cache token in memory for synchronous access during API requests
   static String? get cachedToken => _cachedToken;
 
+  /// Checks whether a token is an offline synthetic placeholder (SEC / #18).
+  static bool isSyntheticToken(String? token) {
+    if (token == null || token.isEmpty) return false;
+    return token.startsWith('local_offline_token_') ||
+        token.startsWith('offline_dpapi_token_');
+  }
+
   /// Whether DPAPI encryption is supported on current platform
   static bool get isDpapiSupported => Platform.isWindows;
 

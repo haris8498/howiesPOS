@@ -4,10 +4,16 @@ import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService, OrderWithDetails } from './orders.service';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
+import { ChangeLogService } from '../sync/change-log.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: PrismaService;
+  let changeLogService: ChangeLogService;
+  const mockChangeLogService = {
+    record: jest.fn().mockResolvedValue({}),
+    getMaxSequence: jest.fn().mockResolvedValue(BigInt(1)),
+  };
   const mockKitchenGateway = {
     emitOrderCreated: jest.fn(),
     emitOrderUpdated: jest.fn(),
@@ -36,6 +42,7 @@ describe('OrdersService', () => {
     order_number: 'ORD-1001',
     order_type: 'dineIn',
     status: 'newOrder',
+    version: 1,
     subtotal: new Prisma.Decimal(1798.0),
     discount_percentage: new Prisma.Decimal(0.0),
     discount_amount: new Prisma.Decimal(0.0),
@@ -154,12 +161,24 @@ describe('OrdersService', () => {
             storeSetting: {
               findFirst: jest.fn().mockResolvedValue(mockStoreSettings),
             },
+            systemChangeLog: {
+              create: jest.fn().mockResolvedValue({}),
+            },
             $transaction: jest.fn().mockImplementation(async (callback) => {
               return callback({
                 order: {
                   findMany: jest.fn().mockResolvedValue([mockOrder]),
                   create: jest.fn().mockResolvedValue(mockOrder),
-                  update: jest.fn().mockResolvedValue(mockOrder),
+                  update: jest.fn().mockImplementation(({ data }) =>
+                    Promise.resolve({
+                      ...mockOrder,
+                      ...data,
+                      version:
+                        typeof data?.version === 'object' && data?.version?.increment
+                          ? (mockOrder.version || 1) + data.version.increment
+                          : data?.version ?? (mockOrder.version || 1),
+                    }),
+                  ),
                   findUnique: jest.fn().mockImplementation(({ where }) => {
                     if (where?.id === 'ord-1' || where?.order_number === 'ORD-1001') {
                       return Promise.resolve(mockOrder);
@@ -237,6 +256,9 @@ describe('OrdersService', () => {
                 storeSetting: {
                   findFirst: jest.fn().mockResolvedValue(mockStoreSettings),
                 },
+                systemChangeLog: {
+                  create: jest.fn().mockResolvedValue({}),
+                },
               });
             }),
           },
@@ -245,11 +267,16 @@ describe('OrdersService', () => {
           provide: KitchenGateway,
           useValue: mockKitchenGateway,
         },
+        {
+          provide: ChangeLogService,
+          useValue: mockChangeLogService,
+        },
       ],
     }).compile();
 
     service = module.get<OrdersService>(OrdersService);
     prisma = module.get<PrismaService>(PrismaService);
+    changeLogService = module.get<ChangeLogService>(ChangeLogService);
     jest.clearAllMocks();
   });
 
@@ -385,18 +412,92 @@ describe('OrdersService', () => {
     expect(result.id).toBe('ord-1');
   });
 
-  it('should update order details', async () => {
-    const result = await service.updateOrder('ord-1', {
+  it('updateOrder records a change-log entry and bumps version', async () => {
+    // 1. Without device ID (web / dashboard edit) -> origin_device_id is null
+    const resultWeb = await service.updateOrder('ord-1', {
       is_held: true,
     });
-    expect(result).toBeDefined();
+    expect(resultWeb).toBeDefined();
+    expect(resultWeb.version).toBe(2);
+    expect(mockChangeLogService.record).toHaveBeenCalledWith(
+      expect.anything(),
+      'order',
+      'ord-1',
+      'UPDATE',
+      2,
+      expect.objectContaining({
+        id: 'ord-1',
+        version: 2,
+        origin_device_id: null,
+      }),
+      false,
+    );
+
+    // 2. With device ID (POS terminal edit) -> origin_device_id is populated
+    jest.clearAllMocks();
+    const resultPos = await service.updateOrder('ord-1', { is_held: false }, 'POS-P1');
+    expect(resultPos).toBeDefined();
+    expect(resultPos.version).toBe(2);
+    expect(mockChangeLogService.record).toHaveBeenCalledWith(
+      expect.anything(),
+      'order',
+      'ord-1',
+      'UPDATE',
+      2,
+      expect.objectContaining({
+        id: 'ord-1',
+        version: 2,
+        origin_device_id: 'POS-P1',
+      }),
+      false,
+    );
   });
 
-  it('should update order status', async () => {
-    const result = await service.updateOrderStatus('ord-1', {
+  it('updateOrderStatus records a change-log entry and bumps version', async () => {
+    // 1. Without device ID (web / dashboard edit) -> origin_device_id is null
+    const resultWeb = await service.updateOrderStatus('ord-1', {
       status: 'preparing',
     });
-    expect(result).toBeDefined();
+    expect(resultWeb).toBeDefined();
+    expect(resultWeb.version).toBe(2);
+    expect(mockChangeLogService.record).toHaveBeenCalledWith(
+      expect.anything(),
+      'order',
+      'ord-1',
+      'UPDATE',
+      2,
+      expect.objectContaining({
+        id: 'ord-1',
+        status: 'preparing',
+        version: 2,
+        origin_device_id: null,
+      }),
+      false,
+    );
+
+    // 2. With device ID (POS terminal edit) -> origin_device_id is populated
+    jest.clearAllMocks();
+    const resultPos = await service.updateOrderStatus(
+      'ord-1',
+      { status: 'ready' },
+      'POS-P1',
+    );
+    expect(resultPos).toBeDefined();
+    expect(resultPos.version).toBe(2);
+    expect(mockChangeLogService.record).toHaveBeenCalledWith(
+      expect.anything(),
+      'order',
+      'ord-1',
+      'UPDATE',
+      2,
+      expect.objectContaining({
+        id: 'ord-1',
+        status: 'ready',
+        version: 2,
+        origin_device_id: 'POS-P1',
+      }),
+      false,
+    );
   });
 
   it('should reject status-patch cancel on a paid order', async () => {

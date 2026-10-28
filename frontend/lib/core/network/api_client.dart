@@ -100,7 +100,7 @@ class ApiClient {
 
     final token = await TokenStorage.getToken();
     // Only send real JWT tokens — skip local offline placeholder tokens
-    if (token != null && token.isNotEmpty && !token.startsWith('local_offline_token_')) {
+    if (token != null && token.isNotEmpty && !TokenStorage.isSyntheticToken(token)) {
       headers['Authorization'] = 'Bearer $token';
     }
 

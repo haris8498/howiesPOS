@@ -91,7 +91,41 @@ class OrdersDao extends DatabaseAccessor<AppDatabase> with _$OrdersDaoMixin {
     );
   }
 
+  Future<int> markOrderItemVoided({
+    required String itemId,
+    required DateTime voidedAt,
+    required String voidedBy,
+    String? reason,
+  }) {
+    return (update(localOrderItems)..where((t) => t.id.equals(itemId))).write(
+      LocalOrderItemsCompanion(
+        isCancelled: const Value(true),
+        cancelledAt: Value(voidedAt),
+        cancelReason: Value(reason),
+        voidedAt: Value(voidedAt),
+        voidedBy: Value(voidedBy),
+        syncStatus: const Value('pending_update'),
+      ),
+    );
+  }
+
   Future<int> deleteOrder(String id) {
     return (delete(localOrders)..where((t) => t.id.equals(id))).go();
+  }
+
+  Future<void> upsertOrder(LocalOrdersCompanion order) {
+    return into(localOrders).insertOnConflictUpdate(order);
+  }
+
+  Future<void> upsertOrderItem(LocalOrderItemsCompanion item) {
+    return into(localOrderItems).insertOnConflictUpdate(item);
+  }
+
+  Future<void> upsertOrderItems(List<LocalOrderItemsCompanion> items) {
+    return batch((b) => b.insertAllOnConflictUpdate(localOrderItems, items));
+  }
+
+  Future<int> updateOrderItem(String itemId, LocalOrderItemsCompanion companion) {
+    return (update(localOrderItems)..where((t) => t.id.equals(itemId))).write(companion);
   }
 }

@@ -93,8 +93,8 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
     ConnectivityState? initialState,
   }) : super(initialState ?? const ConnectivityState());
 
-  ConnectivityState get currentState => state;
-  bool get isOnline => state.isOnline;
+  ConnectivityState get currentState => (!mounted || _isDisposed) ? const ConnectivityState() : state;
+  bool get isOnline => (!mounted || _isDisposed) ? false : state.isOnline;
 
   /// URL used for the health probe.
   String get healthUrl {

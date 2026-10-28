@@ -353,5 +353,30 @@ void main() {
       // Marking the order synced removes it from watchPendingOrders
       await db.ordersDao.markOrderSynced(saved.id, 2, DateTime.now());
     });
+
+    test('12. Dual-write elimination: simulated create timeout retry results in exactly one order ID and one outbox row (#10)', () async {
+      final orderId = uuid.v7();
+      final order = createSampleOrder(id: orderId);
+
+      // Initial local-first checkout commit into Drift SQLite WAL + outbox
+      final saved1 = await repository.saveOrder(order);
+      expect(saved1.id, equals(orderId));
+
+      // Simulate client experiencing a timeout / retry: checkout invoked again with identical order ID
+      final saved2 = await repository.saveOrder(order);
+      expect(saved2.id, equals(orderId));
+
+      // Exactly one order exists in local database
+      final allOrders = await repository.getAllOrders();
+      final matchingOrders = allOrders.where((o) => o.id == orderId).toList();
+      expect(matchingOrders.length, equals(1));
+
+      // Exactly one outbox row exists (no duplicate mutations queued)
+      final outboxEntries = await db.outboxDao.getAllEntries();
+      final matchingOutbox = outboxEntries.where((o) => o.entityId == orderId).toList();
+      expect(matchingOutbox.length, equals(1),
+          reason: 'Checkout retry after simulated timeout must create exactly one outbox row');
+    });
   });
 }
+

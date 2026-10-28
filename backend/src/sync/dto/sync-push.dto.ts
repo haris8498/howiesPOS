@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsIn,
   IsInt,
@@ -58,6 +59,7 @@ export class SyncPushDto {
   batch_id!: string;
 
   @IsArray()
+  @ArrayMaxSize(100)
   @ValidateNested({ each: true })
   @Type(() => SyncMutationDto)
   mutations!: SyncMutationDto[];

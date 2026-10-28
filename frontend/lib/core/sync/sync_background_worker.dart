@@ -116,6 +116,7 @@ class SyncWorkerState {
   bool get isPushing => status == SyncWorkerStatus.pushing;
   bool get isPulling => status == SyncWorkerStatus.pulling;
   bool get isIdle => status == SyncWorkerStatus.idle;
+  bool get isLoginRequired => isAuthPaused || status == SyncWorkerStatus.authPaused;
 
   SyncWorkerState copyWith({
     SyncWorkerStatus? status,
@@ -440,6 +441,10 @@ class SyncBackgroundWorker {
   /// Immediate reconnection sync: drains outbox batches then pulls deltas.
   Future<void> reconnect() async {
     if (_isDisposed) return;
+    if (await checkSyntheticTokenAndPauseIfOnline()) {
+      return;
+    }
+    if (_isDisposed) return;
     stateNotifier.updateState(state.copyWith(
       isCircuitBreakerTripped: false,
       consecutiveTimeouts: 0,
@@ -596,6 +601,16 @@ class SyncBackgroundWorker {
         pushedCount: 0,
         success: false,
         networkOrAuthError: state.isAuthPaused || state.isCircuitBreakerTripped,
+      );
+    }
+
+    final currentToken = await TokenStorage.getToken();
+    if (connectivityNotifier.isOnline && TokenStorage.isSyntheticToken(currentToken)) {
+      await _handleSyntheticTokenLoginRequired();
+      return PushBatchDrainResult(
+        pushedCount: 0,
+        success: false,
+        networkOrAuthError: true,
       );
     }
 
@@ -1140,6 +1155,37 @@ class SyncBackgroundWorker {
   }
 
   /// Resumes outbox queue from AUTH_PAUSED back to PENDING after successful re-auth.
+  /// When online and holding a synthetic token, transitions the worker and pending outbox
+  /// items to the clear login-required (AUTH_PAUSED) state (§18).
+  Future<void> _handleSyntheticTokenLoginRequired([List<SyncOutboxEntry>? batch]) async {
+    const errorMsg = 'Login required to sync: terminal holding offline synthetic token';
+
+    if (batch != null && batch.isNotEmpty) {
+      for (final entry in batch) {
+        await db.outboxDao.markAuthPaused(entry.id, error: errorMsg);
+      }
+    } else {
+      await db.outboxDao.markAllPendingAuthPaused(error: errorMsg);
+    }
+
+    stateNotifier.updateState(state.copyWith(
+      status: SyncWorkerStatus.authPaused,
+      isAuthPaused: true,
+      lastError: errorMsg,
+    ));
+  }
+
+  /// Checks if the worker is online while holding an offline synthetic token.
+  /// If so, immediately pauses sync and prompts for online staff login (§18).
+  Future<bool> checkSyntheticTokenAndPauseIfOnline() async {
+    final token = await TokenStorage.getToken();
+    if (connectivityNotifier.isOnline && TokenStorage.isSyntheticToken(token)) {
+      await _handleSyntheticTokenLoginRequired();
+      return true;
+    }
+    return false;
+  }
+
   Future<void> resumeAuthPaused() async {
     await db.outboxDao.resumeAuthPaused();
     stateNotifier.updateState(state.copyWith(
@@ -1191,6 +1237,12 @@ class SyncBackgroundWorker {
   /// Internal delta pull replication stream (runs strictly after push under single-flight mutex).
   Future<PullStreamResult> _pullDeltas() async {
     if (_isDisposed || state.isAuthPaused || state.isCircuitBreakerTripped) {
+      return const PullStreamResult(pulledCount: 0, skippedForPendingCount: 0, success: false);
+    }
+
+    final currentToken = await TokenStorage.getToken();
+    if (connectivityNotifier.isOnline && TokenStorage.isSyntheticToken(currentToken)) {
+      await _handleSyntheticTokenLoginRequired();
       return const PullStreamResult(pulledCount: 0, skippedForPendingCount: 0, success: false);
     }
 

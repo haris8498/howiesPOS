@@ -7,6 +7,7 @@ import '../data/auth_repository.dart';
 import '../data/role_rights_repository.dart';
 import '../domain/models/user_role.dart';
 import '../features/auth/login_screen.dart';
+import '../core/widgets/online_login_prompt_banner.dart';
 import '../features/auth/unauthorized_screen.dart';
 import '../features/customers/customers_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
@@ -569,12 +570,19 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
         authState.currentUser.role == UserRole.cashier ||
         widget.currentRoute.startsWith('/sales');
 
+    final Widget content = Column(
+      children: [
+        const OnlineLoginPromptBanner(),
+        Expanded(child: widget.child),
+      ],
+    );
+
     final Widget shellScaffold = isCashier
         ? Scaffold(
             body: Column(
               children: [
                 CashierTopNavigationBar(currentRoute: widget.currentRoute),
-                Expanded(child: widget.child),
+                Expanded(child: content),
               ],
             ),
           )
@@ -582,7 +590,7 @@ class _PortalShellWrapperState extends ConsumerState<_PortalShellWrapper> {
             body: Row(
               children: [
                 NavigationSidebar(currentRoute: widget.currentRoute),
-                Expanded(child: widget.child),
+                Expanded(child: content),
               ],
             ),
           );

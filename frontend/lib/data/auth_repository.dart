@@ -446,7 +446,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       // SYNC-017: Resume sync outbox from AUTH_PAUSED immediately upon successful authentication
       if (_ref != null && FeatureFlags.offlineFirstEnabled) {
         try {
-          _ref.read(syncBackgroundWorkerProvider).resumeAuthPaused();
+          await _ref.read(syncBackgroundWorkerProvider).resumeAuthPaused();
         } catch (_) {}
       }
 
@@ -522,7 +522,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
 
       await TokenStorage.saveUserSession(
-        token: 'offline_dpapi_token_${cred.username}',
+        token: 'local_offline_token_${cred.username}',
         userId: activeStaff.id,
         username: cred.username,
         email: '${cred.username}@hungryhowies.com',

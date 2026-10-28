@@ -282,6 +282,20 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
   }
 
   /// Resumes all AUTH_PAUSED entries back to PENDING after successful authentication.
+  /// Deviation #3 / #18: Marks all pending and retryable entries as AUTH_PAUSED when re-login is required.
+  Future<int> markAllPendingAuthPaused({required String error}) {
+    return (update(syncOutbox)
+          ..where((t) =>
+              t.status.equals(SyncOutboxStatus.pending) |
+              t.status.equals(SyncOutboxStatus.failedRetryable)))
+        .write(
+      SyncOutboxCompanion(
+        status: const Value(SyncOutboxStatus.authPaused),
+        lastError: Value(error),
+      ),
+    );
+  }
+
   Future<int> resumeAuthPaused() {
     return (update(syncOutbox)..where((t) => t.status.equals(SyncOutboxStatus.authPaused))).write(
       const SyncOutboxCompanion(

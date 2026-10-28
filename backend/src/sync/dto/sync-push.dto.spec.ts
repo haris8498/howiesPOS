@@ -36,4 +36,20 @@ describe('SyncPushDto Validation', () => {
     expect(mutationError).toBeDefined();
     expect(mutationError?.constraints).toHaveProperty('arrayMaxSize');
   });
+
+  it('accepts schema_version as optional integer defaulting to 1', async () => {
+    const payload = {
+      device_id: 'dev-1',
+      batch_id: 'batch-1',
+      mutations: [
+        createMutation(1),
+        { ...createMutation(2), schema_version: 2 },
+      ],
+    };
+    const dto = plainToInstance(SyncPushDto, payload);
+    const errors = await validate(dto);
+    expect(errors.length).toBe(0);
+    expect(dto.mutations[0].schema_version).toBe(1);
+    expect(dto.mutations[1].schema_version).toBe(2);
+  });
 });

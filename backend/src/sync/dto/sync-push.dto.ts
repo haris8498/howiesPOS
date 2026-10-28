@@ -35,6 +35,10 @@ export class SyncMutationDto {
 
   @IsInt()
   @IsOptional()
+  schema_version?: number = 1;
+
+  @IsInt()
+  @IsOptional()
   @Min(0)
   dependency_order?: number;
 

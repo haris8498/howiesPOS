@@ -6914,22 +6914,41 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
       final cashierName = currentUser.fullName.isNotEmpty ? currentUser.fullName : 'Cashier';
 
       if (orderId != null && orderId.isNotEmpty) {
-        final ordersApi = widget.ref.read(ordersApiServiceProvider);
+        if (FeatureFlags.offlineFirstEnabled) {
+          final orderRepo = widget.ref.read(orderRepositoryProvider);
+          for (final item in widget.table.currentOrderItems) {
+            if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
+            final itemId = item['id']?.toString() ?? '';
+            final cancelQty = _cancelQuantities[itemId] ?? 0;
 
-        // Cancel each item with its designated cancel quantity (skipping already cancelled items)
-        for (final item in widget.table.currentOrderItems) {
-          if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
-          final itemId = item['id']?.toString() ?? '';
-          final cancelQty = _cancelQuantities[itemId] ?? 0;
+            if (cancelQty > 0 && itemId.isNotEmpty) {
+              await orderRepo.voidOrderItem(
+                orderId,
+                itemId,
+                voidedBy: cashierName,
+                reason: effectiveReason,
+              );
+            }
+          }
+          widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
+        } else {
+          final ordersApi = widget.ref.read(ordersApiServiceProvider);
 
-          if (cancelQty > 0 && itemId.isNotEmpty) {
-            await ordersApi.cancelOrderItem(
-              orderId,
-              itemId: itemId,
-              cancelQuantity: cancelQty,
-              reason: effectiveReason,
-              cancelledBy: cashierName,
-            );
+          // Cancel each item with its designated cancel quantity (skipping already cancelled items)
+          for (final item in widget.table.currentOrderItems) {
+            if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
+            final itemId = item['id']?.toString() ?? '';
+            final cancelQty = _cancelQuantities[itemId] ?? 0;
+
+            if (cancelQty > 0 && itemId.isNotEmpty) {
+              await ordersApi.cancelOrderItem(
+                orderId,
+                itemId: itemId,
+                cancelQuantity: cancelQty,
+                reason: effectiveReason,
+                cancelledBy: cashierName,
+              );
+            }
           }
         }
 
@@ -6946,6 +6965,57 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
             tableNumber: widget.table.tableNumber,
           );
         }
+
+        // Prepare updated items with cancelled status for KOT strikethrough printing and table state
+        final updatedItems = widget.table.currentOrderItems.map((item) {
+          final itemId = item['id']?.toString() ?? '';
+          if ((_cancelQuantities[itemId] ?? 0) > 0) {
+            final copy = Map<String, dynamic>.from(item);
+            copy['is_cancelled'] = true;
+            copy['cancel_reason'] = effectiveReason;
+            copy['cancelled_by'] = cashierName;
+            return copy;
+          }
+          return item;
+        }).toList();
+
+        final updatedTable = widget.table.copyWith(
+          currentOrderItems: updatedItems,
+        );
+
+        // 2. Trigger the KOT strikethrough print through the existing print path
+        try {
+          final kotReceipt = ReceiptData.fromTableKot(
+            table: updatedTable,
+            ticketId: displayTicketId,
+            isModified: true,
+          );
+          await ReceiptPrinterService.printReceipt(
+            context: widget.parentContext,
+            receipt: kotReceipt,
+            forcePrint: true,
+          );
+        } catch (printErr) {
+          debugPrint('⚠️ Kitchen print strikethrough error: $printErr');
+        }
+
+        // Update local table bill & items in state
+        double newBill = 0.0;
+        for (final item in updatedItems) {
+          if (item['is_cancelled'] != true && item['is_cancelled'] != 1) {
+            final qty = (item['quantity'] as num?)?.toDouble() ?? 1.0;
+            final price = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+            newBill += (qty * price);
+          }
+        }
+        await widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
+          widget.table.id,
+          newBill,
+          TableStatus.occupied,
+          activeOrderId: orderId,
+          activeOrderNumber: activeOrderNum,
+          orderItems: updatedItems,
+        );
       }
 
       await widget.ref.read(tableProvider.notifier).loadTables();

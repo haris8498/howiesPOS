@@ -10,6 +10,7 @@ import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
 import { PricingService } from '../pricing/pricing.service';
+import { ChangeLogService } from '../sync/change-log.service';
 import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -46,6 +47,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     @Optional() private readonly kitchenGateway?: KitchenGateway,
     @Optional() private readonly pricingService?: PricingService,
+    @Optional() private readonly changeLogService?: ChangeLogService,
   ) {}
 
   private round(val: number): number {
@@ -608,7 +610,7 @@ export class OrdersService {
   // -------------------------------------------------------------------------
   // UPDATE ORDER
   // -------------------------------------------------------------------------
-  async updateOrder(id: string, dto: UpdateOrderDto): Promise<OrderWithDetails> {
+  async updateOrder(id: string, dto: UpdateOrderDto, deviceId?: string): Promise<OrderWithDetails> {
     const existing = await this.prisma.order.findUnique({
       where: { id },
       include: ORDER_INCLUDE,
@@ -858,7 +860,7 @@ export class OrdersService {
           : existing.payment_status;
 
       // Update base order
-      await tx.order.update({
+      const updated = await tx.order.update({
         where: { id },
         data: {
           order_type: orderType,
@@ -885,8 +887,16 @@ export class OrdersService {
             dto.estimated_ready_at !== undefined
               ? dto.estimated_ready_at ? new Date(dto.estimated_ready_at) : null
               : existing.estimated_ready_at,
+          version: { increment: 1 },
         },
       });
+
+      const currentVersion = (existing as any).version || 1;
+      const newVersion =
+        typeof (updated as any).version === 'number' && (updated as any).version > currentVersion
+          ? (updated as any).version
+          : currentVersion + 1;
+      const updatedAt = (updated as any).updated_at || new Date();
 
       // Update type-specific detail
       if (isOnlineType) {
@@ -1021,19 +1031,67 @@ export class OrdersService {
         }
       }
 
+      const originDeviceId =
+        deviceId ||
+        (dto as any)?.origin_device_id ||
+        (dto as any)?.originDeviceId ||
+        (dto as any)?.device_id ||
+        (dto as any)?.deviceId ||
+        null;
+
+      const changeLogPayload = {
+        id: updated.id,
+        order_number: updated.order_number ?? existing.order_number,
+        order_type: updated.order_type ?? orderType,
+        status: updated.status ?? dto.status ?? existing.status,
+        subtotal: Number(updated.subtotal ?? subtotal),
+        discount_amount: Number(updated.discount_amount ?? discountAmount),
+        tax_amount: Number(updated.tax_amount ?? taxAmount),
+        grand_total: Number(updated.grand_total ?? grandTotal),
+        payment_status: updated.payment_status ?? paymentStatus,
+        is_paid: updated.is_paid ?? isPaid,
+        paid_at: (updated.is_paid ?? isPaid) ? updatedAt : undefined,
+        version: newVersion,
+        origin_device_id: originDeviceId,
+        updated_at: updatedAt,
+      };
+
+      const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+      if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+        await changeLog.record(
+          tx,
+          'order',
+          id,
+          'UPDATE',
+          newVersion,
+          changeLogPayload,
+          false,
+        );
+      }
+
       this.logger.log(`Updated order '${existing.order_number}' (${id})`);
 
-      return tx.order.findUnique({
+      const res = await tx.order.findUnique({
         where: { id },
         include: ORDER_INCLUDE,
-      }) as Promise<OrderWithDetails>;
+      });
+
+      return {
+        ...res,
+        version:
+          (res as any)?.version &&
+          typeof (res as any)?.version === 'number' &&
+          (res as any).version >= newVersion
+            ? (res as any).version
+            : newVersion,
+      } as OrderWithDetails;
     });
   }
 
   // -------------------------------------------------------------------------
   // UPDATE STATUS ONLY
   // -------------------------------------------------------------------------
-  async updateOrderStatus(id: string, dto: UpdateOrderStatusDto): Promise<OrderWithDetails> {
+  async updateOrderStatus(id: string, dto: UpdateOrderStatusDto, deviceId?: string): Promise<OrderWithDetails> {
     const existing = await this.prisma.order.findUnique({ where: { id } });
 
     if (!existing) {
@@ -1050,59 +1108,110 @@ export class OrdersService {
       }
     }
 
-    if (dto.status === 'cancelled') {
-      await this.prisma.orderItem.updateMany({
-        where: { order_id: id, is_cancelled: false },
-        data: {
-          is_cancelled: true,
-          cancelled_at: new Date(),
-          cancel_reason: dto.rejection_reason || 'Order Cancelled',
-        },
-      });
-    }
-
-    const updated = await this.prisma.order.update({
-      where: { id },
-      data: {
-        status: dto.status,
-        rejection_reason:
-          dto.rejection_reason !== undefined ? dto.rejection_reason : existing.rejection_reason,
-      },
-      include: ORDER_INCLUDE,
-    });
-
-    if (dto.status === 'completed') {
-      const dispatch = await this.prisma.deliveryDispatch.findFirst({
-        where: {
-          online_order_detail: { order_id: id },
-          dispatch_status: { notIn: ['delivered', 'cancelled'] },
-        },
-      });
-      if (dispatch) {
-        await this.prisma.deliveryDispatch.update({
-          where: { id: dispatch.id },
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.status === 'cancelled') {
+        await tx.orderItem.updateMany({
+          where: { order_id: id, is_cancelled: false },
           data: {
-            dispatch_status: 'delivered',
-            delivered_at: new Date(),
+            is_cancelled: true,
+            cancelled_at: new Date(),
+            cancel_reason: dto.rejection_reason || 'Order Cancelled',
           },
         });
-        if (dispatch.rider_id) {
-          const rider = await this.prisma.deliveryRider.findUnique({ where: { id: dispatch.rider_id } });
-          if (rider && rider.active_deliveries_count > 0) {
-            await this.prisma.deliveryRider.update({
-              where: { id: rider.id },
-              data: {
-                active_deliveries_count: { decrement: 1 },
-                total_completed_deliveries: { increment: 1 },
-              },
-            });
+      }
+
+      const updated = await tx.order.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          rejection_reason:
+            dto.rejection_reason !== undefined ? dto.rejection_reason : existing.rejection_reason,
+          version: { increment: 1 },
+        },
+        include: ORDER_INCLUDE,
+      });
+
+      const currentVersion = (existing as any).version || 1;
+      const newVersion =
+        typeof (updated as any).version === 'number' && (updated as any).version > currentVersion
+          ? (updated as any).version
+          : currentVersion + 1;
+      const updatedAt = (updated as any).updated_at || new Date();
+
+      if (dto.status === 'completed') {
+        const dispatch = await tx.deliveryDispatch?.findFirst?.({
+          where: {
+            online_order_detail: { order_id: id },
+            dispatch_status: { notIn: ['delivered', 'cancelled'] },
+          },
+        });
+        if (dispatch) {
+          await tx.deliveryDispatch.update({
+            where: { id: dispatch.id },
+            data: {
+              dispatch_status: 'delivered',
+              delivered_at: new Date(),
+            },
+          });
+          if (dispatch.rider_id) {
+            const rider = await tx.deliveryRider?.findUnique?.({ where: { id: dispatch.rider_id } });
+            if (rider && rider.active_deliveries_count > 0) {
+              await tx.deliveryRider.update({
+                where: { id: rider.id },
+                data: {
+                  active_deliveries_count: { decrement: 1 },
+                  total_completed_deliveries: { increment: 1 },
+                },
+              });
+            }
           }
         }
       }
-    }
 
-    this.logger.log(`Status for order '${existing.order_number}' → '${dto.status}'`);
-    return updated as OrderWithDetails;
+      const originDeviceId =
+        deviceId ||
+        (dto as any)?.origin_device_id ||
+        (dto as any)?.originDeviceId ||
+        (dto as any)?.device_id ||
+        (dto as any)?.deviceId ||
+        null;
+
+      const changeLogPayload = {
+        id: updated.id,
+        order_number: updated.order_number ?? existing.order_number,
+        order_type: updated.order_type ?? existing.order_type,
+        status: updated.status ?? dto.status,
+        subtotal: Number(updated.subtotal ?? existing.subtotal),
+        discount_amount: Number(updated.discount_amount ?? existing.discount_amount),
+        tax_amount: Number(updated.tax_amount ?? existing.tax_amount),
+        grand_total: Number(updated.grand_total ?? existing.grand_total),
+        payment_status: updated.payment_status ?? existing.payment_status,
+        is_paid: updated.is_paid ?? existing.is_paid,
+        paid_at: (updated.is_paid ?? existing.is_paid) ? updatedAt : undefined,
+        version: newVersion,
+        origin_device_id: originDeviceId,
+        updated_at: updatedAt,
+      };
+
+      const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+      if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+        await changeLog.record(
+          tx,
+          'order',
+          id,
+          'UPDATE',
+          newVersion,
+          changeLogPayload,
+          false,
+        );
+      }
+
+      this.logger.log(`Status for order '${existing.order_number}' → '${dto.status}'`);
+      return {
+        ...updated,
+        version: newVersion,
+      } as OrderWithDetails;
+    });
   }
 
   // -------------------------------------------------------------------------

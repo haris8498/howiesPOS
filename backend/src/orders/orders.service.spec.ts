@@ -399,6 +399,20 @@ describe('OrdersService', () => {
     expect(result).toBeDefined();
   });
 
+  it('should reject status-patch cancel on a paid order', async () => {
+    jest.spyOn(prisma.order, 'findUnique').mockResolvedValueOnce({
+      ...mockOrder,
+      is_paid: true,
+      status: 'completed',
+    } as any);
+
+    await expect(
+      service.updateOrderStatus('ord-1', {
+        status: 'cancelled',
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
   it('should delete order', async () => {
     const result = await service.deleteOrder('ord-1');
     expect(result.message).toContain('deleted successfully');

@@ -1047,4 +1047,37 @@ describe('OrderHandler', () => {
     });
   });
 
+  describe('handle DELETE', () => {
+    it('should reject sync delete on a paid order with FAILED_FATAL', async () => {
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-paid-1',
+            order_number: 'ORD-5001',
+            is_paid: true,
+            status: 'completed',
+            version: 3,
+          }),
+          update: jest.fn(),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-del-1',
+          entity_type: 'order',
+          entity_id: 'ord-paid-1',
+          operation_type: 'DELETE',
+          payload: {},
+        },
+        { deviceId: 'POS-01', operationId: 'op-del-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('FAILED_FATAL');
+      expect(result.error_message).toContain('Paid/completed orders are permanent financial records');
+      expect(mockTx.order.update).not.toHaveBeenCalled();
+    });
+  });
+
 });

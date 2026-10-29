@@ -9,6 +9,7 @@
 #define MyAppPublisher "Hungry Howie's Pizza & Subs"
 #define MyAppURL "https://github.com/haris8498/howiesPOS"
 #define MyAppExeName "hungry_howies_pos.exe"
+; NEVER change this AppId after go-live
 #define AppId "{{B37B2E79-9B9D-4F15-B62C-09B92451C6A1}}"
 
 [Setup]

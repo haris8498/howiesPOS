@@ -85,7 +85,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     const prisma = this.prisma;
-    const operationId = String(rawKey).trim();
+    const operationId = String(rawKey).trim().slice(0, 128);
     const requestHash = this.computeRequestHash(req);
     const deviceId =
       (req.headers ? (req.headers['x-device-id'] as string) : undefined) ||
@@ -93,7 +93,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       'UNKNOWN_DEVICE';
     const entityType = this.resolveEntityType(req);
     const entityId = String(
-      req.body?.entity_id || req.body?.id || req.params?.id || operationId,
+      (req.body?.entity_id || req.body?.id || req.params?.id || operationId)?.toString().slice(0, 128),
     );
 
     // 2. Query idempotency ledger

@@ -760,10 +760,10 @@ model DataSyncLog {
 
 // ── 1. IDEMPOTENCY LEDGER ─────────────────────────────────────
 model ProcessedOperation {
-  operation_id     String    @id @db.VarChar(36)
+  operation_id     String    @id @db.VarChar(128)
   device_id        String    @db.VarChar(50)
   entity_type      String    @db.VarChar(50)
-  entity_id        String    @db.VarChar(36)
+  entity_id        String    @db.VarChar(128)
   request_hash     String    @db.VarChar(64)
   status           String    @default("PROCESSING") @db.VarChar(20)
   response_payload Json?
@@ -780,7 +780,7 @@ model ProcessedOperation {
 model SystemChangeLog {
   global_sequence  BigInt    @id @default(autoincrement())
   entity_type      String    @db.VarChar(50)
-  entity_id        String    @db.VarChar(36)
+  entity_id        String    @db.VarChar(128)
   operation        String    @db.VarChar(20) // INSERT, UPDATE, DELETE
   record_version   Int       @default(1)
   is_deleted       Boolean   @default(false)

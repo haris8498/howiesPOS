@@ -62,9 +62,31 @@ jobs:
           systemctl is-active --quiet howiespos
 
           echo "=== Checking API health ==="
-          sleep 3
-          curl --fail --silent --show-error \
-            http://127.0.0.1:3000/api/health
+          HEALTH_URL="http://127.0.0.1:3000/api/health"
+          MAX_ATTEMPTS=15
+          DELAY_SECONDS=2
+          ATTEMPT=1
+          HEALTH_OK=false
+
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Health check attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            if response=$(curl --fail --silent --show-error "$HEALTH_URL" 2>/dev/null); then
+              echo "Health check succeeded: $response"
+              HEALTH_OK=true
+              break
+            fi
+            sleep $DELAY_SECONDS
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [ "$HEALTH_OK" = false ]; then
+            echo "=== Health check failed after 30 seconds ==="
+            echo "--- systemctl status howiespos ---"
+            systemctl status howiespos --no-pager || true
+            echo "--- recent journalctl logs ---"
+            journalctl -u howiespos -n 50 --no-pager || true
+            exit 1
+          fi
 
           echo ""
           echo "=== DEPLOYMENT SUCCESSFUL ==="

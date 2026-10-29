@@ -63,7 +63,7 @@ class WindowsUpdater implements IWindowsUpdater {
         throw Exception('Downloaded update package is empty or missing.');
       }
 
-      // If the asset is an InnoSetup .exe installer, run it directly and close POS
+      // If the asset is an InnoSetup .exe installer, run it with elevation and close POS
       if (update.assetName.toLowerCase().endsWith('.exe')) {
         onProgress?.call(
           const UpdateProgress(
@@ -73,8 +73,23 @@ class WindowsUpdater implements IWindowsUpdater {
           ),
         );
         debugPrint('[WindowsUpdater] Launching Setup installer: ${zipFile.path}');
-        await Process.start(zipFile.path, ['/SILENT', '/CLOSEAPPLICATIONS'],
-            mode: ProcessStartMode.detached);
+        final escapedPath = zipFile.path.replaceAll("'", "''");
+        final result = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-WindowStyle',
+          'Hidden',
+          '-Command',
+          "Start-Process -FilePath '$escapedPath' -ArgumentList '/SILENT','/CLOSEAPPLICATIONS' -Verb RunAs",
+        ]);
+        if (result.exitCode != 0) {
+          debugPrint(
+            '[WindowsUpdater] Installer elevation failed (exit code ${result.exitCode}): ${result.stderr}',
+          );
+          throw Exception(
+            'Update cancelled: administrator permission was not granted.',
+          );
+        }
+
         exit(0);
       }
 

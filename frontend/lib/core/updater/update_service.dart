@@ -7,6 +7,49 @@ import 'update_models.dart';
 import 'version_utils.dart';
 import 'windows_updater.dart';
 
+/// The status of an update check.
+enum UpdateCheckStatus {
+  upToDate,
+  updateAvailable,
+  checkFailed,
+}
+
+/// Result of checking for application updates.
+class UpdateCheckResult {
+  final UpdateCheckStatus status;
+  final UpdateInfo? updateInfo;
+  final String? errorMessage;
+
+  const UpdateCheckResult({
+    required this.status,
+    this.updateInfo,
+    this.errorMessage,
+  });
+
+  const UpdateCheckResult.upToDate()
+      : status = UpdateCheckStatus.upToDate,
+        updateInfo = null,
+        errorMessage = null;
+
+  const UpdateCheckResult.updateAvailable(UpdateInfo info)
+      : status = UpdateCheckStatus.updateAvailable,
+        updateInfo = info,
+        errorMessage = null;
+
+  const UpdateCheckResult.checkFailed([this.errorMessage])
+      : status = UpdateCheckStatus.checkFailed,
+        updateInfo = null;
+
+  bool get isUpToDate => status == UpdateCheckStatus.upToDate;
+  bool get hasUpdate =>
+      status == UpdateCheckStatus.updateAvailable && updateInfo != null;
+  bool get isFailed => status == UpdateCheckStatus.checkFailed;
+
+  @override
+  String toString() =>
+      'UpdateCheckResult(status: $status, hasUpdate: $hasUpdate, error: $errorMessage)';
+}
+
 /// Service responsible for managing application updates.
 class UpdateService {
   static const String _lastCheckKey = 'howies_updater_last_check_timestamp';
@@ -29,10 +72,11 @@ class UpdateService {
   /// Checks whether a newer stable release is available.
   ///
   /// Respects a cooldown timer unless [force] is true.
-  /// Returns [UpdateInfo] if a newer version is available and contains the required Windows asset.
-  /// Returns `null` if the app is up to date, if the check failed, or if cooldown is active.
+  /// Returns [UpdateCheckResult.updateAvailable] if a newer version is available and contains the required Windows asset.
+  /// Returns [UpdateCheckResult.upToDate] if the app is up to date, if no release exists yet (HTTP 404), or if cooldown is active.
+  /// Returns [UpdateCheckResult.checkFailed] if an error occurred (network error, timeout, HTTP 403/429/500).
   /// NEVER throws an exception.
-  Future<UpdateInfo?> checkForUpdate({bool force = false}) async {
+  Future<UpdateCheckResult> checkForUpdate({bool force = false}) async {
     try {
       // 1. Check cooldown / debouncing
       SharedPreferences? sp = prefs;
@@ -50,7 +94,7 @@ class UpdateService {
           );
           if (DateTime.now().difference(lastCheckTime) < _checkCooldown) {
             debugPrint('[UpdateService] Cooldown active. Skipping check.');
-            return null;
+            return const UpdateCheckResult.upToDate();
           }
         }
       }
@@ -70,8 +114,10 @@ class UpdateService {
       // 3. Fetch latest stable release from GitHub
       final release = await _releaseClient.getLatestStableRelease();
       if (release == null) {
-        debugPrint('[UpdateService] No stable release retrieved from GitHub.');
-        return null;
+        debugPrint(
+          '[UpdateService] No stable release retrieved from GitHub (or release not found).',
+        );
+        return const UpdateCheckResult.upToDate();
       }
 
       // 4. Validate asset existence
@@ -79,7 +125,7 @@ class UpdateService {
         debugPrint(
           '[UpdateService] Stable release ${release.tagName} is missing required Windows asset.',
         );
-        return null;
+        return const UpdateCheckResult.upToDate();
       }
 
       // 5. Compare versions
@@ -88,7 +134,7 @@ class UpdateService {
         debugPrint(
           '[UpdateService] Current version ($normalizedCurrent) is up to date with latest (${release.tagName}).',
         );
-        return null;
+        return const UpdateCheckResult.upToDate();
       }
 
       // 6. Format release notes safely
@@ -99,7 +145,7 @@ class UpdateService {
 
       final normalizedLatest = VersionUtils.normalize(release.tagName);
 
-      return UpdateInfo(
+      final updateInfo = UpdateInfo(
         currentVersion: normalizedCurrent,
         latestVersion: normalizedLatest,
         releaseTag: release.tagName,
@@ -110,11 +156,13 @@ class UpdateService {
         assetSize: release.assetSize,
         hasUpdate: true,
       );
+
+      return UpdateCheckResult.updateAvailable(updateInfo);
     } catch (e, stack) {
       debugPrint(
         '[UpdateService] Unexpected error during update check: $e\n$stack',
       );
-      return null;
+      return UpdateCheckResult.checkFailed(e.toString());
     }
   }
 

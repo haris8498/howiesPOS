@@ -2,6 +2,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+/// Exception thrown when checking for GitHub releases fails due to network,
+/// timeouts, rate limits, or server errors.
+class GitHubReleaseException implements Exception {
+  final String message;
+  final int? statusCode;
+
+  const GitHubReleaseException(this.message, {this.statusCode});
+
+  @override
+  String toString() => 'GitHubReleaseException: $message';
+}
+
 /// Raw parsed release representation from GitHub Releases API.
 class ParsedRelease {
   final String tagName;
@@ -60,7 +72,7 @@ class GitHubReleaseClient implements IGitHubReleaseClient {
       final uri = Uri.parse(apiUrl);
       if (!uri.isScheme('https')) {
         debugPrint('[GitHubReleaseClient] Insecure scheme rejected: $apiUrl');
-        return null;
+        throw GitHubReleaseException('Insecure scheme rejected: $apiUrl');
       }
 
       final response = await _client
@@ -73,24 +85,33 @@ class GitHubReleaseClient implements IGitHubReleaseClient {
           )
           .timeout(timeout);
 
+      // HTTP 404 means no release exists yet: treat as up to date (no release)
+      if (response.statusCode == 404) {
+        debugPrint('[GitHubReleaseClient] No release exists yet (HTTP 404).');
+        return null;
+      }
+
+      // Non-200 responses (e.g. 403 rate-limits, 429, 500) are check failures
       if (response.statusCode != 200) {
         debugPrint(
           '[GitHubReleaseClient] Non-200 response: ${response.statusCode}',
         );
-        return null;
+        throw GitHubReleaseException(
+          'GitHub API returned HTTP ${response.statusCode}: ${response.reasonPhrase ?? response.body}',
+          statusCode: response.statusCode,
+        );
       }
 
       final dynamic decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) {
         debugPrint('[GitHubReleaseClient] Invalid JSON response format');
-        return null;
+        throw const GitHubReleaseException('Invalid JSON response format from GitHub API');
       }
 
       return parseReleaseJson(decoded, targetAssetName: targetAssetName);
     } catch (e) {
-      // Silently catch and log network/timeout/parsing errors to avoid blocking the POS
       debugPrint('[GitHubReleaseClient] Failed to fetch latest release: $e');
-      return null;
+      rethrow;
     }
   }
 

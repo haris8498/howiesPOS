@@ -7,7 +7,10 @@ import '../../core/updater/update_service.dart';
 import 'update_dialog.dart';
 
 /// Global helper function to manually check for updates with user feedback.
-Future<void> triggerManualUpdateCheck(BuildContext context, WidgetRef ref) async {
+Future<void> triggerManualUpdateCheck(
+  BuildContext context,
+  WidgetRef ref,
+) async {
   final scaffoldMessenger = ScaffoldMessenger.of(context);
   scaffoldMessenger.hideCurrentSnackBar();
   scaffoldMessenger.showSnackBar(
@@ -17,7 +20,10 @@ Future<void> triggerManualUpdateCheck(BuildContext context, WidgetRef ref) async
           SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
           ),
           SizedBox(width: 12),
           Text('Checking for updates from GitHub...'),
@@ -28,21 +34,45 @@ Future<void> triggerManualUpdateCheck(BuildContext context, WidgetRef ref) async
     ),
   );
 
-  final update = await ref
+  final result = await ref
       .read(autoUpdateControllerProvider.notifier)
       .manualCheckForUpdate(context);
 
-  if (!context.mounted) return;
+  if (!context.mounted || result == null) return;
   scaffoldMessenger.hideCurrentSnackBar();
 
-  if (update == null) {
+  if (result.isFailed) {
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Could not check for updates. Please check the internet connection and try again.',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.amber.shade800,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  } else if (result.isUpToDate) {
     final ver = await const DefaultAppVersionProvider().getAppVersion();
     if (!context.mounted) return;
     scaffoldMessenger.showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+            const Icon(
+              Icons.check_circle_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -65,22 +95,26 @@ class AutoUpdateState {
   final bool isChecking;
   final UpdateInfo? availableUpdate;
   final String? errorMessage;
+  final UpdateCheckResult? lastResult;
 
   const AutoUpdateState({
     this.isChecking = false,
     this.availableUpdate,
     this.errorMessage,
+    this.lastResult,
   });
 
   AutoUpdateState copyWith({
     bool? isChecking,
     UpdateInfo? availableUpdate,
     String? errorMessage,
+    UpdateCheckResult? lastResult,
   }) {
     return AutoUpdateState(
       isChecking: isChecking ?? this.isChecking,
       availableUpdate: availableUpdate ?? this.availableUpdate,
       errorMessage: errorMessage,
+      lastResult: lastResult ?? this.lastResult,
     );
   }
 }
@@ -119,14 +153,26 @@ class AutoUpdateController extends StateNotifier<AutoUpdateState> {
     state = state.copyWith(isChecking: true, errorMessage: null);
 
     try {
-      final updateInfo = await _updateService.checkForUpdate(force: force);
+      final result = await _updateService.checkForUpdate(force: force);
       if (!mounted) return;
-      state = state.copyWith(isChecking: false, availableUpdate: updateInfo);
+      state = state.copyWith(
+        isChecking: false,
+        availableUpdate: result.updateInfo,
+        lastResult: result,
+        errorMessage: result.isFailed ? result.errorMessage : null,
+      );
 
-      if (updateInfo != null && context.mounted) {
+      if (result.isFailed) {
+        debugPrint(
+          '[AutoUpdateController] Background update check failed: ${result.errorMessage}',
+        );
+        return;
+      }
+
+      if (result.hasUpdate && result.updateInfo != null && context.mounted) {
         await UpdateDialog.show(
           context,
-          updateInfo: updateInfo,
+          updateInfo: result.updateInfo!,
           updateService: _updateService,
         );
       }
@@ -139,27 +185,39 @@ class AutoUpdateController extends StateNotifier<AutoUpdateState> {
   }
 
   /// Manually triggers an update check (e.g. from Settings or Diagnostic screens).
-  Future<UpdateInfo?> manualCheckForUpdate(BuildContext context) async {
+  Future<UpdateCheckResult?> manualCheckForUpdate(BuildContext context) async {
     if (!mounted) return null;
     state = state.copyWith(isChecking: true, errorMessage: null);
     try {
-      final updateInfo = await _updateService.checkForUpdate(force: true);
-      if (!mounted) return updateInfo;
-      state = state.copyWith(isChecking: false, availableUpdate: updateInfo);
+      final result = await _updateService.checkForUpdate(force: true);
+      if (!mounted) return result;
+      state = state.copyWith(
+        isChecking: false,
+        availableUpdate: result.updateInfo,
+        lastResult: result,
+        errorMessage: result.isFailed ? result.errorMessage : null,
+      );
 
-      if (updateInfo != null && context.mounted) {
+      if (result.isFailed) {
+        debugPrint(
+          '[AutoUpdateController] Manual update check failed: ${result.errorMessage}',
+        );
+      } else if (result.hasUpdate &&
+          result.updateInfo != null &&
+          context.mounted) {
         await UpdateDialog.show(
           context,
-          updateInfo: updateInfo,
+          updateInfo: result.updateInfo!,
           updateService: _updateService,
         );
       }
-      return updateInfo;
+      return result;
     } catch (e) {
+      debugPrint('[AutoUpdateController] Manual update check error: $e');
       if (mounted) {
         state = state.copyWith(isChecking: false, errorMessage: e.toString());
       }
-      return null;
+      return UpdateCheckResult.checkFailed(e.toString());
     }
   }
 }

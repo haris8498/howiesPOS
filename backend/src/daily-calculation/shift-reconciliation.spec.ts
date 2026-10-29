@@ -340,4 +340,160 @@ describe('Shift Reconciliation - Part 2: MNY-06 Late-Synced Orders', () => {
     expect(Number(shiftState.total_gross_sales)).toBe(10000.0);
     expect(Number(shiftState.total_cash_sales)).toBe(8000.0);
   });
+
+  // Test 4: Dine-in order inserted unpaid after shift close then settled with cash records late-sync fields at settle time idempotently
+  it('4. Dine-in order inserted unpaid after shift close then settled with cash records late-sync fields at settle time idempotently', async () => {
+    const closedShiftSnapshot = {
+      id: 'shift-closed-2',
+      status: 'CLOSED',
+      total_gross_sales: new Prisma.Decimal(10000.0),
+      total_cash_sales: new Prisma.Decimal(8000.0),
+      total_orders_count: 5,
+      expected_cash_in_hand: new Prisma.Decimal(8000.0),
+      late_synced_cash_total: new Prisma.Decimal(0.0),
+      late_synced_order_count: 0,
+    };
+
+    const shiftState = { ...closedShiftSnapshot };
+    let orderInDb: any = null;
+
+    const mockTx: any = {
+      order: {
+        findUnique: jest.fn().mockImplementation(({ where }: any) => {
+          if (where.id === 'ord-late-102') {
+            return Promise.resolve(orderInDb);
+          }
+          return Promise.resolve(null);
+        }),
+        update: jest.fn().mockImplementation(({ where, data }: any) => {
+          if (orderInDb && where.id === orderInDb.id) {
+            const nextVersion = data.version?.increment
+              ? (orderInDb.version || 1) + data.version.increment
+              : (data.version ?? orderInDb.version);
+            orderInDb = { ...orderInDb, ...data, version: nextVersion };
+          }
+          return Promise.resolve(orderInDb);
+        }),
+      },
+      orderPayment: {
+        upsert: jest.fn().mockImplementation(({ create, update }: any) => {
+          const pay = {
+            id: create?.id || 'pay-late-2',
+            payment_method: create?.payment_method || update?.payment_method || 'cash',
+            amount: create?.amount || update?.amount || new Prisma.Decimal(2000.0),
+          };
+          if (!orderInDb.payments) orderInDb.payments = [];
+          orderInDb.payments = [pay];
+          return Promise.resolve(pay);
+        }),
+      },
+      dailyCalculation: {
+        findUnique: jest.fn().mockImplementation(({ where }: any) => {
+          if (where.id === 'shift-closed-2') {
+            return Promise.resolve({ ...shiftState });
+          }
+          return Promise.resolve(null);
+        }),
+        update: jest.fn().mockImplementation(({ where, data }: any) => {
+          if (where.id === 'shift-closed-2') {
+            if (data.late_synced_order_count?.increment) {
+              shiftState.late_synced_order_count += data.late_synced_order_count.increment;
+            }
+            if (data.late_synced_cash_total?.increment) {
+              shiftState.late_synced_cash_total = shiftState.late_synced_cash_total.plus(
+                data.late_synced_cash_total.increment,
+              );
+            }
+          }
+          return Promise.resolve({ ...shiftState });
+        }),
+      },
+    };
+
+    const unpaidLateOrder = {
+      id: 'ord-late-102',
+      shift_id: 'shift-closed-2',
+      order_number: 'ORD-LATE-2',
+      order_type: 'dineIn',
+      status: 'open',
+      is_paid: false,
+      payment_status: 'UNPAID',
+      subtotal: new Prisma.Decimal(2000.0),
+      grand_total: new Prisma.Decimal(2000.0),
+      payments: [],
+      order_items: [],
+      version: 1,
+      is_late_synced: false,
+    };
+
+    mockOrdersService.createOrderInTx.mockImplementation(async () => {
+      orderInDb = { ...unpaidLateOrder };
+      return orderInDb;
+    });
+
+    const insertMutation: any = {
+      operation_id: 'op-late-insert-2',
+      entity_type: 'order',
+      entity_id: 'ord-late-102',
+      operation_type: 'INSERT',
+      payload: {
+        order_number: 'ORD-LATE-2',
+        shift_id: 'shift-closed-2',
+        order_type: 'dineIn',
+        status: 'open',
+        is_paid: false,
+        subtotal: 2000,
+        grand_total: 2000,
+        payments: [],
+      },
+    };
+
+    const context: any = {
+      deviceId: 'POS-P2',
+      operationId: 'op-late-insert-2',
+      receivedAt: new Date(),
+    };
+
+    // 1. Insert unpaid order after shift closed
+    const insertResult = await handler.handle(mockTx, insertMutation, context);
+    expect(insertResult.status).toBe('SYNCED');
+    expect(shiftState.late_synced_order_count).toBe(0);
+    expect(Number(shiftState.late_synced_cash_total)).toBe(0.0);
+    expect(orderInDb.is_late_synced).toBe(false);
+
+    // 2. Settle with cash payment after shift closed
+    const paymentAmount = 2000;
+    const settleMutation: any = {
+      operation_id: 'op-late-settle-2',
+      entity_type: 'order',
+      entity_id: 'ord-late-102',
+      operation_type: 'UPDATE',
+      base_version: 1,
+      payload: {
+        status: 'completed',
+        is_paid: true,
+        payment_status: 'PAID',
+        grand_total: paymentAmount,
+        payments: [{ payment_method: 'cash', amount: paymentAmount }],
+      },
+    };
+
+    const settleContext: any = {
+      deviceId: 'POS-P2',
+      operationId: 'op-late-settle-2',
+      receivedAt: new Date(),
+    };
+
+    const settleResult = await handler.handle(mockTx, settleMutation, settleContext);
+    expect(settleResult.status).toBe('SYNCED');
+    expect(shiftState.late_synced_order_count).toBe(1);
+    expect(Number(shiftState.late_synced_cash_total)).toBe(paymentAmount);
+    expect(orderInDb.is_late_synced).toBe(true);
+
+    // 3. Push settle mutation a second time (idempotent replay)
+    const duplicateSettleResult = await handler.handle(mockTx, settleMutation, settleContext);
+    expect(duplicateSettleResult.status).toBe('DUPLICATE');
+    expect(shiftState.late_synced_order_count).toBe(1);
+    expect(Number(shiftState.late_synced_cash_total)).toBe(paymentAmount);
+  });
 });

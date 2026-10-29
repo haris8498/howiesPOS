@@ -1838,9 +1838,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           })
         : null;
 
-      if (!order || (order as any).is_late_synced) {
-        return;
-      }
+      const orderIsPaid = isPaid !== undefined ? isPaid : order?.is_paid;
+      if (!order || order.is_late_synced || !orderIsPaid) return;
 
       // 2. Check if the target shift exists and is CLOSED
       const shift = await tx.dailyCalculation.findUnique({
@@ -1854,7 +1853,6 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
 
       // 3. Determine cash amount for late_synced_cash_total
       let cashTotal = 0;
-      const orderIsPaid = isPaid !== undefined ? isPaid : order.is_paid;
       if (orderIsPaid) {
         if (cashAmount !== undefined && cashAmount > 0) {
           cashTotal = cashAmount;

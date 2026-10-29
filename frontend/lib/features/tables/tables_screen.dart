@@ -22,6 +22,7 @@ import '../../core/sync/table_reassignment_provider.dart';
 import '../../data/repositories/order_repository_provider.dart';
 import '../../domain/models/menu_item.dart';
 import '../../domain/models/order_model.dart';
+import '../updater/open_order_guard_provider.dart';
 
 class TablesScreen extends ConsumerStatefulWidget {
   const TablesScreen({super.key});
@@ -3176,6 +3177,12 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   String _selectedCategory = 'All';
   String _menuQuery = '';
   final List<_OrderItem> _cartItems = [];
+  late final OpenOrderGuardNotifier _orderGuardNotifier;
+  late final String _orderGuardId;
+
+  void _updateOrderGuard() {
+    _orderGuardNotifier.updateOrderOpen(_orderGuardId, _cartItems.isNotEmpty);
+  }
   bool _isLoadingMenu = false;
   bool _isSubmittingOrder = false;
   String? _activeOrderId;
@@ -3269,6 +3276,8 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   @override
   void initState() {
     super.initState();
+    _orderGuardNotifier = widget.ref.read(openOrderGuardProvider.notifier);
+    _orderGuardId = 'tables_${identityHashCode(this)}';
     final isOccupied = widget.table.status == TableStatus.occupied;
     _activeOrderId = isOccupied ? widget.table.activeOrderId : null;
     // Pre-load existing order items ONLY if table is actively occupied in this session
@@ -3290,6 +3299,9 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
           initialOrderedQty: qty,
         ));
       }
+    }
+    if (_cartItems.isNotEmpty) {
+      _orderGuardNotifier.setOrderOpen(_orderGuardId);
     }
     _loadMenuAndDatabaseOrder();
   }
@@ -3552,6 +3564,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
           }
           _isLoadingMenu = false;
         });
+        _updateOrderGuard();
       }
     } catch (_) {
       if (mounted) {
@@ -3563,6 +3576,9 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   @override
   void dispose() {
     _menuSearchController.dispose();
+    Future.microtask(() {
+      _orderGuardNotifier.clearOrderOpen(_orderGuardId);
+    });
     super.dispose();
   }
 
@@ -3579,6 +3595,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
         _cartItems.add(_OrderItem(item: item, quantity: 1));
       }
     });
+    _updateOrderGuard();
   }
 
   void _decrementCartItem(int index) {
@@ -3605,6 +3622,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
         }
       }
     });
+    _updateOrderGuard();
   }
 
   Widget _buildItemThumbnail(String path, Uint8List? bytes) {
@@ -4002,6 +4020,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                                   setState(() {
                                                     cartItem.quantity += 1;
                                                   });
+                                                  _updateOrderGuard();
                                                 },
                                                 child: Container(
                                                   padding: const EdgeInsets.all(2),
@@ -4221,6 +4240,8 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
 
                                     // 3. Reload tables from database
                                     await notifier.loadTables();
+
+                                    _orderGuardNotifier.clearOrderOpen(_orderGuardId);
 
                                     if (context.mounted) {
                                       Navigator.pop(context);

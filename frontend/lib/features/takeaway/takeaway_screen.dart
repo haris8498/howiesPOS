@@ -17,6 +17,7 @@ import '../../shared/widgets/manager_approval_dialog.dart';
 import '../../domain/models/user_role.dart';
 import '../../services/receipt_printer_service.dart';
 import '../../shared/widgets/cashier_sidebar_footer.dart';
+import '../updater/open_order_guard_provider.dart';
 
 class TakeawayScreen extends ConsumerStatefulWidget {
   const TakeawayScreen({super.key});
@@ -4490,6 +4491,12 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
   String _selectedCategory = 'All';
   String _menuQuery = '';
   final List<_TakeawayOrderItem> _cartItems = [];
+  late final OpenOrderGuardNotifier _orderGuardNotifier;
+  late final String _orderGuardId;
+
+  void _updateOrderGuard() {
+    _orderGuardNotifier.updateOrderOpen(_orderGuardId, _cartItems.isNotEmpty);
+  }
 
   final List<_TakeawayMenuItem> _menuDatabase = const [
     // Exclusive Deals & Combos
@@ -4588,6 +4595,8 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
   @override
   void initState() {
     super.initState();
+    _orderGuardNotifier = widget.ref.read(openOrderGuardProvider.notifier);
+    _orderGuardId = 'takeaway_${identityHashCode(this)}';
     final existing = widget.existingOrder;
     _customerNameController = TextEditingController(
       text: existing == null || existing.customerName == 'Guest Customer' || existing.customerName == 'Takeaway Customer'
@@ -4666,6 +4675,10 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
         }
       }
     }
+
+    if (_cartItems.isNotEmpty) {
+      _orderGuardNotifier.setOrderOpen(_orderGuardId);
+    }
   }
 
   @override
@@ -4673,6 +4686,9 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     _menuSearchController.dispose();
     _customerNameController.dispose();
     _customerPhoneController.dispose();
+    Future.microtask(() {
+      _orderGuardNotifier.clearOrderOpen(_orderGuardId);
+    });
     super.dispose();
   }
 
@@ -4697,6 +4713,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
         _cartItems.add(_TakeawayOrderItem(item: item, quantity: 1));
       }
     });
+    _updateOrderGuard();
   }
 
   void _decrementCartItem(int index) {
@@ -4707,12 +4724,14 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
         _cartItems.removeAt(index);
       }
     });
+    _updateOrderGuard();
   }
 
   void _removeCartItem(int index) {
     setState(() {
       _cartItems.removeAt(index);
     });
+    _updateOrderGuard();
   }
 
   @override
@@ -5068,6 +5087,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                                   setState(() {
                                                     cartItem.quantity += 1;
                                                   });
+                                                  _updateOrderGuard();
                                                 },
                                                 child: Container(
                                                   padding: const EdgeInsets.all(2),
@@ -5270,6 +5290,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                         orderId: widget.existingOrder!.id,
                                         tokenNumber: widget.existingOrder!.tokenNumber,
                                       );
+                                      _orderGuardNotifier.clearOrderOpen(_orderGuardId);
                                       if (context.mounted) {
                                         Navigator.pop(context);
                                         ScaffoldMessenger.of(context).showSnackBar(
@@ -5289,6 +5310,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                         discountAmount: _discountAmount,
                                         items: itemsList,
                                       );
+                                      _orderGuardNotifier.clearOrderOpen(_orderGuardId);
                                       if (context.mounted) {
                                         Navigator.pop(context);
                                         ScaffoldMessenger.of(context).showSnackBar(

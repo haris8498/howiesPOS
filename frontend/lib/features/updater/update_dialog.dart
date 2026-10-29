@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/app_colors.dart';
 import '../../core/updater/update_models.dart';
 import '../../core/updater/update_service.dart';
+import 'open_order_guard_provider.dart';
 
 /// Clean, POS-optimized dialog for presenting available updates and displaying update progress.
-class UpdateDialog extends StatefulWidget {
+class UpdateDialog extends ConsumerStatefulWidget {
   final UpdateInfo updateInfo;
   final UpdateService updateService;
 
@@ -29,15 +31,19 @@ class UpdateDialog extends StatefulWidget {
   }
 
   @override
-  State<UpdateDialog> createState() => _UpdateDialogState();
+  ConsumerState<UpdateDialog> createState() => _UpdateDialogState();
 }
 
-class _UpdateDialogState extends State<UpdateDialog> {
+class _UpdateDialogState extends ConsumerState<UpdateDialog> {
   bool _isUpdating = false;
   UpdateProgress _progress = const UpdateProgress(phase: UpdatePhase.idle);
   String? _errorMessage;
 
   Future<void> _startUpdate() async {
+    if (ref.read(openOrderGuardProvider)) {
+      return;
+    }
+
     setState(() {
       _isUpdating = true;
       _errorMessage = null;
@@ -73,6 +79,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final isOrderOpen = ref.watch(openOrderGuardProvider);
 
     return PopScope(
       canPop: !_isUpdating,
@@ -91,7 +98,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
             padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
             child: _isUpdating
                 ? _buildUpdatingState(isDark)
-                : _buildPromptState(isDark),
+                : _buildPromptState(isDark, isOrderOpen),
           ),
         ),
       ),
@@ -99,7 +106,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   }
 
   /// Initial prompt showing new version details, release notes, and actions.
-  Widget _buildPromptState(bool isDark) {
+  Widget _buildPromptState(bool isDark, bool isOrderOpen) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -252,9 +259,24 @@ class _UpdateDialogState extends State<UpdateDialog> {
           ),
         ],
 
+        if (isOrderOpen) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              'Finish the current order first',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: isDark ? const Color(0xFFFCA5A5) : AppColors.danger,
+              ),
+            ),
+          ),
+        ],
+
         const SizedBox(height: 24),
 
-        // Actions: [Later] [Update Now]
+        // Actions: [Later] [Download & Install Now]
         Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
@@ -273,7 +295,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
             ),
             const SizedBox(width: 12),
             ElevatedButton(
-              onPressed: _startUpdate,
+              onPressed: isOrderOpen ? null : _startUpdate,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryRed,
                 foregroundColor: Colors.white,
@@ -292,7 +314,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
                   Icon(Icons.download_rounded, size: 18),
                   SizedBox(width: 6),
                   Text(
-                    'Update Now',
+                    'Download & Install Now',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ],

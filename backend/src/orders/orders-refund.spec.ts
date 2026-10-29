@@ -140,6 +140,9 @@ describe('OrdersService - Supervisor Refund & order_adjustments Ledger (#13 foll
           return Promise.resolve(null);
         }),
       },
+      dailyCalculation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'shift-101' }),
+      },
       restaurantTable: {
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),

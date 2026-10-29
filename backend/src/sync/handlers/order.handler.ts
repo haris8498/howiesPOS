@@ -667,6 +667,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       false,
     );
 
+    // MNY-06: Check if order belongs to an already closed shift
+    await this.recordLateSyncedOrderIfClosedShift(
+      tx,
+      createdOrder.id,
+      createdOrder.shift_id || payload.shift_id,
+      undefined,
+      createdOrder.is_paid,
+    );
+
     const isReassigned = Boolean(
       (payload.order_number && createdOrder.order_number !== payload.order_number) ||
       (payload.token_number && createdOrder.takeaway_detail?.token_number !== payload.token_number) ||
@@ -1255,6 +1264,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       false,
     );
 
+    // MNY-06: Check if order belongs to an already closed shift
+    await this.recordLateSyncedOrderIfClosedShift(
+      tx,
+      updated.id,
+      updated.shift_id || existingOrder.shift_id || payload.shift_id,
+      undefined,
+      updated.is_paid,
+    );
+
     const updateWarnings: string[] = [];
     if (isUpdateTableDeleted) updateWarnings.push('TABLE_DELETED');
     const updatePricingStatus = pricingResult?.pricingStatus || (updated as any).pricing_status;
@@ -1786,5 +1804,93 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       if (!isNaN(parsed)) return parsed;
     }
     return Date.now();
+  }
+
+  /**
+   * MNY-06: When an order mutation arrives via sync whose shift_id belongs to an already CLOSED shift:
+   * 1. Do NOT change the closed shift's snapshot totals (total_gross_sales, total_cash_sales, etc.).
+   * 2. Increment late_synced_cash_total and late_synced_order_count on that shift's calculation record.
+   * 3. Idempotent: an order is stamped with is_late_synced = true so duplicate pushes never double count.
+   */
+  private async recordLateSyncedOrderIfClosedShift(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    shiftId?: string | null,
+    cashAmount?: number,
+    isPaid?: boolean,
+  ): Promise<void> {
+    if (!shiftId || !tx.dailyCalculation?.findUnique) return;
+
+    try {
+      // 1. Check if the order is already marked as late-synced (idempotency guard)
+      const order = tx.order?.findUnique
+        ? await tx.order.findUnique({
+            where: { id: orderId },
+            select: {
+              id: true,
+              is_late_synced: true,
+              is_paid: true,
+              grand_total: true,
+              payments: {
+                select: { payment_method: true, amount: true },
+              },
+            },
+          })
+        : null;
+
+      const orderIsPaid = isPaid !== undefined ? isPaid : order?.is_paid;
+      if (!order || order.is_late_synced || !orderIsPaid) return;
+
+      // 2. Check if the target shift exists and is CLOSED
+      const shift = await tx.dailyCalculation.findUnique({
+        where: { id: shiftId },
+        select: { id: true, status: true },
+      });
+
+      if (!shift || !['CLOSED', 'OFFLINE_CLOSED', 'SUBMITTED'].includes(shift.status)) {
+        return;
+      }
+
+      // 3. Determine cash amount for late_synced_cash_total
+      let cashTotal = 0;
+      if (orderIsPaid) {
+        if (cashAmount !== undefined && cashAmount > 0) {
+          cashTotal = cashAmount;
+        } else if (order.payments && order.payments.length > 0) {
+          cashTotal = order.payments
+            .filter((p: any) => (p.payment_method || '').toLowerCase() === 'cash')
+            .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+        } else {
+          // Default unitemized tender is cash
+          cashTotal = Number(order.grand_total || 0);
+        }
+      }
+
+      // 4. Mark order as late-synced (idempotent: subsequent retries will not double count)
+      if (tx.order?.update) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { is_late_synced: true } as any,
+        });
+      }
+
+      // 5. Increment late_synced_order_count and late_synced_cash_total on the closed shift
+      // IMPORTANT: Closed shift snapshot figures (total_gross_sales, total_cash_sales, etc.) are NOT modified!
+      if (tx.dailyCalculation?.update) {
+        await tx.dailyCalculation.update({
+          where: { id: shiftId },
+          data: {
+            late_synced_order_count: { increment: 1 },
+            late_synced_cash_total: { increment: new Prisma.Decimal(cashTotal) },
+          } as any,
+        });
+      }
+
+      this.logger.log(
+        `MNY-06: Recorded late-synced order '${orderId}' against closed shift '${shiftId}' (cash: ${cashTotal})`,
+      );
+    } catch (err) {
+      this.logger.warn(`Failed to record late-synced order '${orderId}' against shift '${shiftId}': ${err}`);
+    }
   }
 }

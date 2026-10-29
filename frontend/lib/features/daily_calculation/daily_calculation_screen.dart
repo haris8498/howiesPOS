@@ -7,6 +7,7 @@ import '../../config/app_colors.dart';
 import '../../data/auth_repository.dart';
 import '../../data/daily_calculation_repository.dart';
 import 'widgets/starting_cash_dialog.dart';
+import '../../core/sync/shift_close_sync_guard.dart';
 
 class DailyCalculationScreen extends ConsumerStatefulWidget {
   const DailyCalculationScreen({super.key});
@@ -380,6 +381,10 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     );
 
     if (confirmed != true) return;
+
+    // Drain outbox before shift close to prevent late-synced orders (MNY-06)
+    final syncGuardPassed = await ref.read(shiftCloseSyncGuardProvider).guardShiftClose(context);
+    if (!syncGuardPassed) return;
 
     final authState = ref.read(authProvider);
     final cashierId = authState.currentUser.id;

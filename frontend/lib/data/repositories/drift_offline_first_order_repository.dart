@@ -614,19 +614,82 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
   }
 
   @override
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+  Future<void> voidOrderItem(
+    String orderId,
+    String itemId, {
+    String? voidedBy,
+    String? reason,
+    int? quantity,
+    String? splitItemId,
+  }) async {
     await _db.transaction(() async {
       final now = DateTime.now();
-      await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
-        LocalOrderItemsCompanion(
-          isCancelled: const Value(true),
-          cancelledAt: Value(now),
-          cancelReason: Value(reason),
-          voidedAt: Value(now),
-          voidedBy: Value(voidedBy ?? 'USER'),
-          syncStatus: const Value('pending_update'),
-        ),
-      );
+
+      final existingItem = await (_db.select(_db.localOrderItems)..where((t) => t.id.equals(itemId))).getSingleOrNull();
+      final lineQty = existingItem?.quantity ?? 1;
+
+      final isPartial = quantity != null && quantity > 0 && quantity < lineQty;
+      String? effectiveSplitId;
+
+      if (isPartial) {
+        final splitId = splitItemId ?? _uuid.v7();
+        effectiveSplitId = splitId;
+
+        // Idempotency: if split row already exists, no-op
+        final existingSplit = await (_db.select(_db.localOrderItems)..where((t) => t.id.equals(splitId))).getSingleOrNull();
+        if (existingSplit != null) {
+          return;
+        }
+
+        final remainingQty = lineQty - quantity;
+        final unitPrice = existingItem!.unitPrice;
+        final remainingSubtotal = double.parse((unitPrice * remainingQty).toStringAsFixed(2));
+        final voidedSubtotal = double.parse((unitPrice * quantity).toStringAsFixed(2));
+
+        // 1. Update original line
+        await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+          LocalOrderItemsCompanion(
+            quantity: Value(remainingQty),
+            subtotal: Value(remainingSubtotal),
+            syncStatus: const Value('pending_update'),
+          ),
+        );
+
+        // 2. Insert new split voided line
+        await _db.into(_db.localOrderItems).insert(
+          LocalOrderItemsCompanion(
+            id: Value(splitId),
+            orderId: Value(orderId),
+            menuItemId: Value(existingItem.menuItemId),
+            itemName: Value(existingItem.itemName),
+            sizeName: Value(existingItem.sizeName),
+            unitPrice: Value(unitPrice),
+            quantity: Value(quantity),
+            subtotal: Value(voidedSubtotal),
+            notes: Value(existingItem.notes),
+            isCancelled: const Value(true),
+            cancelledAt: Value(now),
+            cancelReason: Value(reason),
+            voidedAt: Value(now),
+            voidedBy: Value(voidedBy ?? 'USER'),
+            syncStatus: const Value('pending_insert'),
+            serverVersion: const Value(1),
+            clientCreatedAt: Value(now),
+            createdByDeviceId: Value(_deviceId),
+          ),
+        );
+      } else {
+        await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+          LocalOrderItemsCompanion(
+            isCancelled: const Value(true),
+            cancelledAt: Value(now),
+            cancelReason: Value(reason),
+            voidedAt: Value(now),
+            voidedBy: Value(voidedBy ?? 'USER'),
+            syncStatus: const Value('pending_update'),
+          ),
+        );
+      }
 
       final allItems = await _db.ordersDao.getOrderItems(orderId);
       final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null);
@@ -634,7 +697,10 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
       final existingOrder = await _db.ordersDao.getOrderById(orderId);
       if (existingOrder != null) {
-        final newGrandTotal = (newSubtotal - existingOrder.discountAmount + existingOrder.taxAmount).clamp(0.0, double.infinity);
+        final discountAmount = existingOrder.discountPercentage > 0
+            ? (newSubtotal * existingOrder.discountPercentage / 100.0)
+            : existingOrder.discountAmount;
+        final newGrandTotal = (newSubtotal - discountAmount + existingOrder.taxAmount).clamp(0.0, double.infinity);
         await (_db.update(_db.localOrders)..where((t) => t.id.equals(orderId))).write(
           LocalOrdersCompanion(
             subtotal: Value(newSubtotal),
@@ -646,6 +712,18 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
       }
 
       final opId = _uuid.v7();
+      final payloadMap = <String, dynamic>{
+        'order_id': orderId,
+        'item_id': itemId,
+        'voided_by': voidedBy ?? 'USER',
+        'reason': reason,
+        'voided_at': now.toIso8601String(),
+      };
+      if (isPartial) {
+        payloadMap['quantity'] = quantity;
+        payloadMap['split_item_id'] = effectiveSplitId;
+      }
+
       await _db.outboxDao.insertEntry(
         SyncOutboxCompanion(
           operationId: Value(opId),
@@ -655,13 +733,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           operationType: const Value('ITEM_VOID'),
           dependencyOrder: const Value(2),
           status: const Value(SyncOutboxStatus.pending),
-          payload: Value(jsonEncode({
-            'order_id': orderId,
-            'item_id': itemId,
-            'voided_by': voidedBy ?? 'USER',
-            'reason': reason,
-            'voided_at': now.toIso8601String(),
-          })),
+          payload: Value(jsonEncode(payloadMap)),
           createdAt: Value(now),
         ),
       );

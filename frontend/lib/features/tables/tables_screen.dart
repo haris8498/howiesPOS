@@ -1,3 +1,4 @@
+import 'table_cancel_helper.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -6964,6 +6965,20 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
       final cashierName = currentUser.fullName.isNotEmpty ? currentUser.fullName : 'Cashier';
 
       if (orderId != null && orderId.isNotEmpty) {
+        // Pre-compute split IDs for any partial cancellation so DB and UI match
+        final splitItemIds = <String, String>{};
+        for (final item in widget.table.currentOrderItems) {
+          if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
+          final itemId = item['id']?.toString() ?? '';
+          final cancelQty = _cancelQuantities[itemId] ?? 0;
+          final currentQty = (item['quantity'] as num?)?.toInt() ??
+              int.tryParse(item['quantity']?.toString() ?? '1') ??
+              1;
+          if (cancelQty > 0 && cancelQty < currentQty && itemId.isNotEmpty) {
+            splitItemIds[itemId] = const Uuid().v7();
+          }
+        }
+
         if (FeatureFlags.offlineFirstEnabled) {
           final orderRepo = widget.ref.read(orderRepositoryProvider);
           for (final item in widget.table.currentOrderItems) {
@@ -6977,6 +6992,8 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
                 itemId,
                 voidedBy: cashierName,
                 reason: effectiveReason,
+                quantity: cancelQty,
+                splitItemId: splitItemIds[itemId],
               );
             }
           }
@@ -7014,40 +7031,44 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
           tableNumber: widget.table.tableNumber,
         );
 
-        // Prepare updated items with cancelled status for table state
-        final updatedItems = widget.table.currentOrderItems.map((item) {
-          final itemId = item['id']?.toString() ?? '';
-          if ((_cancelQuantities[itemId] ?? 0) > 0) {
-            final copy = Map<String, dynamic>.from(item);
-            copy['is_cancelled'] = true;
-            copy['cancel_reason'] = effectiveReason;
-            copy['cancelled_by'] = cashierName;
-            return copy;
-          }
-          return item;
-        }).toList();
+        // Prepare updated items with cancelled status for table state and KOT
+        final updatedItems = applyTableItemCancellations(
+          currentOrderItems: widget.table.currentOrderItems,
+          cancelQuantities: _cancelQuantities,
+          reason: effectiveReason,
+          cancelledBy: cashierName,
+          splitItemIds: splitItemIds,
+        );
 
         final updatedTable = widget.table.copyWith(
           currentOrderItems: updatedItems,
         );
 
         // Update local table bill & items in state
-        double newBill = 0.0;
-        for (final item in updatedItems) {
-          if (item['is_cancelled'] != true && item['is_cancelled'] != 1) {
-            final qty = (item['quantity'] as num?)?.toDouble() ?? 1.0;
-            final price = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
-            newBill += (qty * price);
-          }
+        final newBill = calculateTableBill(updatedItems);
+        final hasActiveUnits = updatedItems.any((item) =>
+            item['is_cancelled'] != true &&
+            item['is_cancelled'] != 1 &&
+            ((item['quantity'] as num?)?.toInt() ?? 0) > 0);
+
+        if (!hasActiveUnits) {
+          await widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
+            widget.table.id,
+            0.0,
+            TableStatus.available,
+            activeOrderId: null,
+            orderItems: const [],
+          );
+        } else {
+          await widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
+            widget.table.id,
+            newBill,
+            TableStatus.occupied,
+            activeOrderId: orderId,
+            activeOrderNumber: activeOrderNum,
+            orderItems: updatedItems,
+          );
         }
-        await widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
-          widget.table.id,
-          newBill,
-          TableStatus.occupied,
-          activeOrderId: orderId,
-          activeOrderNumber: activeOrderNum,
-          orderItems: updatedItems,
-        );
       }
 
       await widget.ref.read(tableProvider.notifier).loadTables();

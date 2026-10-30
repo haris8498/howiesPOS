@@ -227,6 +227,7 @@ class _PrinterSettingsDialogState extends State<PrinterSettingsDialog> {
         await ReceiptPrinterService.printReceipt(
           context: context,
           receipt: testKot,
+          forcePrint: true,
         );
       }
     } finally {

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hungry_howies_pos/core/database/app_database.dart';
@@ -543,10 +544,10 @@ void main() {
       );
       expect(hasEverPrinted, isTrue, reason: 'Order was printed at least once');
 
-      // 5. Print updated KOT
+      // 5. Print updated KOT (forcePrint: false, signature check allows update)
       final success2 = await ReceiptPrinterService.printReceipt(
         receipt: modifiedKot,
-        forcePrint: true,
+        forcePrint: false,
         db: db,
       );
       expect(success2, isTrue);
@@ -560,6 +561,193 @@ void main() {
         db: db,
       );
       expect(isPrintedAfterUpdate, isTrue, reason: 'Button must remain disabled once updated ticket is printed');
+    });
+
+    test('9. Cancel triggers no print and unmarks order for kitchen ticket (#36)', () async {
+      int printCount = 0;
+      ReceiptPrinterService.testPrinterFn = (printer, bytes, {String? docName}) async {
+        printCount++;
+        return true;
+      };
+
+      const orderNo = 'ORD-CANCEL-TEST';
+      final initialKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: orderNo,
+        dateTime: DateTime.now(),
+        items: const [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Pepperoni Pizza',
+            quantity: 1,
+            unitPrice: 1200.0,
+            totalPrice: 1200.0,
+          ),
+        ],
+        subtotal: 1200.0,
+        grandTotal: 1200.0,
+      );
+
+      // 1. Initial KOT print succeeds
+      final initialSuccess = await ReceiptPrinterService.printReceipt(
+        receipt: initialKot,
+        db: db,
+      );
+      expect(initialSuccess, isTrue);
+      final countAfterInitial = printCount;
+      expect(countAfterInitial, greaterThan(0));
+
+      // 2. Item cancellation occurs: handler calls unmarkOrderKitchenReceiptPrinted() and DOES NOT print
+      await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+        orderNumber: orderNo,
+        db: db,
+      );
+
+      // Verify NO print was dispatched by the cancellation handler
+      expect(printCount, equals(countAfterInitial), reason: 'Cancel handler must not dispatch a print');
+
+      // 3. Updated ticket is now unlocked for kitchen button
+      final modifiedKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: orderNo,
+        dateTime: DateTime.now(),
+        items: const [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Pepperoni Pizza',
+            quantity: 1,
+            unitPrice: 1200.0,
+            totalPrice: 1200.0,
+            isCancelled: true,
+            cancelReason: 'Customer changed mind',
+          ),
+        ],
+        subtotal: 0.0,
+        grandTotal: 0.0,
+        isModified: true,
+      );
+
+      final isPrintedAfterCancel = await ReceiptPrinterService.isKitchenReceiptPrinted(
+        orderNo,
+        currentItemsSignature: modifiedKot.itemsSignature,
+        db: db,
+      );
+      expect(isPrintedAfterCancel, isFalse, reason: 'Kitchen button must offer one updated ticket after cancel');
+    });
+
+    testWidgets('10. One KOT tap after a change prints once and second tap is blocked showing notice (#36)', (WidgetTester tester) async {
+      int printCount = 0;
+      ReceiptPrinterService.testPrinterFn = (printer, bytes, {String? docName}) async {
+        printCount++;
+        return true;
+      };
+
+      String? capturedNotice;
+      ReceiptPrinterService.testDuplicateNoticeFn = (notice) {
+        capturedNotice = notice;
+      };
+
+      const orderNo = 'ORD-TAP-TEST';
+      final initialKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: orderNo,
+        dateTime: DateTime.now(),
+        items: const [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Chicken Pizza',
+            quantity: 1,
+            unitPrice: 1000.0,
+            totalPrice: 1000.0,
+          ),
+        ],
+        subtotal: 1000.0,
+        grandTotal: 1000.0,
+      );
+
+      // Build a widget with a Scaffold to capture SnackBar notices
+      late BuildContext testContext;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (ctx) {
+                testContext = ctx;
+                return const Text('POS Screen');
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Initial print
+      final success0 = await ReceiptPrinterService.printReceipt(
+        context: testContext,
+        receipt: initialKot,
+        db: db,
+      );
+      expect(success0, isTrue);
+      expect(printCount, greaterThan(0));
+      final countAfterInitial = printCount;
+
+      // Order is modified (e.g. adding item)
+      final modifiedKot = ReceiptData(
+        type: ReceiptType.kitchenKot,
+        orderNumber: orderNo,
+        dateTime: DateTime.now(),
+        items: const [
+          ReceiptItemData(
+            id: 'item-1',
+            name: 'Chicken Pizza',
+            quantity: 1,
+            unitPrice: 1000.0,
+            totalPrice: 1000.0,
+          ),
+          ReceiptItemData(
+            id: 'item-2',
+            name: 'Garlic Bread',
+            quantity: 1,
+            unitPrice: 350.0,
+            totalPrice: 350.0,
+          ),
+        ],
+        subtotal: 1350.0,
+        grandTotal: 1350.0,
+        isModified: true,
+      );
+
+      // Clear debounce lock so second call tests duplicate logic
+      ReceiptPrinterService.clearRecentPrintLocks();
+
+      // FIRST TAP: Prints once
+      final success1 = await ReceiptPrinterService.printReceipt(
+        context: testContext,
+        receipt: modifiedKot,
+        forcePrint: false,
+        db: db,
+      );
+      expect(success1, isTrue, reason: 'First tap after modification must print updated ticket');
+      expect(printCount, greaterThan(countAfterInitial));
+      final countAfterFirstTap = printCount;
+
+      // Clear debounce lock for second tap
+      ReceiptPrinterService.clearRecentPrintLocks();
+
+      // SECOND TAP: Blocked as duplicate and shows notice
+      final success2 = await ReceiptPrinterService.printReceipt(
+        context: testContext,
+        receipt: modifiedKot,
+        forcePrint: false,
+        db: db,
+      );
+      expect(success2, isFalse, reason: 'Second tap must be blocked as duplicate');
+      expect(printCount, equals(countAfterFirstTap), reason: 'No additional physical ticket must be printed');
+
+      // Verify notice was shown both via callback and UI SnackBar
+      expect(capturedNotice, equals('Already sent to the kitchen'));
+      await tester.pump(); // Render SnackBar
+      expect(find.text('Already sent to the kitchen'), findsOneWidget);
     });
   });
 }

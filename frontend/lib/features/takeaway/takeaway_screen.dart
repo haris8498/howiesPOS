@@ -2035,6 +2035,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
   // Takeaway Kitchen Ticket (KOT) Dialog
   void _showTakeawayKitchenReceiptDialog(BuildContext context, TakeawayOrder order, bool isDark) {
+    final screenContext = context;
     showDialog(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.75),
@@ -2254,13 +2255,12 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                                     // Physical Thermal Print to Attached Laptop Printer
                                     final printSuccess = await ReceiptPrinterService.printReceipt(
-                                      context: context,
+                                      context: screenContext,
                                       receipt: ReceiptData.fromTakeawayOrder(
                                         order: order,
                                         type: ReceiptType.kitchenKot,
                                         isModified: isModified,
                                       ),
-                                      forcePrint: true,
                                     );
 
                                     if (printSuccess) {

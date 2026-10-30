@@ -784,6 +784,10 @@ class ReceiptPrinterService {
   @visibleForTesting
   static Future<bool> Function(String targetPrinter, Uint8List rawBytes, {String docName})? testPrinterFn;
 
+  /// Test hook to capture duplicate blocked notices in tests
+  @visibleForTesting
+  static void Function(String notice)? testDuplicateNoticeFn;
+
   /// In-flight job locks to prevent concurrent duplicate spooling for the same ticket
   static final Set<String> _inFlightJobLocks = <String>{};
 
@@ -1182,6 +1186,7 @@ class ReceiptPrinterService {
     _inFlightJobLocks.clear();
     _recentPrintLocks.clear();
     testPrinterFn = null;
+    testDuplicateNoticeFn = null;
     _database = null;
     _cachedPrinterName = null;
     _cachedPrinterUrl = null;
@@ -1500,7 +1505,7 @@ class ReceiptPrinterService {
       // If an unmodified kitchen ticket has already been printed once, reject duplicate prints.
       // If the order has been modified, or if forcePrint/isReprint is set, allow printing!
       // -----------------------------------------------------------------------
-      if (isKot && !forcePrint && !receipt.isReprint && !receipt.isModified) {
+      if (isKot && !forcePrint && !receipt.isReprint) {
         final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
             receipt.orderNumber == 'KOT-101' ||
             receipt.orderNumber == 'KOT-TEST';
@@ -1517,6 +1522,9 @@ class ReceiptPrinterService {
             final displayNum = EscPosBuilder.format3DigitOrderNumber(receipt.orderNumber);
             debugPrint('⛔ KITCHEN PRINT BLOCKED: Order #$displayNum has already been printed once.');
 
+            const duplicateNotice = 'Already sent to the kitchen';
+            testDuplicateNoticeFn?.call(duplicateNotice);
+
             if (context != null && context.mounted) {
               ScaffoldMessenger.of(context).hideCurrentSnackBar();
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1527,7 +1535,7 @@ class ReceiptPrinterService {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          '⚠️ Kitchen Receipt for Order #$displayNum has ALREADY been printed! Modify order or cancel items to print an updated ticket.',
+                          duplicateNotice,
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                       ),

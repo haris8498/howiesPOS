@@ -3143,17 +3143,19 @@ class _OrderMenuItem {
 }
 
 class _OrderItem {
+  final String? id;
   final _OrderMenuItem item;
   int quantity;
   final int initialOrderedQty;
 
   _OrderItem({
+    this.id,
     required this.item,
     this.quantity = 1,
     this.initialOrderedQty = 0,
   });
 
-  bool get isExistingOrderedItem => initialOrderedQty > 0;
+  bool get isExistingOrderedItem => initialOrderedQty > 0 || (id != null && id!.isNotEmpty);
   double get totalPrice => item.price * quantity;
 }
 
@@ -3286,14 +3288,21 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
       for (final itemMap in existingItems) {
         if (itemMap['is_cancelled'] == true || itemMap['is_cancelled'] == 1) continue;
         final qty = (itemMap['quantity'] as int? ?? 1);
+        final lineItemId = itemMap['order_item_id']?.toString() ??
+            itemMap['line_item_id']?.toString() ??
+            itemMap['id']?.toString();
+        final menuItemId = itemMap['menu_item_id']?.toString() ??
+            itemMap['menuItemId']?.toString() ??
+            itemMap['item_id']?.toString();
         final menuItem = _OrderMenuItem(
-          id: itemMap['id']?.toString(),
+          id: menuItemId ?? (lineItemId != null && lineItemId.length < 30 ? lineItemId : null),
           name: itemMap['name'] as String,
           category: itemMap['category'] as String? ?? 'General',
           price: double.tryParse(itemMap['price']?.toString() ?? '0') ?? 0.0,
           imagePath: itemMap['imagePath'] as String? ?? 'assets/images/Pizza.png',
         );
         _cartItems.add(_OrderItem(
+          id: lineItemId,
           item: menuItem,
           quantity: qty,
           initialOrderedQty: qty,
@@ -3452,18 +3461,30 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
         try {
           if (FeatureFlags.offlineFirstEnabled) {
             final orderRepo = widget.ref.read(orderRepositoryProvider);
-            final localOrder = await orderRepo.getOrderById(_activeOrderId!);
+            var localOrder = await orderRepo.getOrderById(_activeOrderId!);
+            if (localOrder == null) {
+              // Task 3: If local order is not found, load it without nulling the active order id
+              try {
+                final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                final apiOrderJson = await ordersApi.getOrderById(_activeOrderId!);
+                localOrder = OrderModel.fromBackendJson(apiOrderJson);
+                try {
+                  await orderRepo.saveOrder(localOrder);
+                } catch (_) {}
+              } catch (_) {}
+            }
             if (localOrder != null) {
               if (!localOrder.isPaid &&
                   localOrder.status != OrderStatus.completed &&
                   localOrder.status != OrderStatus.cancelled) {
                 final List<_OrderItem> fetchedCart = [];
                 for (final orderItem in localOrder.items) {
-                  if (orderItem.isCancelled) continue;
+                  if (orderItem.isCancelled || orderItem.voidedAt != null) continue;
                   final name = orderItem.item.name;
                   final qty = orderItem.quantity;
                   final price = orderItem.unitPrice;
                   final menuItemId = orderItem.item.id;
+                  final lineItemId = orderItem.id;
 
                   final existingItem = loadedItems.firstWhere(
                     (it) => it.name.toLowerCase() == name.toLowerCase(),
@@ -3477,6 +3498,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                   );
 
                   fetchedCart.add(_OrderItem(
+                    id: lineItemId,
                     item: existingItem.copyWith(price: price, id: menuItemId.isNotEmpty ? menuItemId : existingItem.id),
                     quantity: qty,
                     initialOrderedQty: qty,
@@ -3484,7 +3506,16 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                 }
 
                 if (fetchedCart.isNotEmpty) {
+                  final Map<String, int> userQuantities = {
+                    for (final c in _cartItems) c.item.name.toLowerCase(): c.quantity
+                  };
                   final userAdded = _cartItems.where((c) => !fetchedCart.any((f) => f.item.name.toLowerCase() == c.item.name.toLowerCase())).toList();
+                  for (final item in fetchedCart) {
+                    final key = item.item.name.toLowerCase();
+                    if (userQuantities.containsKey(key) && userQuantities[key]! > item.quantity) {
+                      item.quantity = userQuantities[key]!;
+                    }
+                  }
                   _cartItems.clear();
                   _cartItems.addAll(fetchedCart);
                   _cartItems.addAll(userAdded);
@@ -3509,11 +3540,12 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                 if (rawItems is List && rawItems.isNotEmpty) {
                   final List<_OrderItem> fetchedCart = [];
                   for (final raw in rawItems) {
-                    if (raw['is_cancelled'] == true || raw['is_cancelled'] == 1) continue;
+                    if (raw['is_cancelled'] == true || raw['is_cancelled'] == 1 || raw['voided_at'] != null || raw['voidedAt'] != null) continue;
                     final name = raw['item_name']?.toString() ?? '';
                     final qty = (raw['quantity'] as num?)?.toInt() ?? 1;
                     final price = double.tryParse(raw['unit_price']?.toString() ?? '0') ?? 0.0;
                     final menuItemId = raw['menu_item_id']?.toString();
+                    final lineItemId = raw['id']?.toString();
 
                     final existingItem = loadedItems.firstWhere(
                       (it) => it.name.toLowerCase() == name.toLowerCase(),
@@ -3527,6 +3559,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                     );
 
                     fetchedCart.add(_OrderItem(
+                      id: lineItemId,
                       item: existingItem.copyWith(price: price, id: menuItemId ?? existingItem.id),
                       quantity: qty,
                       initialOrderedQty: qty,
@@ -3534,7 +3567,16 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                   }
 
                   if (fetchedCart.isNotEmpty) {
+                    final Map<String, int> userQuantities = {
+                      for (final c in _cartItems) c.item.name.toLowerCase(): c.quantity
+                    };
                     final userAdded = _cartItems.where((c) => !fetchedCart.any((f) => f.item.name.toLowerCase() == c.item.name.toLowerCase())).toList();
+                    for (final item in fetchedCart) {
+                      final key = item.item.name.toLowerCase();
+                      if (userQuantities.containsKey(key) && userQuantities[key]! > item.quantity) {
+                        item.quantity = userQuantities[key]!;
+                      }
+                    }
                     _cartItems.clear();
                     _cartItems.addAll(fetchedCart);
                     _cartItems.addAll(userAdded);
@@ -4075,7 +4117,8 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                     // Serialize cart items to persist in RestaurantTable
                                     final itemMaps = _cartItems
                                         .map((c) => {
-                                              if (c.item.id != null) 'id': c.item.id,
+                                              if (c.id != null) 'id': c.id,
+                                              if (c.item.id != null) 'menu_item_id': c.item.id,
                                               'name': c.item.name,
                                               'category': c.item.category,
                                               'price': c.item.price,
@@ -4085,9 +4128,14 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                         .toList();
 
                                     final bool isCurrentlyOccupied = widget.table.status == TableStatus.occupied;
-                                    String? effectiveOrderId = isCurrentlyOccupied && _activeOrderId != null && _activeOrderId!.isNotEmpty ? _activeOrderId : null;
+                                    String? effectiveOrderId = isCurrentlyOccupied && _activeOrderId != null && _activeOrderId!.isNotEmpty
+                                        ? _activeOrderId
+                                        : (isCurrentlyOccupied && widget.table.activeOrderId != null && widget.table.activeOrderId!.isNotEmpty
+                                            ? widget.table.activeOrderId
+                                            : null);
                                     String? effectiveOrderNumber = isCurrentlyOccupied ? widget.table.activeOrderNumber : null;
                                     final itemsPayload = _cartItems.map((c) => {
+                                      if (c.id != null && c.id!.isNotEmpty) 'id': c.id,
                                       if (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
                                         'menu_item_id': c.item.id,
                                       'item_name': c.item.name,
@@ -4096,13 +4144,13 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                     }).toList();
 
                                     final orderItems = _cartItems.map((c) {
-                                      final itemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
+                                      final menuItemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
                                           ? c.item.id!
                                           : const Uuid().v7();
                                       return OrderItem(
-                                        id: const Uuid().v7(),
+                                        id: (c.id != null && c.id!.isNotEmpty) ? c.id : const Uuid().v7(),
                                         item: MenuItem(
-                                          id: itemId,
+                                          id: menuItemId,
                                           name: c.item.name,
                                           category: c.item.category,
                                           description: '',
@@ -4115,28 +4163,13 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                     }).toList();
 
                                     if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
-                                      // Existing order modification flow (unchanged)
-                                      final ordersApi = widget.ref.read(ordersApiServiceProvider);
-                                      try {
-                                        final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
-                                          'order_type': 'dineIn',
-                                          if (table.id.isNotEmpty) 'table_id': table.id,
-                                          'status': 'accepted',
-                                          'subtotal': _totalBill,
-                                          'grand_total': _totalBill,
-                                          'items': itemsPayload,
-                                        });
-                                        effectiveOrderId = updatedOrder['id']?.toString() ?? updatedOrder['data']?['id']?.toString() ?? effectiveOrderId;
-                                        effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? updatedOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
-                                        debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
-                                      } catch (apiErr) {
-                                        debugPrint('⚠️ Orders API call error modifying dine-in order: $apiErr');
-                                      }
-
+                                      // Existing order modification flow (Wave 6 #35: eliminate dual-write & duplicate items)
                                       if (FeatureFlags.offlineFirstEnabled) {
+                                        // 1. With OFFLINE_FIRST_ENABLED=true: route edit/add ONLY through orderRepositoryProvider (local write + outbox).
+                                        // Remove the direct HTTP update call.
                                         try {
                                           final orderRepo = widget.ref.read(orderRepositoryProvider);
-                                          final existing = effectiveOrderId != null ? await orderRepo.getOrderById(effectiveOrderId) : null;
+                                          final existing = await orderRepo.getOrderById(effectiveOrderId);
                                           if (existing != null) {
                                             final updated = existing.copyWith(
                                               items: orderItems,
@@ -4147,10 +4180,50 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                             final saved = await orderRepo.updateOrder(updated);
                                             effectiveOrderId = saved.id;
                                             effectiveOrderNumber = saved.orderNumber;
+                                          } else {
+                                            final fallbackOrder = OrderModel(
+                                              id: effectiveOrderId,
+                                              orderNumber: effectiveOrderNumber ?? '',
+                                              type: OrderType.dineIn,
+                                              status: OrderStatus.accepted,
+                                              items: orderItems,
+                                              createdAt: DateTime.now(),
+                                              subtotalOverride: _totalBill,
+                                              grandTotalOverride: _totalBill,
+                                              dineInDetail: DineInOrderDetail(
+                                                id: const Uuid().v7(),
+                                                orderId: effectiveOrderId,
+                                                tableId: table.id,
+                                                guestCount: table.capacity > 0 ? table.capacity : 1,
+                                                waiterName: 'Cashier',
+                                              ),
+                                            );
+                                            final saved = await orderRepo.saveOrder(fallbackOrder);
+                                            effectiveOrderId = saved.id;
+                                            effectiveOrderNumber = saved.orderNumber;
                                           }
                                           widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
+                                          debugPrint('✅ Dine-in Order modified locally + outbox: $effectiveOrderId (#$effectiveOrderNumber)');
                                         } catch (driftErr) {
                                           debugPrint('⚠️ Drift offline order update error: $driftErr');
+                                        }
+                                      } else {
+                                        // 2. With OFFLINE_FIRST_ENABLED=false: keep the online-only path working.
+                                        final ordersApi = widget.ref.read(ordersApiServiceProvider);
+                                        try {
+                                          final updatedOrder = await ordersApi.updateOrder(effectiveOrderId, {
+                                            'order_type': 'dineIn',
+                                            if (table.id.isNotEmpty) 'table_id': table.id,
+                                            'status': 'accepted',
+                                            'subtotal': _totalBill,
+                                            'grand_total': _totalBill,
+                                            'items': itemsPayload,
+                                          });
+                                          effectiveOrderId = updatedOrder['id']?.toString() ?? updatedOrder['data']?['id']?.toString() ?? effectiveOrderId;
+                                          effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? updatedOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
+                                          debugPrint('✅ Dine-in Order modified in DB successfully: $effectiveOrderId (#$effectiveOrderNumber)');
+                                        } catch (apiErr) {
+                                          debugPrint('⚠️ Orders API call error modifying dine-in order: $apiErr');
                                         }
                                       }
                                     } else {

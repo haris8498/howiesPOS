@@ -17,6 +17,7 @@ import { Optional } from '@nestjs/common';
 import { SyncMutationDto } from '../dto/sync-push.dto';
 import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto, CreateOrderPaymentDto } from '../../orders/dto/create-order.dto';
+import { recalculateOrderTotals } from '../../orders/order-totals.util';
 
 @Injectable()
 export class OrderHandler implements SyncEntityHandler, OnModuleInit {
@@ -1638,18 +1639,17 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     let grandTotal: number;
 
     if (isPartialVoid) {
-      const discountPercentage = Number(existingOrder.discount_percentage || 0);
-      discountAmount =
-        discountPercentage > 0
-          ? this.round((subtotal * discountPercentage) / 100)
-          : Number(existingOrder.discount_amount || 0);
-      const taxableAmount = Math.max(0, subtotal - discountAmount);
-      const currentTax = Number(existingOrder.tax_amount || 0);
-      const prevSubtotal = Number(existingOrder.subtotal) || 1;
-      const taxRate = prevSubtotal > 0 ? currentTax / prevSubtotal : 0;
-      taxAmount = this.round(taxableAmount * taxRate);
-      const deliveryFee = Number((existingOrder as any).online_detail?.delivery_fee || 0);
-      grandTotal = this.round(taxableAmount + taxAmount + deliveryFee);
+      const recalculated = recalculateOrderTotals({
+        subtotal,
+        discountPercentage: Number(existingOrder.discount_percentage || 0),
+        discountAmount: Number(existingOrder.discount_amount || 0),
+        taxAmount: Number(existingOrder.tax_amount || 0),
+        prevSubtotal: Number(existingOrder.subtotal) || 1,
+        deliveryFee: Number((existingOrder as any).online_detail?.delivery_fee || 0),
+      });
+      discountAmount = recalculated.discountAmount;
+      taxAmount = recalculated.taxAmount;
+      grandTotal = recalculated.grandTotal;
     } else {
       const discountPercentage = Number(existingOrder.discount_percentage);
       discountAmount =

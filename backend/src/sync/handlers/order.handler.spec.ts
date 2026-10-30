@@ -1113,6 +1113,100 @@ describe('OrderHandler', () => {
       expect(Number(updatedTableData.current_bill_amount)).toBe(15);
     });
 
+    it('partial void: recalculates totals proportionally using order totals helper when order has discount and tax', async () => {
+      let updatedOrderData: any;
+
+      const existingItem = {
+        id: 'item-partial-calc-1',
+        order_id: 'ord-partial-calc-1',
+        item_name: 'Burger Combo',
+        quantity: 2,
+        unit_price: 20,
+        total_price: 40,
+        is_cancelled: false,
+        voidedAt: null,
+      };
+
+      const itemsInDb = new Map<string, any>([[existingItem.id, { ...existingItem }]]);
+
+      mockOrdersService.getActiveItems = jest.fn().mockImplementation(async () => {
+        return Array.from(itemsInDb.values()).filter((i: any) => !i.is_cancelled && !i.voidedAt);
+      });
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-partial-calc-1',
+            order_number: 'ORD-102',
+            version: 1,
+            subtotal: 40,
+            grand_total: 41,
+            discount_percentage: 10,
+            discount_amount: 4,
+            tax_amount: 1.8,
+            online_detail: { delivery_fee: 5.0 },
+            order_items: [existingItem],
+          }),
+          update: jest.fn().mockImplementation(({ data }) => {
+            updatedOrderData = data;
+            return Promise.resolve({
+              id: 'ord-partial-calc-1',
+              version: 2,
+              order_number: 'ORD-102',
+              status: 'open',
+              ...data,
+              updated_at: new Date(),
+            });
+          }),
+        },
+        orderItem: {
+          findUnique: jest.fn().mockImplementation(({ where }) => {
+            return Promise.resolve(itemsInDb.get(where.id) || null);
+          }),
+          update: jest.fn().mockImplementation(({ where, data }) => {
+            const item = itemsInDb.get(where.id);
+            if (item) {
+              Object.assign(item, data);
+            }
+            return Promise.resolve({ ...item, ...data });
+          }),
+          create: jest.fn().mockImplementation(({ data }) => {
+            itemsInDb.set(data.id, { ...data });
+            return Promise.resolve(data);
+          }),
+        },
+        restaurantTable: {
+          update: jest.fn().mockResolvedValue({}),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-partial-calc-1',
+          entity_type: 'order',
+          entity_id: 'ord-partial-calc-1',
+          operation_type: 'ITEM_VOID',
+          base_version: 1,
+          payload: {
+            order_id: 'ord-partial-calc-1',
+            item_id: 'item-partial-calc-1',
+            quantity: 1,
+            split_item_id: 'split-partial-calc-1',
+            reason: 'Customer cancelled one',
+            voided_by: 'cashier-1',
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-partial-calc-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+      expect(Number(updatedOrderData.subtotal)).toBe(20);
+      expect(Number(updatedOrderData.discount_amount)).toBe(2);
+      expect(Number(updatedOrderData.tax_amount)).toBe(0.81);
+      expect(Number(updatedOrderData.grand_total)).toBe(23.81);
+    });
+
     it('whole line void: payload without quantity voids the whole line (backward compatible)', async () => {
       let updatedLineItem: any;
       let createdItemCalled = false;

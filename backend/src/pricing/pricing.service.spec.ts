@@ -713,6 +713,229 @@ describe('PricingService', () => {
         }),
       ).rejects.toThrow(ForbiddenException);
     });
+
+    it('an offline order with a cashier discount keeps it after sync and writes the audit record', async () => {
+      const orderId = 'ord-disc-cashier-offline';
+      const mockOrder = {
+        id: orderId,
+        order_type: 'dineIn',
+        subtotal: new Prisma.Decimal('1000.00'),
+        grand_total: new Prisma.Decimal('800.00'),
+      };
+
+      const mockItems = [
+        {
+          id: 'item-1',
+          order_id: orderId,
+          menu_item_id: 'menu-1',
+          item_name: 'Pizza',
+          selected_size: 'Regular',
+          extra_toppings: '',
+          quantity: 1,
+          unit_price: new Prisma.Decimal('1000.00'),
+          total_price: new Prisma.Decimal('1000.00'),
+          voidedAt: null,
+          is_cancelled: false,
+        },
+      ];
+
+      const cashierStaff = {
+        id: 'cashier-uuid-1',
+        username: 'bob_cashier',
+        role: 'cashier',
+        is_active: true,
+      };
+
+      const tx = {
+        order: { findUnique: jest.fn().mockResolvedValue(mockOrder), update: jest.fn() },
+        orderItem: { findMany: jest.fn().mockResolvedValue(mockItems) },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'menu-1',
+            base_price: new Prisma.Decimal('1000.00'),
+            sizes: [],
+            options: [],
+          }),
+        },
+        staffUser: { findFirst: jest.fn().mockResolvedValue(cashierStaff) },
+        discountAudit: { create: jest.fn().mockResolvedValue({ id: 'aud-cashier-1' }) },
+        pricingAudit: { create: jest.fn() },
+      };
+
+      const result = await service.calculate(orderId, tx as any, {
+        clientGrandTotal: 800.00,
+        discountPercentage: 20,
+        cashierId: 'cashier-uuid-1',
+        source: 'OFFLINE',
+      });
+
+      // The discount is preserved after sync and grand total is authoritatively recomputed!
+      expect(result.discountPercentage.toString()).toBe('20');
+      expect(result.discountAmount.toString()).toBe('200');
+      expect(result.grandTotal.toString()).toBe('800');
+      expect(result.pricingStatus).toBe('VERIFIED');
+
+      // Order is persisted with VERIFIED status and discount applied
+      expect(tx.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: orderId },
+          data: expect.objectContaining({
+            pricing_status: 'VERIFIED',
+            discount_amount: new Prisma.Decimal('200'),
+            grand_total: new Prisma.Decimal('800'),
+          }),
+        }),
+      );
+
+      // Immutable discount audit row is created with cashier_id, source=OFFLINE, and approved_by=null (Amendment 4)
+      expect(tx.discountAudit.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            order_id: orderId,
+            amount: new Prisma.Decimal('200'),
+            percent: new Prisma.Decimal('20'),
+            discount_type: 'PERCENTAGE',
+            cashier_id: 'cashier-uuid-1',
+            approved_by: null,
+            source: 'OFFLINE',
+          }),
+        }),
+      );
+
+      // No unauthorized discount pricing audit recorded
+      expect(tx.pricingAudit.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts cashier discount without manager approval on online REST path and creates audit record', async () => {
+      const orderId = 'ord-disc-cashier-online';
+      const mockOrder = {
+        id: orderId,
+        order_type: 'takeaway',
+        subtotal: new Prisma.Decimal('1000.00'),
+        grand_total: new Prisma.Decimal('900.00'),
+      };
+
+      const mockItems = [
+        {
+          id: 'item-1',
+          order_id: orderId,
+          menu_item_id: 'menu-1',
+          item_name: 'Pizza',
+          selected_size: 'Regular',
+          extra_toppings: '',
+          quantity: 1,
+          unit_price: new Prisma.Decimal('1000.00'),
+          total_price: new Prisma.Decimal('1000.00'),
+          voidedAt: null,
+          is_cancelled: false,
+        },
+      ];
+
+      const cashierStaff = {
+        id: 'cashier-uuid-2',
+        username: 'alice_cashier',
+        role: 'cashier',
+        is_active: true,
+      };
+
+      const tx = {
+        order: { findUnique: jest.fn().mockResolvedValue(mockOrder), update: jest.fn() },
+        orderItem: { findMany: jest.fn().mockResolvedValue(mockItems) },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'menu-1',
+            base_price: new Prisma.Decimal('1000.00'),
+            sizes: [],
+            options: [],
+          }),
+        },
+        staffUser: { findFirst: jest.fn().mockResolvedValue(cashierStaff) },
+        discountAudit: { create: jest.fn().mockResolvedValue({ id: 'aud-cashier-2' }) },
+        pricingAudit: { create: jest.fn() },
+      };
+
+      const result = await service.calculate(orderId, tx as any, {
+        clientGrandTotal: 900.00,
+        discountPercentage: 10,
+        cashierId: 'cashier-uuid-2',
+        source: 'ONLINE',
+      });
+
+      expect(result.discountPercentage.toString()).toBe('10');
+      expect(result.discountAmount.toString()).toBe('100');
+      expect(result.grandTotal.toString()).toBe('900');
+      expect(result.pricingStatus).toBe('VERIFIED');
+      expect(tx.discountAudit.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            order_id: orderId,
+            cashier_id: 'cashier-uuid-2',
+            approved_by: null,
+            source: 'ONLINE',
+          }),
+        }),
+      );
+    });
+
+    it('rejects unauthorized role (e.g. waiter) discount in offline sync: keeps order, zeros discount, flags UNAUTHORIZED_DISCOUNT', async () => {
+      const orderId = 'ord-disc-waiter-offline';
+      const mockOrder = {
+        id: orderId,
+        order_type: 'dineIn',
+        subtotal: new Prisma.Decimal('1000.00'),
+        grand_total: new Prisma.Decimal('1000.00'),
+      };
+
+      const mockItems = [
+        {
+          id: 'item-1',
+          order_id: orderId,
+          menu_item_id: 'menu-1',
+          item_name: 'Pizza',
+          selected_size: 'Regular',
+          extra_toppings: '',
+          quantity: 1,
+          unit_price: new Prisma.Decimal('1000.00'),
+          total_price: new Prisma.Decimal('1000.00'),
+          voidedAt: null,
+          is_cancelled: false,
+        },
+      ];
+
+      const waiterStaff = {
+        id: 'waiter-uuid-1',
+        username: 'sam_waiter',
+        role: 'waiter',
+        is_active: true,
+      };
+
+      const tx = {
+        order: { findUnique: jest.fn().mockResolvedValue(mockOrder), update: jest.fn() },
+        orderItem: { findMany: jest.fn().mockResolvedValue(mockItems) },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'menu-1',
+            base_price: new Prisma.Decimal('1000.00'),
+            sizes: [],
+            options: [],
+          }),
+        },
+        staffUser: { findFirst: jest.fn().mockResolvedValue(waiterStaff) },
+        discountAudit: { create: jest.fn() },
+        pricingAudit: { create: jest.fn() },
+      };
+
+      const result = await service.calculate(orderId, tx as any, {
+        clientGrandTotal: 800.00,
+        discountPercentage: 20,
+        staffId: 'waiter-uuid-1',
+        source: 'OFFLINE',
+      });
+
+      expect(result.discountAmount.toString()).toBe('0');
+      expect(result.grandTotal.toString()).toBe('1000');
+      expect(result.pricingStatus).toBe('UNAUTHORIZED_DISCOUNT');
+    });
   });
 
   describe('Audit Immutability & Review Queries (Task 6)', () => {

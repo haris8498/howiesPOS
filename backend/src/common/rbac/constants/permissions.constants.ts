@@ -82,5 +82,6 @@ export const INITIAL_CASHIER_PERMISSIONS: DefaultPermissionDefinition[] = [
   { id: 'csh_expenses_edit', role: 'cashier', module_name: 'Expenses', action_name: 'Edit Expenses', description: 'Edit operations for Expenses', is_granted: false, is_sensitive: false },
   { id: 'csh_expenses_delete', role: 'cashier', module_name: 'Expenses', action_name: 'Delete Expenses', description: 'Delete operations for Expenses', is_granted: false, is_sensitive: true },
   { id: 'csh_mod_data_sync', role: 'cashier', module_name: 'Data Sync', action_name: 'Allow Access to Data Sync', description: 'View & Manage SQLite/Cloud Data Synchronization', is_granted: true, is_sensitive: false },
+  { id: 'csh_order_discount', role: 'cashier', module_name: 'Orders', action_name: 'Apply Order Discount', description: 'Apply discounts to orders without manager approval', is_granted: true, is_sensitive: false },
 ];
 

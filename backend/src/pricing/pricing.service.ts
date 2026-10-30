@@ -33,6 +33,8 @@ export interface PricingCalculationOptions {
   rejectOnlineMismatch?: boolean;
   taxPercentage?: number | Prisma.Decimal;
   deliveryFee?: number | Prisma.Decimal;
+  isCashierDiscount?: boolean;
+  staffRole?: string;
 }
 
 export interface LineDiscrepancy {
@@ -60,7 +62,7 @@ export interface PricingCalculationResult {
   difference: Prisma.Decimal;
   isWithinTolerance: boolean;
   lineDiscrepancies: LineDiscrepancy[];
-  discountAuditRecord?: any;
+  discountAuditRecord?: Prisma.DiscountAuditUncheckedCreateInput | null;
   pricingAuditRecord?: any;
 }
 
@@ -221,7 +223,8 @@ export class PricingService {
     let effectiveDiscountAmount = new Prisma.Decimal('0.00');
     let effectiveDiscountPercentage = new Prisma.Decimal('0.00');
     let pricingStatus: 'VERIFIED' | 'MISMATCH' | 'UNAUTHORIZED_DISCOUNT' = 'VERIFIED';
-    let discountAuditRecord: any = null;
+    let isManagerApproved = false;
+    let discountAuditRecord: Prisma.DiscountAuditUncheckedCreateInput | null = null;
 
     if (hasDiscount) {
       const approval = options?.discountApproval;
@@ -270,7 +273,6 @@ export class PricingService {
 
       let isApprovalAuthorized = false;
       let isCashierDiscount = false;
-      let isManagerApproved = false;
 
       // 1. Check Manager Approval
       if (validManager && validManager.is_active !== false) {
@@ -338,6 +340,20 @@ export class PricingService {
           // Role is an unauthorized order-creating role (e.g. waiter, rider, kitchen)
           isApprovalAuthorized = false;
         }
+      } else if (
+        !isApprovalAuthorized &&
+        (options?.isCashierDiscount ||
+          (options as any)?.is_cashier_discount ||
+          options?.staffRole === 'cashier' ||
+          (options as any)?.cashierRole === 'cashier')
+      ) {
+        // Cashier discount without staff user in DB
+        if (source === 'ONLINE' && credential) {
+          isApprovalAuthorized = false;
+        } else {
+          isApprovalAuthorized = true;
+          isCashierDiscount = true;
+        }
       }
 
       if (isApprovalAuthorized) {
@@ -361,26 +377,30 @@ export class PricingService {
           effectiveDiscountAmount = subtotal;
         }
 
-        // Amendment 4:
-        // DiscountAudit cashier_id must be the staff member who gave the discount,
-        // taken from the staff_id carried in the order mutation, NOT the JWT user.
-        // If no reliable staff id is present, store null.
-        // Do not set approved_by to the cashier: leave it null.
+        // DiscountAudit staff attribution:
+        // approved_by must never be null. For a cashier discount set approved_by to the same staff id used for cashier_id (the staff_id carried in the mutation).
+        // If no reliable staff id is present, set cashier_id to null and approved_by to the literal 'SELF_AUTHORIZED'.
+        // For a manager-approved discount keep using the manager id.
         let cashierIdForAudit: string | null = null;
-        if (validStaff) {
-          cashierIdForAudit = validStaff.id;
-        } else if (staffCandidateId && typeof staffCandidateId === 'string' && staffCandidateId.trim().length > 0) {
+        if (validStaff && validStaff.id) {
+          cashierIdForAudit = String(validStaff.id).trim();
+        } else if (staffCandidateId && typeof staffCandidateId === 'string' && staffCandidateId.trim().length > 0 && isCashierDiscount) {
           cashierIdForAudit = staffCandidateId.trim();
         } else {
           cashierIdForAudit = null;
         }
 
-        let approvedByForAudit: string | null = null;
-        if (isManagerApproved && validManager) {
-          approvedByForAudit = validManager.id;
+        let approvedByForAudit: string;
+        if (isManagerApproved && (validManager || managerId)) {
+          approvedByForAudit = validManager?.id || managerId;
         } else {
-          // Cashier discount: approved_by must not be set to the cashier, leave it null per Amendment 4
-          approvedByForAudit = null;
+          // Cashier discount
+          if (cashierIdForAudit) {
+            approvedByForAudit = cashierIdForAudit;
+          } else {
+            cashierIdForAudit = null;
+            approvedByForAudit = 'SELF_AUTHORIZED';
+          }
         }
 
         discountAuditRecord = {
@@ -547,7 +567,7 @@ export class PricingService {
         grand_total: serverGrandTotal,
         client_reported_total: clientTotal,
         pricing_status: pricingStatus,
-        ...(discountAuditRecord ? { approved_by_manager_id: discountAuditRecord.approved_by } : {}),
+        ...(discountAuditRecord ? { approved_by_manager_id: isManagerApproved ? discountAuditRecord.approved_by : null } : {}),
       },
     });
 

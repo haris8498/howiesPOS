@@ -5,6 +5,7 @@ import '../../core/sync/sync_providers.dart';
 import '../../shared/widgets/refund_order_dialog.dart';
 import '../../domain/models/order_model.dart';
 import '../../services/api/api_providers.dart';
+import '../../core/network/api_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -5523,9 +5524,15 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
       }
     } catch (e) {
       if (mounted) {
+        final isOffline = e is NetworkException ||
+            e.toString().contains('SocketException') ||
+            e.toString().contains('ClientException');
+        final msg = isOffline
+            ? 'Cancelling items needs an internet connection'
+            : (e is ApiException ? e.message : 'Failed to cancel item: $e');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to cancel item: $e'),
+            content: Text(msg),
             backgroundColor: AppColors.danger,
           ),
         );

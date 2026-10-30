@@ -14,5 +14,12 @@ abstract class IOrderRepository {
   Future<void> cancelOrder(String orderId);
   Future<void> deleteHeldOrder(String orderId);
   Future<OrderItem> addOrderItem(String orderId, OrderItem item);
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason});
+  Future<void> voidOrderItem(
+    String orderId,
+    String itemId, {
+    String? voidedBy,
+    String? reason,
+    int? quantity,
+    String? splitItemId,
+  });
 }

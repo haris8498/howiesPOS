@@ -1,3 +1,4 @@
+import 'package:uuid/uuid.dart';
 import '../../domain/models/order_model.dart';
 import '../../domain/repositories/order_repository.dart';
 
@@ -78,23 +79,53 @@ class InMemoryOrderRepository implements IOrderRepository {
   }
 
   @override
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+  Future<void> voidOrderItem(
+    String orderId,
+    String itemId, {
+    String? voidedBy,
+    String? reason,
+    int? quantity,
+    String? splitItemId,
+  }) async {
     final index = _orders.indexWhere((o) => o.id == orderId);
     if (index >= 0) {
       final order = _orders[index];
-      final updatedItems = order.items.map((i) {
-        if (i.id == itemId) {
-          return i.copyWith(
+      final itemIndex = order.items.indexWhere((i) => i.id == itemId);
+      if (itemIndex >= 0) {
+        final item = order.items[itemIndex];
+        final now = DateTime.now();
+        if (quantity != null && quantity > 0 && quantity < item.quantity) {
+          final remainingQty = item.quantity - quantity;
+          final updatedOriginal = item.copyWith(quantity: remainingQty);
+          final splitItem = item.copyWith(
+            id: splitItemId ?? const Uuid().v7(),
+            quantity: quantity,
             isCancelled: true,
-            cancelledAt: DateTime.now(),
+            cancelledAt: now,
             cancelReason: reason,
-            voidedAt: DateTime.now(),
+            voidedAt: now,
             voidedBy: voidedBy,
           );
+          final updatedItems = List<OrderItem>.from(order.items);
+          updatedItems[itemIndex] = updatedOriginal;
+          updatedItems.add(splitItem);
+          _orders[index] = order.copyWith(items: updatedItems);
+        } else {
+          final updatedItems = order.items.map((i) {
+            if (i.id == itemId) {
+              return i.copyWith(
+                isCancelled: true,
+                cancelledAt: now,
+                cancelReason: reason,
+                voidedAt: now,
+                voidedBy: voidedBy,
+              );
+            }
+            return i;
+          }).toList();
+          _orders[index] = order.copyWith(items: updatedItems);
         }
-        return i;
-      }).toList();
-      _orders[index] = order.copyWith(items: updatedItems);
+      }
     }
   }
 }

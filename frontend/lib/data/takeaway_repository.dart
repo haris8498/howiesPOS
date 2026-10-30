@@ -89,7 +89,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             } catch (_) {}
           }
 
-          final itemsDesc = items.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
+          final activeItems = items.where((i) => !i.isCancelled).toList();
+          final itemsDesc = activeItems.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
           final mappedItems = items.map((i) {
             return OrderItem(
               id: i.id,
@@ -188,7 +189,8 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
                 status = 'Cancelled';
               }
 
-              final itemsDesc = ord.items.map((i) => '${i.quantity}x ${i.item.name}').join(', ');
+              final activeItems = ord.items.where((i) => !i.isCancelled).toList();
+              final itemsDesc = activeItems.map((i) => '${i.quantity}x ${i.item.name}').join(', ');
               final token = ord.tokenNumber ?? ord.takeawayDetail?.tokenNumber ?? 'TK-${ord.orderNumber}';
 
               final numMatch = RegExp(r'\d+').firstMatch(token);

@@ -94,7 +94,8 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
             } catch (_) {}
           }
 
-          final itemsDesc = items.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
+          final activeItems = items.where((i) => !i.isCancelled).toList();
+          final itemsDesc = activeItems.map((i) => '${i.quantity}x ${i.itemName}').join(', ');
           final mappedItems = items.map((i) {
             return OrderItem(
               id: i.id,

@@ -99,7 +99,9 @@ class OnlineOrdersNotifier extends StateNotifier<OnlineOrdersState> {
                 status = OnlineOrderStatus.rejected;
               }
 
-              final onlineItems = ord.items.map((i) => OnlineOrderItemModel(
+              final onlineItems = ord.items
+                  .where((i) => !i.isCancelled)
+                  .map((i) => OnlineOrderItemModel(
                 itemName: i.item.name,
                 quantity: i.quantity,
                 unitPrice: i.unitPrice,

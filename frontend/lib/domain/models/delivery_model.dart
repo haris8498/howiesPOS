@@ -178,11 +178,14 @@ class DeliveryOrder {
         ? (order['order_items'] as List)
         : (json['order_items'] is List ? json['order_items'] as List : null);
     if (itemsList != null && itemsList.isNotEmpty) {
-      summary = itemsList.map((i) => '${i['quantity']}x ${i['item_name']}').join(', ');
       for (final itemJson in itemsList) {
         if (itemJson is Map<String, dynamic>) {
           parsedItems.add(OrderItem.fromBackendJson(itemJson));
         }
+      }
+      final activeItems = parsedItems.where((i) => !i.isCancelled).toList();
+      if (activeItems.isNotEmpty) {
+        summary = activeItems.map((i) => '${i.quantity}x ${i.item.name}').join(', ');
       }
     }
 

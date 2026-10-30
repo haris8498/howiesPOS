@@ -1994,6 +1994,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
 
   // Kitchen Receipt (KOT) Dialog
   void _showKitchenReceiptDialog(BuildContext context, RestaurantTable table, bool isDark) {
+    final screenContext = context;
     final rawTicketId = (table.activeOrderNumber != null && table.activeOrderNumber!.isNotEmpty)
         ? table.activeOrderNumber!
         : (table.activeOrderId ?? table.tableNumber);
@@ -2248,13 +2249,12 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
 
                                     // Physical Thermal Print to Attached Win32 Printer Spooler
                                     final printSuccess = await ReceiptPrinterService.printReceipt(
-                                      context: context,
+                                      context: screenContext,
                                       receipt: ReceiptData.fromTableKot(
                                         table: table,
                                         ticketId: displayTicketId,
                                         isModified: isModified,
                                       ),
-                                      forcePrint: true,
                                     );
 
                                     if (printSuccess) {
@@ -2272,13 +2272,13 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                           signature: kotReceipt.itemsSignature,
                                         );
                                       }
-                                    }
 
-                                    if (table.activeOrderId != null && table.activeOrderId!.isNotEmpty) {
-                                      try {
-                                        await ref.read(kitchenApiServiceProvider).sendKitchenTicket(table.activeOrderId!);
-                                      } catch (e) {
-                                        debugPrint('Error marking kitchen ticket as sent: $e');
+                                      if (table.activeOrderId != null && table.activeOrderId!.isNotEmpty) {
+                                        try {
+                                          await ref.read(kitchenApiServiceProvider).sendKitchenTicket(table.activeOrderId!);
+                                        } catch (e) {
+                                          debugPrint('Error marking kitchen ticket as sent: $e');
+                                        }
                                       }
                                     }
                                   },
@@ -7051,16 +7051,14 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
             ? activeOrderNum
             : (orderId.isNotEmpty ? orderId : widget.table.tableNumber);
         final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
-        if (orderId.isNotEmpty) {
-          await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
-            orderId: orderId,
-            orderNumber: activeOrderNum ?? rawTicketId,
-            tokenNumber: displayTicketId,
-            tableNumber: widget.table.tableNumber,
-          );
-        }
+        await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+          orderId: orderId.isNotEmpty ? orderId : null,
+          orderNumber: activeOrderNum ?? rawTicketId,
+          tokenNumber: displayTicketId,
+          tableNumber: widget.table.tableNumber,
+        );
 
-        // Prepare updated items with cancelled status for KOT strikethrough printing and table state
+        // Prepare updated items with cancelled status for table state
         final updatedItems = widget.table.currentOrderItems.map((item) {
           final itemId = item['id']?.toString() ?? '';
           if ((_cancelQuantities[itemId] ?? 0) > 0) {
@@ -7076,22 +7074,6 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
         final updatedTable = widget.table.copyWith(
           currentOrderItems: updatedItems,
         );
-
-        // 2. Trigger the KOT strikethrough print through the existing print path
-        try {
-          final kotReceipt = ReceiptData.fromTableKot(
-            table: updatedTable,
-            ticketId: displayTicketId,
-            isModified: true,
-          );
-          await ReceiptPrinterService.printReceipt(
-            context: widget.parentContext,
-            receipt: kotReceipt,
-            forcePrint: true,
-          );
-        } catch (printErr) {
-          debugPrint('⚠️ Kitchen print strikethrough error: $printErr');
-        }
 
         // Update local table bill & items in state
         double newBill = 0.0;

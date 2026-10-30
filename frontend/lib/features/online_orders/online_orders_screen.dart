@@ -664,6 +664,7 @@ class _OnlineOrdersScreenState extends ConsumerState<OnlineOrdersScreen> {
 
   // 1. Kitchen Ticket (KOT) Dialog with Interactive Cooking Timer
   void _showKitchenReceiptDialog(BuildContext context, OnlineOrderModel order, bool isDark) {
+    final screenContext = context;
     int cookingMinutes = order.cookingTimeMinutes ?? 25;
     final cookingController = TextEditingController(text: '$cookingMinutes');
     final timeStr = DateFormat('hh:mm a').format(order.createdAt);
@@ -1064,7 +1065,7 @@ class _OnlineOrdersScreenState extends ConsumerState<OnlineOrdersScreen> {
 
                                 // Physical Thermal Print to Attached Laptop Printer
                                 await ReceiptPrinterService.printReceipt(
-                                  context: context,
+                                  context: screenContext,
                                   receipt: ReceiptData.fromOnlineOrder(
                                     order: order,
                                     type: ReceiptType.kitchenKot,

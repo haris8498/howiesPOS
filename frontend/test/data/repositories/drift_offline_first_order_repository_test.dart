@@ -632,6 +632,114 @@ void main() {
       expect(activeItems.any((i) => i.id == item1Id), isTrue);
       expect(activeItems.any((i) => i.id == item2Id), isTrue);
     });
+
+    test('16. Partial void qty 1 of qty-2 line reduces original line and creates split voided line (#39)', () async {
+      final orderId = uuid.v7();
+      final itemId = uuid.v7();
+
+      final initialOrder = OrderModel(
+        id: orderId,
+        orderNumber: 'P1-203',
+        type: OrderType.dineIn,
+        status: OrderStatus.accepted,
+        items: [
+          OrderItem(
+            id: itemId,
+            item: testMenuItem,
+            quantity: 2,
+            backendUnitPrice: 10.25,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        subtotalOverride: 20.50,
+        discountPercentage: 0.0,
+        discountAmount: 0.0,
+        taxAmount: 0.0,
+        grandTotalOverride: 20.50,
+      );
+
+      await repository.saveOrder(initialOrder);
+
+      await repository.voidOrderItem(
+        orderId,
+        itemId,
+        voidedBy: 'Cashier',
+        reason: 'test',
+        quantity: 1,
+      );
+
+      final items = await db.ordersDao.getOrderItems(orderId);
+      expect(items.length, equals(2));
+
+      final originalLine = items.firstWhere((i) => i.id == itemId);
+      expect(originalLine.quantity, equals(1));
+      expect(originalLine.isCancelled, isFalse);
+
+      final secondRow = items.firstWhere((i) => i.id != itemId);
+      expect(secondRow.isCancelled, isTrue);
+      expect(secondRow.quantity, equals(1));
+      expect(secondRow.voidedBy, equals('Cashier'));
+
+      final updatedOrder = await db.ordersDao.getOrderById(orderId);
+      expect(updatedOrder!.subtotal, equals(10.25));
+
+      final allOutbox = await db.outboxDao.getAllEntries();
+      final voidMutations = allOutbox.where((e) => e.entityId == orderId && e.operationType == 'ITEM_VOID').toList();
+      expect(voidMutations.length, equals(1));
+      final payload = jsonDecode(voidMutations.first.payload) as Map<String, dynamic>;
+      expect(payload['quantity'], equals(1));
+      expect(payload['split_item_id'], isNotNull);
+      expect(payload['split_item_id'], isA<String>());
+    });
+
+    test('17. Full void with no quantity param still voids whole line (backward compat)', () async {
+      final orderId = uuid.v7();
+      final itemId = uuid.v7();
+
+      final initialOrder = OrderModel(
+        id: orderId,
+        orderNumber: 'P1-204',
+        type: OrderType.dineIn,
+        status: OrderStatus.accepted,
+        items: [
+          OrderItem(
+            id: itemId,
+            item: testMenuItem,
+            quantity: 2,
+            backendUnitPrice: 10.25,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        subtotalOverride: 20.50,
+        discountPercentage: 0.0,
+        discountAmount: 0.0,
+        taxAmount: 0.0,
+        grandTotalOverride: 20.50,
+      );
+
+      await repository.saveOrder(initialOrder);
+
+      await repository.voidOrderItem(
+        orderId,
+        itemId,
+        voidedBy: 'Cashier',
+        reason: 'test',
+      );
+
+      final items = await db.ordersDao.getOrderItems(orderId);
+      expect(items.length, equals(1));
+      expect(items.first.isCancelled, isTrue);
+
+      final updatedOrder = await db.ordersDao.getOrderById(orderId);
+      expect(updatedOrder!.subtotal, equals(0.0));
+      expect(updatedOrder.grandTotal, equals(0.0));
+
+      final allOutbox = await db.outboxDao.getAllEntries();
+      final voidMutations = allOutbox.where((e) => e.entityId == orderId && e.operationType == 'ITEM_VOID').toList();
+      expect(voidMutations.length, equals(1));
+      final payload = jsonDecode(voidMutations.first.payload) as Map<String, dynamic>;
+      expect(payload.containsKey('quantity'), isFalse);
+    });
   });
 }
 

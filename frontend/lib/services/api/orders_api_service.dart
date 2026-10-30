@@ -144,10 +144,14 @@ class OrdersApiService {
     String itemId, {
     String? voidedBy,
     String? reason,
+    int? quantity,
+    String? splitItemId,
   }) async {
     final body = <String, dynamic>{
       'voided_by': ?voidedBy,
       'reason': ?reason,
+      if (quantity != null) 'quantity': quantity,
+      if (splitItemId != null) 'split_item_id': splitItemId,
     };
     final response = await _apiClient.post('orders/$orderId/items/$itemId/void', body: body);
     if (response is Map<String, dynamic> && response['data'] is Map) {

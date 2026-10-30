@@ -466,6 +466,172 @@ void main() {
       expect(updatedOrder!.subtotal, equals(12.00));
       expect(updatedOrder.grandTotal, equals(12.00));
     });
+
+    test('14. Editing an existing order leaves exactly one order and no duplicated items (#35)', () async {
+      final orderId = uuid.v7();
+      final item1Id = uuid.v7();
+      final item2Id = uuid.v7();
+
+      const item2 = MenuItem(
+        id: 'item-002',
+        name: 'Garlic Bread',
+        category: 'Sides',
+        description: 'Cheesy Garlic Bread',
+        basePrice: 5.99,
+        imageUrl: '',
+      );
+
+      final initialOrder = OrderModel(
+        id: orderId,
+        orderNumber: 'P1-201',
+        type: OrderType.dineIn,
+        status: OrderStatus.accepted,
+        items: [
+          OrderItem(
+            id: item1Id,
+            item: testMenuItem,
+            quantity: 1,
+            selectedSize: 'Large',
+            backendUnitPrice: 14.99,
+          ),
+          OrderItem(
+            id: item2Id,
+            item: item2,
+            quantity: 1,
+            selectedSize: 'Regular',
+            backendUnitPrice: 5.99,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        subtotalOverride: 20.98,
+        discountPercentage: 0.0,
+        discountAmount: 0.0,
+        taxAmount: 0.0,
+        grandTotalOverride: 20.98,
+      );
+
+      await repository.saveOrder(initialOrder);
+
+      // Verify initial state
+      final initialOrders = await repository.getAllOrders();
+      expect(initialOrders.where((o) => o.id == orderId).length, equals(1));
+      final initialItems = await db.ordersDao.getOrderItems(orderId);
+      expect(initialItems.length, equals(2));
+
+      // Simulate order edit: editing the order with preserved line-item IDs
+      final editedOrder = initialOrder.copyWith(
+        status: OrderStatus.accepted,
+        subtotalOverride: 20.98,
+        grandTotalOverride: 20.98,
+        items: [
+          OrderItem(
+            id: item1Id,
+            item: testMenuItem,
+            quantity: 1,
+            selectedSize: 'Large',
+            backendUnitPrice: 14.99,
+          ),
+          OrderItem(
+            id: item2Id,
+            item: item2,
+            quantity: 1,
+            selectedSize: 'Regular',
+            backendUnitPrice: 5.99,
+          ),
+        ],
+      );
+
+      await repository.updateOrder(editedOrder);
+
+      // Assert exactly one order exists in local DB
+      final allOrders = await repository.getAllOrders();
+      expect(allOrders.where((o) => o.id == orderId).length, equals(1));
+
+      // Assert no duplicated items exist in local DB
+      final allItems = await db.ordersDao.getOrderItems(orderId);
+      final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null).toList();
+      expect(activeItems.length, equals(2));
+      expect(allItems.length, equals(2), reason: 'Editing existing items must not duplicate line items in Drift SQLite');
+    });
+
+    test('15. Adding one item adds exactly one line (#35)', () async {
+      final orderId = uuid.v7();
+      final item1Id = uuid.v7();
+      final item2Id = uuid.v7();
+
+      const item2 = MenuItem(
+        id: 'item-002',
+        name: 'Garlic Bread',
+        category: 'Sides',
+        description: 'Cheesy Garlic Bread',
+        basePrice: 5.99,
+        imageUrl: '',
+      );
+
+      final initialOrder = OrderModel(
+        id: orderId,
+        orderNumber: 'P1-202',
+        type: OrderType.dineIn,
+        status: OrderStatus.accepted,
+        items: [
+          OrderItem(
+            id: item1Id,
+            item: testMenuItem,
+            quantity: 1,
+            selectedSize: 'Large',
+            backendUnitPrice: 14.99,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        subtotalOverride: 14.99,
+        discountPercentage: 0.0,
+        discountAmount: 0.0,
+        taxAmount: 0.0,
+        grandTotalOverride: 14.99,
+      );
+
+      await repository.saveOrder(initialOrder);
+
+      // Verify initial state: exactly 1 item
+      final initialItems = await db.ordersDao.getOrderItems(orderId);
+      expect(initialItems.length, equals(1));
+
+      // Add exactly one new line item to the order (preserving item1Id)
+      final orderWithAddedItem = initialOrder.copyWith(
+        subtotalOverride: 20.98,
+        grandTotalOverride: 20.98,
+        items: [
+          OrderItem(
+            id: item1Id,
+            item: testMenuItem,
+            quantity: 1,
+            selectedSize: 'Large',
+            backendUnitPrice: 14.99,
+          ),
+          OrderItem(
+            id: item2Id,
+            item: item2,
+            quantity: 1,
+            selectedSize: 'Regular',
+            backendUnitPrice: 5.99,
+          ),
+        ],
+      );
+
+      await repository.updateOrder(orderWithAddedItem);
+
+      // Assert exactly one order exists
+      final allOrders = await repository.getAllOrders();
+      expect(allOrders.where((o) => o.id == orderId).length, equals(1));
+
+      // Assert exactly one line was added (1 initial + 1 new = 2 active items)
+      final allItems = await db.ordersDao.getOrderItems(orderId);
+      final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null).toList();
+      expect(activeItems.length, equals(2));
+      expect(allItems.length, equals(2), reason: 'Adding one item must add exactly one line to the ledger');
+      expect(activeItems.any((i) => i.id == item1Id), isTrue);
+      expect(activeItems.any((i) => i.id == item2Id), isTrue);
+    });
   });
 }
 

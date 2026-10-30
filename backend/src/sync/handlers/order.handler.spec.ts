@@ -987,6 +987,287 @@ describe('OrderHandler', () => {
       expect(tombstoneCreated.is_cancelled).toBe(true);
     });
 
+    it('partial void: payload with quantity 1 on a qty-2 line keeps line qty 1 active, creates split line qty 1 voided, order total reduced by one unit', async () => {
+      let updatedLineItem: any;
+      let createdSplitItem: any;
+      let updatedOrderData: any;
+      let updatedTableData: any;
+
+      const existingItem = {
+        id: 'item-partial-1',
+        order_id: 'ord-partial-1',
+        item_name: 'Pepperoni Pizza',
+        quantity: 2,
+        unit_price: 15,
+        total_price: 30,
+        selected_size: 'Large',
+        selected_crust: 'Thin',
+        extra_toppings: 'Extra Cheese',
+        notes: 'Well done',
+        is_cancelled: false,
+        voidedAt: null,
+      };
+
+      const itemsInDb = new Map<string, any>([[existingItem.id, { ...existingItem }]]);
+
+      mockOrdersService.getActiveItems = jest.fn().mockImplementation(async () => {
+        return Array.from(itemsInDb.values()).filter((i: any) => !i.is_cancelled && !i.voidedAt);
+      });
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-partial-1',
+            order_number: 'ORD-101',
+            version: 1,
+            subtotal: 30,
+            grand_total: 30,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [existingItem],
+            dine_in_detail: { table_id: 'tbl-1' },
+          }),
+          update: jest.fn().mockImplementation(({ data }) => {
+            updatedOrderData = data;
+            return Promise.resolve({
+              id: 'ord-partial-1',
+              version: 2,
+              order_number: 'ORD-101',
+              status: 'open',
+              ...data,
+              updated_at: new Date(),
+            });
+          }),
+        },
+        orderItem: {
+          findUnique: jest.fn().mockImplementation(({ where }) => {
+            return Promise.resolve(itemsInDb.get(where.id) || null);
+          }),
+          update: jest.fn().mockImplementation(({ where, data }) => {
+            const item = itemsInDb.get(where.id);
+            if (item) {
+              Object.assign(item, data);
+            }
+            updatedLineItem = data;
+            return Promise.resolve({ ...item, ...data });
+          }),
+          create: jest.fn().mockImplementation(({ data }) => {
+            createdSplitItem = data;
+            itemsInDb.set(data.id, { ...data });
+            return Promise.resolve(data);
+          }),
+        },
+        restaurantTable: {
+          update: jest.fn().mockImplementation(({ data }) => {
+            updatedTableData = data;
+            return Promise.resolve(data);
+          }),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-partial-void-1',
+          entity_type: 'order',
+          entity_id: 'ord-partial-1',
+          operation_type: 'ITEM_VOID',
+          base_version: 1,
+          payload: {
+            order_id: 'ord-partial-1',
+            item_id: 'item-partial-1',
+            quantity: 1,
+            split_item_id: 'split-partial-1',
+            reason: 'Customer changed mind',
+            voided_by: 'cashier-1',
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-partial-void-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+
+      // (a1) line qty 1 active
+      expect(updatedLineItem).toBeTruthy();
+      expect(updatedLineItem.quantity).toBe(1);
+      expect(Number(updatedLineItem.total_price)).toBe(15);
+      expect(updatedLineItem.is_cancelled).toBeUndefined();
+
+      // (a2) split line qty 1 voided
+      expect(createdSplitItem).toBeTruthy();
+      expect(createdSplitItem.id).toBe('split-partial-1');
+      expect(createdSplitItem.quantity).toBe(1);
+      expect(Number(createdSplitItem.unit_price)).toBe(15);
+      expect(Number(createdSplitItem.total_price)).toBe(15);
+      expect(createdSplitItem.is_cancelled).toBe(true);
+      expect(createdSplitItem.voidedAt).toBeTruthy();
+      expect(createdSplitItem.item_name).toBe('Pepperoni Pizza');
+
+      // (a3) order total reduced by one unit (from 30 to 15)
+      expect(Number(updatedOrderData.subtotal)).toBe(15);
+      expect(Number(updatedOrderData.grand_total)).toBe(15);
+
+      // table bill updated
+      expect(updatedTableData).toBeTruthy();
+      expect(Number(updatedTableData.current_bill_amount)).toBe(15);
+    });
+
+    it('whole line void: payload without quantity voids the whole line (backward compatible)', async () => {
+      let updatedLineItem: any;
+      let createdItemCalled = false;
+
+      const existingItem = {
+        id: 'item-full-1',
+        order_id: 'ord-full-1',
+        item_name: 'Burger',
+        quantity: 2,
+        unit_price: 10,
+        total_price: 20,
+        is_cancelled: false,
+        voidedAt: null,
+      };
+
+      mockOrdersService.getActiveItems = jest.fn().mockResolvedValue([]);
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-full-1',
+            order_number: 'ORD-102',
+            version: 1,
+            subtotal: 20,
+            grand_total: 20,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [existingItem],
+          }),
+          update: jest.fn().mockResolvedValue({
+            id: 'ord-full-1',
+            version: 2,
+            order_number: 'ORD-102',
+            status: 'open',
+            updated_at: new Date(),
+          }),
+        },
+        orderItem: {
+          findUnique: jest.fn().mockResolvedValue(existingItem),
+          update: jest.fn().mockImplementation(({ data }) => {
+            updatedLineItem = data;
+            return Promise.resolve({ ...existingItem, ...data });
+          }),
+          create: jest.fn().mockImplementation(() => {
+            createdItemCalled = true;
+            return Promise.resolve({});
+          }),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-full-void-1',
+          entity_type: 'order',
+          entity_id: 'ord-full-1',
+          operation_type: 'ITEM_VOID',
+          base_version: 1,
+          payload: {
+            order_id: 'ord-full-1',
+            item_id: 'item-full-1',
+            reason: 'Damaged item',
+            voided_by: 'cashier-1',
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-full-void-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('SYNCED');
+      expect(updatedLineItem.is_cancelled).toBe(true);
+      expect(updatedLineItem.voidedAt).toBeTruthy();
+      expect(createdItemCalled).toBe(false);
+    });
+
+    it('idempotency: replaying the same mutation creates no second split line', async () => {
+      const existingItem = {
+        id: 'item-partial-2',
+        order_id: 'ord-replay-1',
+        item_name: 'Garlic Bread',
+        quantity: 1,
+        unit_price: 10,
+        total_price: 10,
+        is_cancelled: false,
+        voidedAt: null,
+      };
+      const alreadyCreatedSplitItem = {
+        id: 'split-item-replay-1',
+        order_id: 'ord-replay-1',
+        item_name: 'Garlic Bread',
+        quantity: 1,
+        unit_price: 10,
+        total_price: 10,
+        is_cancelled: true,
+        voidedAt: new Date(),
+      };
+
+      let createCallCount = 0;
+
+      const mockTx = {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ord-replay-1',
+            order_number: 'ORD-103',
+            version: 2,
+            subtotal: 10,
+            grand_total: 10,
+            discount_percentage: 0,
+            discount_amount: 0,
+            tax_amount: 0,
+            order_items: [existingItem, alreadyCreatedSplitItem],
+            updated_at: new Date('2026-10-30T12:00:00Z'),
+          }),
+          update: jest.fn(),
+        },
+        orderItem: {
+          findUnique: jest.fn().mockImplementation(({ where }) => {
+            if (where.id === 'split-item-replay-1') return Promise.resolve(alreadyCreatedSplitItem);
+            if (where.id === 'item-partial-2') return Promise.resolve(existingItem);
+            return Promise.resolve(null);
+          }),
+          update: jest.fn(),
+          create: jest.fn().mockImplementation(() => {
+            createCallCount++;
+            return Promise.resolve({});
+          }),
+        },
+      };
+
+      const result = await handler.handle(
+        mockTx as any,
+        {
+          operation_id: 'op-replay-void-1',
+          entity_type: 'order',
+          entity_id: 'ord-replay-1',
+          operation_type: 'ITEM_VOID',
+          base_version: 1,
+          payload: {
+            order_id: 'ord-replay-1',
+            item_id: 'item-partial-2',
+            quantity: 1,
+            split_item_id: 'split-item-replay-1',
+            reason: 'Customer changed mind',
+            voided_by: 'cashier-1',
+          },
+        },
+        { deviceId: 'POS-01', operationId: 'op-replay-void-1', receivedAt: new Date() },
+      );
+
+      expect(result.status).toBe('DUPLICATE');
+      expect(createCallCount).toBe(0);
+      expect(mockTx.order.update).not.toHaveBeenCalled();
+      expect(mockTx.orderItem.update).not.toHaveBeenCalled();
+    });
+
     it('handle UPDATE does not delete unmentioned active items without fullReplace: true', async () => {
       const mockTx = {
         order: {

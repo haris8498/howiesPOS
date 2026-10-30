@@ -20,6 +20,11 @@ void main() {
       expect(checker.hasPermission(role: UserRole.cashier, permissionId: 'mod_expenses'), isFalse);
     });
 
+    test('Cashier has discount rights by default under cashier discount policy', () {
+      expect(checker.hasPermission(role: UserRole.cashier, permissionId: 'order_discount'), isTrue);
+      expect(checker.hasPermission(role: UserRole.cashier, permissionId: 'pos_discount'), isTrue);
+    });
+
     test('Manager honors custom module permission grants', () {
       final permissions = [
         const ModulePermission(

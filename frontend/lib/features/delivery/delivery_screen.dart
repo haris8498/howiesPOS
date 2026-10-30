@@ -1566,6 +1566,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
   // Kitchen Receipt Modal
   // Kitchen Receipt Modal with Interactive Cooking Time Input
   void _showKitchenReceiptModal(BuildContext context, DeliveryOrder del, bool isDark) {
+    final screenContext = context;
     int cookingMinutes = 25;
     final cookingController = TextEditingController(text: '$cookingMinutes');
     final quickTimers = [10, 15, 20, 25, 30, 45, 60];
@@ -1912,13 +1913,12 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
                                   // Physical Thermal Print to Attached Laptop Printer
                                   await ReceiptPrinterService.printReceipt(
-                                    context: context,
+                                    context: screenContext,
                                     receipt: ReceiptData.fromDeliveryOrder(
                                       order: del,
                                       type: ReceiptType.kitchenKot,
                                       isModified: hasCancelled,
                                     ),
-                                    forcePrint: hasCancelled,
                                   );
                                 },
                                 icon: const Icon(Icons.print_rounded, size: 16),

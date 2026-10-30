@@ -1138,6 +1138,62 @@ export class OrdersService {
         include: ORDER_INCLUDE,
       });
 
+      if (dto.status === 'cancelled' || dto.status === 'void') {
+        const dineInDetail = await tx.dineInOrderDetail.findUnique({ where: { order_id: id } });
+        const tableId = dineInDetail?.table_id;
+        const linkedTable = await tx.restaurantTable.findFirst({
+          where: {
+            OR: [
+              ...(tableId ? [{ id: tableId }] : []),
+              { active_order_id: id },
+              { dine_in_orders: { some: { order_id: id } } },
+            ],
+            is_deleted: false,
+          },
+        });
+
+        if (linkedTable) {
+          const freedTable = await tx.restaurantTable.update({
+            where: { id: linkedTable.id },
+            data: {
+              status: 'available',
+              active_order_id: null,
+              occupied_since: null,
+              current_bill_amount: 0.0,
+              current_customer_count: 0,
+              reserved_customer_name: null,
+              reservation_time: null,
+              version: { increment: 1 },
+            },
+          });
+
+          const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+          if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+            await changeLog.record(
+              tx,
+              'restaurant_table',
+              freedTable.id,
+              'UPDATE',
+              freedTable.version,
+              {
+                id: freedTable.id,
+                table_number: freedTable.table_number,
+                name: freedTable.name,
+                capacity: freedTable.capacity,
+                status: freedTable.status,
+                active_order_id: freedTable.active_order_id,
+                current_bill_amount: Number(freedTable.current_bill_amount),
+                current_customer_count: freedTable.current_customer_count,
+                occupied_since: freedTable.occupied_since,
+                version: freedTable.version,
+                is_deleted: freedTable.is_deleted,
+              },
+              false,
+            );
+          }
+        }
+      }
+
       const currentVersion = (existing as any).version || 1;
       const newVersion =
         typeof (updated as any).version === 'number' && (updated as any).version > currentVersion
@@ -1628,8 +1684,62 @@ export class OrdersService {
         include: ORDER_INCLUDE,
       });
 
-      // 5. If Dine-In, update table current_bill_amount (table remains occupied until bill/payment settled)
-      if (order.dine_in_detail?.table_id) {
+      // 5. If all items are voided/cancelled, free linked table in tx and record change log per Amendment 3
+      if (activeItems.length === 0) {
+        const dineInDetail = order.dine_in_detail || (await tx.dineInOrderDetail.findUnique({ where: { order_id: orderId } }));
+        const tableId = dineInDetail?.table_id;
+        const linkedTable = await tx.restaurantTable.findFirst({
+          where: {
+            OR: [
+              ...(tableId ? [{ id: tableId }] : []),
+              { active_order_id: orderId },
+              { dine_in_orders: { some: { order_id: orderId } } },
+            ],
+            is_deleted: false,
+          },
+        });
+
+        if (linkedTable) {
+          const freedTable = await tx.restaurantTable.update({
+            where: { id: linkedTable.id },
+            data: {
+              status: 'available',
+              active_order_id: null,
+              occupied_since: null,
+              current_bill_amount: 0.0,
+              current_customer_count: 0,
+              reserved_customer_name: null,
+              reservation_time: null,
+              version: { increment: 1 },
+            },
+          });
+
+          const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+          if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+            await changeLog.record(
+              tx,
+              'restaurant_table',
+              freedTable.id,
+              'UPDATE',
+              freedTable.version,
+              {
+                id: freedTable.id,
+                table_number: freedTable.table_number,
+                name: freedTable.name,
+                capacity: freedTable.capacity,
+                status: freedTable.status,
+                active_order_id: freedTable.active_order_id,
+                current_bill_amount: Number(freedTable.current_bill_amount),
+                current_customer_count: freedTable.current_customer_count,
+                occupied_since: freedTable.occupied_since,
+                version: freedTable.version,
+                is_deleted: freedTable.is_deleted,
+              },
+              false,
+            );
+          }
+        }
+      } else if (order.dine_in_detail?.table_id) {
         await tx.restaurantTable.update({
           where: { id: order.dine_in_detail.table_id },
           data: {
@@ -1814,14 +1924,44 @@ export class OrdersService {
           where: { active_order_id: orderId },
         });
         if (table) {
-          await tx.restaurantTable.update({
+          const freedTable = await tx.restaurantTable.update({
             where: { id: table.id },
             data: {
               active_order_id: null,
               status: 'available',
               current_bill_amount: new Prisma.Decimal(0),
+              current_customer_count: 0,
+              occupied_since: null,
+              reserved_customer_name: null,
+              reservation_time: null,
+              version: { increment: 1 },
             },
           });
+
+          const changeLog = this.changeLogService ?? new ChangeLogService(this.prisma);
+          if (this.changeLogService || (tx as any).systemChangeLog?.create) {
+            await changeLog.record(
+              tx,
+              'restaurant_table',
+              freedTable.id,
+              'UPDATE',
+              freedTable.version,
+              {
+                id: freedTable.id,
+                table_number: freedTable.table_number,
+                name: freedTable.name,
+                capacity: freedTable.capacity,
+                status: freedTable.status,
+                active_order_id: freedTable.active_order_id,
+                current_bill_amount: Number(freedTable.current_bill_amount),
+                current_customer_count: freedTable.current_customer_count,
+                occupied_since: freedTable.occupied_since,
+                version: freedTable.version,
+                is_deleted: freedTable.is_deleted,
+              },
+              false,
+            );
+          }
         }
       }
 

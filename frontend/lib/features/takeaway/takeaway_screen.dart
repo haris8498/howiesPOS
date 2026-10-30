@@ -2035,6 +2035,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
   // Takeaway Kitchen Ticket (KOT) Dialog
   void _showTakeawayKitchenReceiptDialog(BuildContext context, TakeawayOrder order, bool isDark) {
+    final screenContext = context;
     showDialog(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.75),
@@ -2254,13 +2255,12 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                                     // Physical Thermal Print to Attached Laptop Printer
                                     final printSuccess = await ReceiptPrinterService.printReceipt(
-                                      context: context,
+                                      context: screenContext,
                                       receipt: ReceiptData.fromTakeawayOrder(
                                         order: order,
                                         type: ReceiptType.kitchenKot,
                                         isModified: isModified,
                                       ),
-                                      forcePrint: true,
                                     );
 
                                     if (printSuccess) {
@@ -2412,33 +2412,12 @@ class _TakeawayCustomerBillDialogState extends State<_TakeawayCustomerBillDialog
     super.dispose();
   }
 
-  Future<void> _setDiscountPreset(double pct) async {
-    if (pct == 0.0) {
-      setState(() {
-        _isDiscountAmountMode = false;
-        _discountPercentage = 0.0;
-        _managerApproval = null;
-        _discountController.text = '0';
-      });
-      return;
-    }
-    final sub = widget.order.subtotal;
-    final amt = (sub * (pct / 100.0)).clamp(0.0, sub);
-    final approval = await ManagerApprovalDialog.show(
-      context,
-      offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
-      actionTitle: 'Takeaway Discount (${pct.toStringAsFixed(0)}%)',
-      discountAmount: amt,
-      discountPercentage: pct,
-    );
-    if (approval != null) {
-      setState(() {
-        _isDiscountAmountMode = false;
-        _discountPercentage = pct;
-        _managerApproval = approval;
-        _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
-      });
-    }
+  void _setDiscountPreset(double pct) {
+    setState(() {
+      _isDiscountAmountMode = false;
+      _discountPercentage = pct;
+      _discountController.text = pct == 0.0 ? '0' : pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
+    });
   }
 
   @override
@@ -2789,20 +2768,7 @@ class _TakeawayCustomerBillDialogState extends State<_TakeawayCustomerBillDialog
                             : () async {
                                 setState(() => _isSaving = true);
 
-                                if (discountAmount > 0 && _managerApproval == null) {
-                                  final approval = await ManagerApprovalDialog.show(
-                                    context,
-                                    offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
-                                    actionTitle: 'Takeaway Discount',
-                                    discountAmount: discountAmount,
-                                    discountPercentage: effectiveDiscountPct,
-                                  );
-                                  if (approval == null) {
-                                    setState(() => _isSaving = false);
-                                    return;
-                                  }
-                                  _managerApproval = approval;
-                                }
+// Cashier discount applies directly without manager approval
 
                                 // 1. Save discount in backend database
                                 try {
@@ -5163,20 +5129,9 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                         });
                                         return;
                                       }
-                                      final discountAmt = _subtotal * (pct / 100.0);
-                                      final approval = await ManagerApprovalDialog.show(
-                                        context,
-                                        offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
-                                        actionTitle: 'Takeaway Discount (${pct.toStringAsFixed(0)}%)',
-                                        discountAmount: discountAmt,
-                                        discountPercentage: pct,
-                                      );
-                                      if (approval != null) {
-                                        setState(() {
-                                          _discountPercentage = pct;
-                                          _managerApproval = approval;
-                                        });
-                                      }
+                                      setState(() {
+                                        _discountPercentage = pct;
+                                      });
                                     },
                                     borderRadius: BorderRadius.circular(4),
                                     child: Container(

@@ -70,6 +70,10 @@ class PermissionChecker {
           'pos_payment_accept',
           'table_view',
           'table_order_update',
+          'order_discount',
+          'pos_discount',
+          'apply_order_discount',
+          'csh_order_discount',
         };
         return cashierAllowed.contains(permissionId);
     }

@@ -46,12 +46,6 @@ export class TablesService {
       where,
       include: {
         dine_in_orders: {
-          where: {
-            order: {
-              is_paid: false,
-              status: { notIn: ['completed'] },
-            },
-          },
           include: {
             order: {
               include: { order_items: true, dine_in_detail: true },
@@ -64,18 +58,18 @@ export class TablesService {
       orderBy: { table_number: 'asc' },
     });
 
-    // Fallback: fetch orders for occupied tables that have active_order_id
-    const fallbackOrderIds = tables
-      .filter((t) => t.status === 'occupied' && t.active_order_id && (!t.dine_in_orders?.[0]?.order?.order_items?.length))
+    // Fetch referenced orders for occupied tables that have active_order_id
+    const candidateOrderIds = tables
+      .filter((t) => t.status === 'occupied' && t.active_order_id)
       .map((t) => t.active_order_id as string);
 
-    let fallbackOrdersMap = new Map<string, any>();
-    if (fallbackOrderIds.length > 0) {
-      const fallbackOrders = await this.prisma.order.findMany({
-        where: { id: { in: fallbackOrderIds }, is_paid: false, status: { notIn: ['completed'] } },
+    let referencedOrdersMap = new Map<string, any>();
+    if (candidateOrderIds.length > 0) {
+      const referencedOrders = await this.prisma.order.findMany({
+        where: { id: { in: candidateOrderIds } },
         include: { order_items: true, dine_in_detail: true },
       });
-      fallbackOrdersMap = new Map(fallbackOrders.map((o) => [o.id, o]));
+      referencedOrdersMap = new Map(referencedOrders.map((o) => [o.id, o]));
     }
 
     return tables.map((t) => {
@@ -96,13 +90,18 @@ export class TablesService {
       }
 
       const isOccupied = status === 'occupied';
-      const activeDetail = isOccupied ? t.dine_in_orders?.[0] : null;
-      const orderFromDineIn = activeDetail?.order;
-      const orderFromActiveId = isOccupied && t.active_order_id ? fallbackOrdersMap.get(t.active_order_id) : null;
-      const activeOrder = isOccupied ? (orderFromActiveId || orderFromDineIn) : null;
+      const orderFromDineIn = isOccupied ? t.dine_in_orders?.[0]?.order : null;
+      const orderFromActiveId = isOccupied && t.active_order_id ? referencedOrdersMap.get(t.active_order_id) : null;
+      const linkedOrder = orderFromActiveId || orderFromDineIn;
 
-      // SYNC-034: Self-heal table lockup if occupied but has no active unpaid order
-      if (isOccupied && !activeOrder) {
+      const terminalStatuses = ['completed', 'cancelled', 'rejected', 'void'];
+      const isTerminal = linkedOrder && terminalStatuses.includes(linkedOrder.status?.toLowerCase());
+      const isPaid = linkedOrder && (linkedOrder.is_paid === true || linkedOrder.payment_status?.toUpperCase() === 'PAID');
+
+      // Auto-heal per Amendment 1 (#35):
+      // Auto-free only when the order exists and is completed, cancelled, rejected, void or paid.
+      // Never auto-free a table just because its active_order_id points to an order that is missing from the database.
+      if (isOccupied && linkedOrder && (isTerminal || isPaid)) {
         status = 'available';
         this.prisma.restaurantTable
           .update({
@@ -119,6 +118,7 @@ export class TablesService {
       }
 
       const effectiveOccupied = status === 'occupied';
+      const activeOrder = effectiveOccupied && linkedOrder && !isTerminal && !isPaid ? linkedOrder : null;
 
       const activeItems =
         effectiveOccupied
@@ -177,12 +177,6 @@ export class TablesService {
       where: { id },
       include: {
         dine_in_orders: {
-          where: {
-            order: {
-              is_paid: false,
-              status: { notIn: ['completed'] },
-            },
-          },
           include: {
             order: {
               include: { order_items: true, dine_in_detail: true },
@@ -212,15 +206,39 @@ export class TablesService {
     }
 
     const isOccupied = status === 'occupied';
-    let activeOrder = isOccupied ? table.dine_in_orders?.[0]?.order : null;
-    if (isOccupied && !activeOrder?.order_items?.length && table.active_order_id) {
-      activeOrder = (await this.prisma.order.findFirst({
-        where: { id: table.active_order_id, is_paid: false, status: { notIn: ['completed'] } },
+    let linkedOrder = isOccupied ? table.dine_in_orders?.[0]?.order : null;
+    if (isOccupied && table.active_order_id && (!linkedOrder || linkedOrder.id !== table.active_order_id)) {
+      linkedOrder = (await this.prisma.order.findFirst({
+        where: { id: table.active_order_id },
         include: { order_items: true, dine_in_detail: true },
       })) as any;
     }
 
-    const effectiveOccupied = isOccupied;
+    const terminalStatuses = ['completed', 'cancelled', 'rejected', 'void'];
+    const isTerminal = linkedOrder && terminalStatuses.includes(linkedOrder.status?.toLowerCase());
+    const isPaid = linkedOrder && (linkedOrder.is_paid === true || linkedOrder.payment_status?.toUpperCase() === 'PAID');
+
+    // Auto-heal per Amendment 1 (#35):
+    // Auto-free only when the order exists and is completed, cancelled, rejected, void or paid.
+    // Never auto-free a table just because its active_order_id points to an order that is missing from the database.
+    if (isOccupied && linkedOrder && (isTerminal || isPaid)) {
+      status = 'available';
+      this.prisma.restaurantTable
+        .update({
+          where: { id: table.id },
+          data: {
+            status: 'available',
+            active_order_id: null,
+            current_bill_amount: 0,
+            current_customer_count: 0,
+            occupied_since: null,
+          },
+        })
+        .catch((err) => this.logger.warn(`Failed to auto-heal table ${table.id}: ${err}`));
+    }
+
+    const effectiveOccupied = status === 'occupied';
+    const activeOrder = effectiveOccupied && linkedOrder && !isTerminal && !isPaid ? linkedOrder : null;
 
     const activeItems =
       effectiveOccupied
@@ -393,12 +411,32 @@ export class TablesService {
       data.current_customer_count = 0;
       data.reserved_customer_name = null;
       data.reservation_time = null;
+      data.version = { increment: 1 };
     }
 
     const updated = await this.prisma.restaurantTable.update({
       where: { id },
       data,
     });
+
+    if (dto.status === 'available') {
+      try {
+        if (this.changeLogService) {
+          await this.changeLogService.record(
+            this.prisma,
+            'restaurant_table',
+            updated.id,
+            'UPDATE',
+            updated.version,
+            {
+              ...updated,
+              is_deleted: false,
+            },
+            false,
+          );
+        }
+      } catch (_) {}
+    }
 
     this.logger.log(`Updated table '${updated.name}' status to '${dto.status}'`);
     return updated;
@@ -423,8 +461,26 @@ export class TablesService {
         current_customer_count: 0,
         reserved_customer_name: null,
         reservation_time: null,
+        version: { increment: 1 },
       },
     });
+
+    try {
+      if (this.changeLogService) {
+        await this.changeLogService.record(
+          this.prisma,
+          'restaurant_table',
+          updated.id,
+          'UPDATE',
+          updated.version,
+          {
+            ...updated,
+            is_deleted: false,
+          },
+          false,
+        );
+      }
+    } catch (_) {}
 
     this.logger.log(`Released table '${updated.name}' (${id}) to available`);
     return updated;
@@ -471,7 +527,7 @@ export class TablesService {
               table_id: fromTable.id,
               order: {
                 is_paid: false,
-                status: { notIn: ['completed', 'cancelled', 'rejected'] },
+                status: { notIn: ['completed', 'cancelled', 'rejected', 'void'] },
               },
             },
             include: { order: true },
@@ -612,7 +668,7 @@ export class TablesService {
           },
         ],
         is_paid: false,
-        status: { notIn: ['completed', 'cancelled', 'rejected'] },
+        status: { notIn: ['completed', 'cancelled', 'rejected', 'void'] },
       },
       select: {
         id: true,

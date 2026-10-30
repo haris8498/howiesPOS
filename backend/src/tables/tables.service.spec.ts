@@ -169,12 +169,34 @@ describe('TablesService', () => {
     expect(result[0].table_number).toBe('T-01');
   });
 
-  it('should self-heal occupied table without active orders to available (SYNC-034)', async () => {
+  it('unpushed-order table is not auto-freed', async () => {
+    // ord-101 is missing from database (unpushed local order)
+    const result = await service.listTables();
+    const table2 = result.find((t) => t.id === 'tbl-2');
+    expect(table2).toBeDefined();
+    expect(table2.status).toBe('occupied');
+    expect(table2.active_order_id).toBe('ord-101');
+  });
+
+  it('cancelled order no longer keeps the table occupied in tables.service', async () => {
+    const prisma = (service as any).prisma;
+    prisma.order.findMany.mockResolvedValueOnce([
+      {
+        id: 'ord-101',
+        order_number: '101',
+        status: 'cancelled',
+        is_paid: false,
+        order_items: [],
+      },
+    ]);
     const result = await service.listTables();
     const table2 = result.find((t) => t.id === 'tbl-2');
     expect(table2).toBeDefined();
     expect(table2.status).toBe('available');
+    expect(table2.active_order_id).toBeNull();
     expect(table2.current_order_items).toEqual([]);
+    expect(table2.current_bill_amount).toBe(0);
+    expect(table2.current_customer_count).toBe(0);
   });
 
   it('should list tables with search filter', async () => {

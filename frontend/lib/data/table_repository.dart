@@ -93,8 +93,29 @@ class TableNotifier extends StateNotifier<TableState> {
         if (local != null) {
           if (local.status == TableStatus.occupied) {
             if (st.status == TableStatus.available) {
-              // Local table has active occupation that server hasn't processed yet
-              return local;
+              // Keep local occupied only if the local order is open, unpaid and not cancelled
+              bool keepLocalOccupied = false;
+              if (local.activeOrderId != null && localDb != null) {
+                try {
+                  final localOrder = await localDb.ordersDao.getOrderById(local.activeOrderId!);
+                  if (localOrder != null) {
+                    final statusLower = localOrder.status.toLowerCase();
+                    final isCancelled = statusLower == 'cancelled' || statusLower == 'rejected' || statusLower == 'void';
+                    final isCompleted = statusLower == 'completed';
+                    final isPaid = localOrder.isPaid || localOrder.paymentStatus.toUpperCase() == 'PAID';
+                    if (!isCancelled && !isCompleted && !isPaid && !localOrder.isDeleted) {
+                      keepLocalOccupied = true;
+                    }
+                  } else {
+                    // Local unpushed order or test placeholder
+                    keepLocalOccupied = true;
+                  }
+                } catch (_) {}
+              }
+              if (keepLocalOccupied) {
+                return local;
+              }
+              return st.toAvailable();
             }
             if (local.currentOrderItems.isNotEmpty && st.currentOrderItems.isEmpty) {
               // Server knows occupied but doesn't have order items breakdown yet
@@ -109,6 +130,9 @@ class TableNotifier extends StateNotifier<TableState> {
             // Local table has active reservation that server hasn't processed yet
             return local;
           }
+        }
+        if (st.status == TableStatus.available) {
+          return st.toAvailable();
         }
         // If table is occupied on server but order items are empty, check local SQLite ordersDao
         if (st.status == TableStatus.occupied && st.currentOrderItems.isEmpty && st.activeOrderId != null && localDb != null) {
@@ -237,16 +261,34 @@ class TableNotifier extends StateNotifier<TableState> {
                 }
               } catch (_) {}
             }
+            final parsedStatus = TableStatus.values.firstWhere(
+              (s) => s.name.toLowerCase() == lt.status.toLowerCase(),
+              orElse: () => TableStatus.available,
+            );
+            if (parsedStatus == TableStatus.available) {
+              return RestaurantTable(
+                id: lt.id,
+                tableNumber: lt.tableNumber,
+                name: lt.name,
+                capacity: lt.capacity,
+                section: local?.section ?? 'Hall',
+                status: TableStatus.available,
+                activeOrderId: null,
+                activeOrderNumber: null,
+                currentBillAmount: 0.0,
+                currentOrderItems: const [],
+                reservedCustomerName: null,
+                reservationTime: null,
+                isDeleted: lt.isDeleted,
+              );
+            }
             return RestaurantTable(
               id: lt.id,
               tableNumber: lt.tableNumber,
               name: lt.name,
               capacity: lt.capacity,
               section: local?.section ?? 'Hall',
-              status: TableStatus.values.firstWhere(
-                (s) => s.name.toLowerCase() == lt.status.toLowerCase(),
-                orElse: () => TableStatus.available,
-              ),
+              status: parsedStatus,
               activeOrderId: lt.activeOrderId ?? local?.activeOrderId,
               activeOrderNumber: local?.activeOrderNumber,
               currentBillAmount: bill,
@@ -306,6 +348,9 @@ class TableNotifier extends StateNotifier<TableState> {
 
     final updated = state.tables.map((table) {
       if (table.id == tableId) {
+        if (newStatus == TableStatus.available) {
+          return table.toAvailable();
+        }
         return table.copyWith(
           status: newStatus,
           activeOrderId: newStatus == TableStatus.occupied ? activeOrderId ?? table.activeOrderId : null,
@@ -371,6 +416,9 @@ class TableNotifier extends StateNotifier<TableState> {
 
     final updated = state.tables.map((table) {
       if (table.id == tableId) {
+        if (newStatus == TableStatus.available) {
+          return table.toAvailable();
+        }
         final fallbackNum = (int.tryParse(table.tableNumber) ?? 101).toString().padLeft(3, '0');
         return table.copyWith(
           status: newStatus,
@@ -456,13 +504,7 @@ class TableNotifier extends StateNotifier<TableState> {
 
     final updated = state.tables.map((table) {
       if (table.id == tableId) {
-        return table.copyWith(
-          status: TableStatus.available,
-          activeOrderId: null,
-          currentBillAmount: 0.0,
-          currentCustomerCount: 0,
-          currentOrderItems: [],
-        );
+        return table.toAvailable();
       }
       return table;
     }).toList();

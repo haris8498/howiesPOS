@@ -17,6 +17,7 @@ import { Optional } from '@nestjs/common';
 import { SyncMutationDto } from '../dto/sync-push.dto';
 import { v7 as uuidv7 } from 'uuid';
 import { CreateOrderDto, CreateOrderItemDto, CreateOrderPaymentDto } from '../../orders/dto/create-order.dto';
+import { recalculateOrderTotals } from '../../orders/order-totals.util';
 
 @Injectable()
 export class OrderHandler implements SyncEntityHandler, OnModuleInit {
@@ -1491,7 +1492,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
 
     const existingOrder = await tx.order.findUnique({
       where: { id: orderId },
-      include: { order_items: true },
+      include: {
+        order_items: true,
+        dine_in_detail: true,
+        online_detail: true,
+      },
     });
 
     if (!existingOrder) {
@@ -1505,6 +1510,23 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       };
     }
 
+    // 3. Idempotency: if an item with id split_item_id already exists, return DUPLICATE
+    const splitItemId = payload.split_item_id || payload.splitItemId;
+    if (splitItemId) {
+      const existingSplit =
+        existingOrder.order_items?.find((i: any) => i.id === splitItemId) ||
+        (tx.orderItem?.findUnique ? await tx.orderItem.findUnique({ where: { id: splitItemId } }) : null);
+      if (existingSplit) {
+        return {
+          operation_id: mutation.operation_id,
+          entity_id: orderId,
+          status: 'DUPLICATE',
+          server_version: (existingOrder as any).version ?? 1,
+          server_timestamp: this.toIsoString((existingOrder as any).updated_at || new Date()),
+        };
+      }
+    }
+
     const existingItem = await tx.orderItem.findUnique({
       where: { id: itemId },
     });
@@ -1512,8 +1534,59 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const now = new Date();
     const voidedBy = payload.voided_by || payload.voidedBy || 'sync';
     const reason = payload.reason || payload.cancel_reason || 'Voided via sync';
+    const voidQty = payload.quantity !== undefined && payload.quantity !== null ? Number(payload.quantity) : undefined;
+    const isPartialVoid = Boolean(
+      existingItem && voidQty !== undefined && voidQty > 0 && voidQty < existingItem.quantity,
+    );
 
-    if (existingItem) {
+    if (isPartialVoid && existingItem) {
+      const remainingQty = existingItem.quantity - voidQty!;
+      const unitPriceNum = Number(existingItem.unit_price) || 0;
+      const remainingTotalPrice = this.round(unitPriceNum * remainingQty);
+      const splitTotalPrice = this.round(unitPriceNum * voidQty!);
+      const newSplitId = splitItemId || uuidv7();
+      const voidedAtDate = payload.voided_at || payload.voidedAt
+        ? new Date(payload.voided_at || payload.voidedAt)
+        : now;
+
+      // 1. Update active item with reduced quantity and recomputed total_price
+      if (tx.orderItem?.update) {
+        await tx.orderItem.update({
+          where: { id: itemId },
+          data: {
+            quantity: remainingQty,
+            total_price: new Prisma.Decimal(remainingTotalPrice),
+          },
+        });
+      }
+
+      // 2. Create voided split line item
+      if (tx.orderItem?.create) {
+        await tx.orderItem.create({
+          data: {
+            id: newSplitId,
+            order_id: orderId,
+            menu_item_id: existingItem.menu_item_id,
+            item_name: existingItem.item_name,
+            quantity: voidQty!,
+            selected_size: existingItem.selected_size ?? 'Regular',
+            selected_crust: existingItem.selected_crust ?? 'Original',
+            extra_toppings: existingItem.extra_toppings ?? '',
+            unit_price: existingItem.unit_price,
+            total_price: new Prisma.Decimal(splitTotalPrice),
+            notes: existingItem.notes ?? '',
+            is_cancelled: true,
+            cancelled_at: voidedAtDate,
+            cancel_reason: reason,
+            cancelled_by: voidedBy,
+            voidedAt: voidedAtDate,
+            voidedBy: voidedBy,
+            createdByDeviceId: context.deviceId || null,
+            clientCreatedAt: mutation.created_at ? new Date(mutation.created_at) : now,
+          },
+        });
+      }
+    } else if (existingItem) {
       if (!existingItem.voidedAt && tx.orderItem?.update) {
         await tx.orderItem.update({
           where: { id: itemId },
@@ -1548,19 +1621,45 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       });
     }
 
-    const activeItems = await this.ordersService.getActiveItems(orderId, tx);
+    let activeItems: any[] = [];
+    if (this.ordersService?.getActiveItems) {
+      activeItems = await this.ordersService.getActiveItems(orderId, tx);
+    } else if (tx.orderItem?.findMany) {
+      activeItems = await tx.orderItem.findMany({
+        where: { order_id: orderId, is_cancelled: false, voidedAt: null },
+      });
+    }
+
     const subtotal = this.round(
       activeItems.reduce((sum: number, i: any) => sum + Number(i.total_price), 0),
     );
 
-    const discountPercentage = Number(existingOrder.discount_percentage);
-    const discountAmount =
-      discountPercentage > 0
-        ? this.round((subtotal * discountPercentage) / 100)
-        : Number(existingOrder.discount_amount);
-    const taxableAmount = Math.max(0, subtotal - discountAmount);
-    const taxAmount = Number(existingOrder.tax_amount);
-    const grandTotal = this.round(taxableAmount + taxAmount);
+    let discountAmount: number;
+    let taxAmount: number;
+    let grandTotal: number;
+
+    if (isPartialVoid) {
+      const recalculated = recalculateOrderTotals({
+        subtotal,
+        discountPercentage: Number(existingOrder.discount_percentage || 0),
+        discountAmount: Number(existingOrder.discount_amount || 0),
+        taxAmount: Number(existingOrder.tax_amount || 0),
+        prevSubtotal: Number(existingOrder.subtotal) || 1,
+        deliveryFee: Number((existingOrder as any).online_detail?.delivery_fee || 0),
+      });
+      discountAmount = recalculated.discountAmount;
+      taxAmount = recalculated.taxAmount;
+      grandTotal = recalculated.grandTotal;
+    } else {
+      const discountPercentage = Number(existingOrder.discount_percentage);
+      discountAmount =
+        discountPercentage > 0
+          ? this.round((subtotal * discountPercentage) / 100)
+          : Number(existingOrder.discount_amount);
+      const taxableAmount = Math.max(0, subtotal - discountAmount);
+      taxAmount = Number(existingOrder.tax_amount);
+      grandTotal = this.round(taxableAmount + taxAmount);
+    }
 
     if (this.pricingService) {
       await this.pricingService.calculate(orderId, tx, {
@@ -1569,14 +1668,39 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       });
     }
 
+    const orderUpdateData: any = {
+      subtotal: new Prisma.Decimal(subtotal),
+      grand_total: new Prisma.Decimal(grandTotal),
+      version: { increment: 1 },
+    };
+    if (isPartialVoid) {
+      orderUpdateData.discount_amount = new Prisma.Decimal(discountAmount);
+      orderUpdateData.tax_amount = new Prisma.Decimal(taxAmount);
+    }
+
     const updated = await tx.order.update({
       where: { id: orderId },
-      data: {
-        subtotal: new Prisma.Decimal(subtotal),
-        grand_total: new Prisma.Decimal(grandTotal),
-        version: { increment: 1 },
-      },
+      data: orderUpdateData,
     });
+
+    if (isPartialVoid) {
+      const dineInDetail =
+        (existingOrder as any).dine_in_detail ||
+        (tx.dineInOrderDetail?.findUnique
+          ? await tx.dineInOrderDetail.findUnique({ where: { order_id: orderId } }).catch(() => null)
+          : null);
+      const tableId = payload.table_id || payload.tableId || dineInDetail?.table_id;
+      if (tableId && tx.restaurantTable?.update) {
+        await tx.restaurantTable
+          .update({
+            where: { id: tableId },
+            data: {
+              current_bill_amount: new Prisma.Decimal(grandTotal),
+            },
+          })
+          .catch(() => {});
+      }
+    }
 
     const newVersion = (updated as any).version ?? ((existingOrder as any).version || 1) + 1;
     const updatedAt = (updated as any).updated_at || new Date();

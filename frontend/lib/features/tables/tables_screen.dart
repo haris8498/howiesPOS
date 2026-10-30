@@ -4460,44 +4460,12 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
     });
   }
 
-  Future<void> _setDiscountPreset(double pct) async {
-    if (pct == 0.0) {
-      setState(() {
-        _isDiscountAmountMode = false;
-        _discountPercentage = 0.0;
-        _managerApproval = null;
-        _discountController.text = '0';
-      });
-      return;
-    }
-
-    final billAmount = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 0.0;
-    double sub = 0.0;
-    for (final item in widget.table.currentOrderItems) {
-      if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
-      final qty = (item['quantity'] as num?)?.toInt() ?? 1;
-      final price = (item['price'] as num?)?.toDouble() ?? 0.0;
-      sub += (price * qty);
-    }
-    if (sub <= 0) sub = billAmount > 0 ? billAmount : 1449.0;
-    final discountAmount = (sub * (pct / 100.0)).clamp(0.0, sub);
-
-    final approval = await ManagerApprovalDialog.show(
-      context,
-      offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
-      actionTitle: 'Table ${widget.table.tableNumber} Discount (${pct.toStringAsFixed(0)}%)',
-      discountAmount: discountAmount,
-      discountPercentage: pct,
-    );
-
-    if (approval != null) {
-      setState(() {
-        _isDiscountAmountMode = false;
-        _discountPercentage = pct;
-        _managerApproval = approval;
-        _discountController.text = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
-      });
-    }
+  void _setDiscountPreset(double pct) {
+    setState(() {
+      _isDiscountAmountMode = false;
+      _discountPercentage = pct;
+      _discountController.text = pct == 0.0 ? '0' : pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 1);
+    });
   }
 
   @override
@@ -5065,19 +5033,7 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: () async {
-                          if (discountAmount > 0 && _managerApproval == null) {
-                            final approval = await ManagerApprovalDialog.show(
-                              context,
-                              offlineAuthService: widget.ref.read(offlineAuthServiceProvider),
-                              actionTitle: 'Table ${widget.table.tableNumber} Discount',
-                              discountAmount: discountAmount,
-                              discountPercentage: effectiveDiscountPct,
-                            );
-                            if (approval == null) return;
-                            _managerApproval = approval;
-                          }
-                          if (!context.mounted) return;
+                        onPressed: () {
                           Navigator.pop(context);
                           widget.onPrint(subtotal, discountAmount, taxAmount, grandTotal, _taxRate, effectiveDiscountPct, _managerApproval);
                         },

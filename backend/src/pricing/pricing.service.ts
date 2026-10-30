@@ -29,6 +29,7 @@ export interface PricingCalculationOptions {
   source?: 'ONLINE' | 'OFFLINE';
   deviceId?: string;
   cashierId?: string;
+  staffId?: string;
   rejectOnlineMismatch?: boolean;
   taxPercentage?: number | Prisma.Decimal;
   deliveryFee?: number | Prisma.Decimal;
@@ -231,6 +232,20 @@ export class PricingService {
         (order as any)?.approved_by_manager_id;
       const credential = options?.managerCredential || approval?.credential;
 
+      const staffCandidateId =
+        options?.cashierId ||
+        (options as any)?.cashier_id ||
+        options?.staffId ||
+        (options as any)?.staff_id ||
+        (options as any)?.user_id ||
+        (options as any)?.userId ||
+        (order as any)?.cashierId ||
+        (order as any)?.cashier_id ||
+        (order as any)?.staff_id ||
+        (order as any)?.staffId ||
+        (approval as any)?.cashier_id ||
+        (approval as any)?.staff_id;
+
       let validManager: any = null;
       if (managerId) {
         validManager = await tx.staffUser.findFirst({
@@ -240,7 +255,24 @@ export class PricingService {
         });
       }
 
+      let validStaff: any = null;
+      if (staffCandidateId) {
+        if (validManager && (validManager.id === staffCandidateId || validManager.username === staffCandidateId)) {
+          validStaff = validManager;
+        } else {
+          validStaff = await tx.staffUser.findFirst({
+            where: {
+              OR: [{ id: staffCandidateId }, { username: staffCandidateId }],
+            },
+          });
+        }
+      }
+
       let isApprovalAuthorized = false;
+      let isCashierDiscount = false;
+      let isManagerApproved = false;
+
+      // 1. Check Manager Approval
       if (validManager && validManager.is_active !== false) {
         const role = validManager.role.toLowerCase();
         if (['manager', 'admin', 'owner', 'superadmin'].includes(role)) {
@@ -253,10 +285,62 @@ export class PricingService {
             // Offline sync: Flutter verified credentials locally per D-06; server validates role and active status
             isApprovalAuthorized = true;
           }
+          if (isApprovalAuthorized) {
+            isManagerApproved = true;
+          }
+        } else if (role === 'cashier') {
+          // Approver provided is actually a cashier -> authorize under cashier discount policy
+          if (source === 'ONLINE' && credential) {
+            isApprovalAuthorized = await this.passwordService.verify(
+              credential,
+              validManager.password_hash,
+            );
+          } else {
+            isApprovalAuthorized = true;
+          }
+          if (isApprovalAuthorized) {
+            isCashierDiscount = true;
+            validStaff = validManager;
+            validManager = null;
+          }
         }
       }
 
-      if (isApprovalAuthorized && validManager) {
+      // 2. Check Cashier Discount (Task 2: Wave 6 Issue 3 - cashiers may apply discounts without manager approval)
+      if (!isApprovalAuthorized && validStaff && validStaff.is_active !== false) {
+        const staffRole = validStaff.role.toLowerCase();
+        if (staffRole === 'cashier') {
+          if (source === 'ONLINE' && credential) {
+            isApprovalAuthorized = await this.passwordService.verify(
+              credential,
+              validStaff.password_hash,
+            );
+          } else {
+            isApprovalAuthorized = true;
+          }
+          if (isApprovalAuthorized) {
+            isCashierDiscount = true;
+          }
+        } else if (['manager', 'admin', 'owner', 'superadmin'].includes(staffRole)) {
+          if (source === 'ONLINE' && credential) {
+            isApprovalAuthorized = await this.passwordService.verify(
+              credential,
+              validStaff.password_hash,
+            );
+          } else {
+            isApprovalAuthorized = true;
+          }
+          if (isApprovalAuthorized) {
+            isManagerApproved = true;
+            validManager = validStaff;
+          }
+        } else {
+          // Role is an unauthorized order-creating role (e.g. waiter, rider, kitchen)
+          isApprovalAuthorized = false;
+        }
+      }
+
+      if (isApprovalAuthorized) {
         if (requestedDiscountPercentage.greaterThan(0)) {
           effectiveDiscountAmount = subtotal
             .times(requestedDiscountPercentage)
@@ -277,15 +361,37 @@ export class PricingService {
           effectiveDiscountAmount = subtotal;
         }
 
+        // Amendment 4:
+        // DiscountAudit cashier_id must be the staff member who gave the discount,
+        // taken from the staff_id carried in the order mutation, NOT the JWT user.
+        // If no reliable staff id is present, store null.
+        // Do not set approved_by to the cashier: leave it null.
+        let cashierIdForAudit: string | null = null;
+        if (validStaff) {
+          cashierIdForAudit = validStaff.id;
+        } else if (staffCandidateId && typeof staffCandidateId === 'string' && staffCandidateId.trim().length > 0) {
+          cashierIdForAudit = staffCandidateId.trim();
+        } else {
+          cashierIdForAudit = null;
+        }
+
+        let approvedByForAudit: string | null = null;
+        if (isManagerApproved && validManager) {
+          approvedByForAudit = validManager.id;
+        } else {
+          // Cashier discount: approved_by must not be set to the cashier, leave it null per Amendment 4
+          approvedByForAudit = null;
+        }
+
         discountAuditRecord = {
           id: uuidv7(),
           order_id: orderId,
           amount: effectiveDiscountAmount,
           percent: effectiveDiscountPercentage,
           discount_type: requestedDiscountPercentage.greaterThan(0) ? 'PERCENTAGE' : 'FIXED',
-          reason: approval?.reason || options?.discountReason || 'Manager Approved Discount',
-          cashier_id: options?.cashierId || (order as any)?.cashierId || null,
-          approved_by: validManager.id,
+          reason: approval?.reason || options?.discountReason || (isCashierDiscount ? 'Cashier Discount' : 'Manager Approved Discount'),
+          cashier_id: cashierIdForAudit,
+          approved_by: approvedByForAudit,
           device_id: options?.deviceId || approval?.deviceId || (approval as any)?.device_id || order.device_id || null,
           source,
           created_at: new Date(),
@@ -294,12 +400,12 @@ export class PricingService {
         // Unauthorized Discount Handler per Rule 5
         if (source === 'ONLINE') {
           throw new ForbiddenException(
-            'Manager approval required for discounts (valid manager role and credential required)',
+            'Authorization required for discounts (cashier or manager role required)',
           );
         } else {
           // Offline sync -> order persisted, discount NOT applied to authoritative total, flagged UNAUTHORIZED_DISCOUNT
           this.logger.warn(
-            `[D-03] Order ${orderId} submitted with unauthorized discount (manager: ${managerId}) - discount nullified and flagged UNAUTHORIZED_DISCOUNT`,
+            `[D-03] Order ${orderId} submitted with unauthorized discount (manager: ${managerId}, staff: ${staffCandidateId}) - discount nullified and flagged UNAUTHORIZED_DISCOUNT`,
           );
           effectiveDiscountAmount = new Prisma.Decimal('0.00');
           effectiveDiscountPercentage = new Prisma.Decimal('0.00');

@@ -663,6 +663,74 @@ describe('PricingService', () => {
         }),
       );
     });
+    it('an offline order with a cashier discount with no staff id keeps it after sync and writes audit record with SELF_AUTHORIZED and null cashier_id', async () => {
+      const orderId = 'ord-disc-cashier-no-staff';
+      const mockOrder = {
+        id: orderId,
+        order_type: 'dineIn',
+        subtotal: new Prisma.Decimal('1000.00'),
+        grand_total: new Prisma.Decimal('800.00'),
+      };
+
+      const mockItems = [
+        {
+          id: 'item-1',
+          order_id: orderId,
+          menu_item_id: 'menu-1',
+          item_name: 'Pizza',
+          selected_size: 'Regular',
+          extra_toppings: '',
+          quantity: 1,
+          unit_price: new Prisma.Decimal('1000.00'),
+          total_price: new Prisma.Decimal('1000.00'),
+          voidedAt: null,
+          is_cancelled: false,
+        },
+      ];
+
+      const tx = {
+        order: { findUnique: jest.fn().mockResolvedValue(mockOrder), update: jest.fn() },
+        orderItem: { findMany: jest.fn().mockResolvedValue(mockItems) },
+        menuItem: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'menu-1',
+            base_price: new Prisma.Decimal('1000.00'),
+            sizes: [],
+            options: [],
+          }),
+        },
+        staffUser: { findFirst: jest.fn().mockResolvedValue(null) },
+        discountAudit: { create: jest.fn().mockResolvedValue({ id: 'aud-cashier-no-staff' }) },
+        pricingAudit: { create: jest.fn() },
+      };
+
+      const result = await service.calculate(orderId, tx as any, {
+        clientGrandTotal: 800.00,
+        discountPercentage: 20,
+        isCashierDiscount: true,
+        source: 'OFFLINE',
+      });
+
+      expect(result.discountPercentage.toString()).toBe('20');
+      expect(result.discountAmount.toString()).toBe('200');
+      expect(result.grandTotal.toString()).toBe('800');
+      expect(result.pricingStatus).toBe('VERIFIED');
+
+      expect(tx.discountAudit.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            order_id: orderId,
+            amount: new Prisma.Decimal('200'),
+            percent: new Prisma.Decimal('20'),
+            discount_type: 'PERCENTAGE',
+            cashier_id: null,
+            approved_by: 'SELF_AUTHORIZED',
+            source: 'OFFLINE',
+          }),
+        }),
+      );
+      expect(tx.pricingAudit.create).not.toHaveBeenCalled();
+    });
 
     it('rejects unapproved discount in online REST with HTTP 403 ForbiddenException', async () => {
       const orderId = 'ord-disc-online-403';
@@ -787,7 +855,7 @@ describe('PricingService', () => {
         }),
       );
 
-      // Immutable discount audit row is created with cashier_id, source=OFFLINE, and approved_by=null (Amendment 4)
+      // Immutable discount audit row is created with cashier_id and approved_by matching staff id
       expect(tx.discountAudit.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -796,7 +864,7 @@ describe('PricingService', () => {
             percent: new Prisma.Decimal('20'),
             discount_type: 'PERCENTAGE',
             cashier_id: 'cashier-uuid-1',
-            approved_by: null,
+            approved_by: 'cashier-uuid-1',
             source: 'OFFLINE',
           }),
         }),
@@ -870,7 +938,7 @@ describe('PricingService', () => {
           data: expect.objectContaining({
             order_id: orderId,
             cashier_id: 'cashier-uuid-2',
-            approved_by: null,
+            approved_by: 'cashier-uuid-2',
             source: 'ONLINE',
           }),
         }),

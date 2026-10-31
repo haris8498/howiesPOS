@@ -6983,24 +6983,7 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
               );
             }
           }
-          // Direct API attempt when connected so backend updates immediately
-          try {
-            final ordersApi = widget.ref.read(ordersApiServiceProvider);
-            for (final item in widget.table.currentOrderItems) {
-              if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
-              final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
-              final cancelQty = _cancelQuantities[itemId] ?? 0;
-              if (cancelQty > 0 && itemId.isNotEmpty) {
-                await ordersApi.cancelOrderItem(
-                  orderId,
-                  itemId: itemId,
-                  cancelQuantity: cancelQty,
-                  reason: effectiveReason,
-                  cancelledBy: cashierName,
-                );
-              }
-            }
-          } catch (_) {}
+          // Offline-first sync push: background worker synchronizes voided items cleanly without duplicating
           widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
         } else {
           final ordersApi = widget.ref.read(ordersApiServiceProvider);
@@ -7562,3 +7545,4 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
     );
   }
 }
+

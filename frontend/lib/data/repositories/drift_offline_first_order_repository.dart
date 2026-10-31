@@ -698,6 +698,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           payload: Value(jsonEncode({
             'order_id': orderId,
             'item_id': itemId,
+            'cancelled_item_id': cancelledItemId,
             if (cancelQuantity != null && cancelQuantity > 0) 'cancel_quantity': cancelQuantity,
             'voided_by': voidedBy ?? 'USER',
             'reason': reason,
@@ -841,3 +842,4 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
     );
   }
 }
+

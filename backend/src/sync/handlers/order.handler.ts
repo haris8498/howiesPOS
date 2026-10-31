@@ -1520,6 +1520,28 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const cancelQty = payload.cancel_quantity || payload.cancelQuantity;
 
     if (existingItem) {
+      if ((existingItem as any).is_cancelled) {
+        return {
+          operation_id: mutation.operation_id,
+          entity_id: orderId,
+          status: 'SYNCED',
+          server_version: (existingOrder as any).version ?? 1,
+          server_timestamp: new Date().toISOString(),
+        };
+      }
+      const cancelledItemId = payload.cancelled_item_id || payload.cancelledItemId;
+      if (cancelledItemId && tx.orderItem?.findUnique) {
+        const alreadyExists = await tx.orderItem.findUnique({ where: { id: cancelledItemId } });
+        if (alreadyExists) {
+          return {
+            operation_id: mutation.operation_id,
+            entity_id: orderId,
+            status: 'SYNCED',
+            server_version: (existingOrder as any).version ?? 1,
+            server_timestamp: new Date().toISOString(),
+          };
+        }
+      }
       if (!existingItem.voidedAt && tx.orderItem?.update) {
         if (cancelQty && cancelQty > 0 && cancelQty < existingItem.quantity) {
           const remainingQty = existingItem.quantity - cancelQty;
@@ -1534,6 +1556,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           if (tx.orderItem?.create) {
             await tx.orderItem.create({
               data: {
+                ...(cancelledItemId ? { id: cancelledItemId } : {}),
                 order_id: orderId,
                 menu_item_id: existingItem.menu_item_id,
                 item_name: existingItem.item_name,
@@ -1964,4 +1987,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }
   }
 }
+
+
+
 

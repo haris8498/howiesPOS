@@ -5375,7 +5375,7 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
                 reason: effectiveReason,
               );
             } catch (_) {}
-          }
+          } else {
           await ordersApi.cancelOrderItem(
             orderId,
             itemId: itemId,
@@ -5383,6 +5383,7 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
             reason: effectiveReason,
             cancelledBy: cashierName,
           );
+          }
         }
       }
       if (FeatureFlags.offlineFirstEnabled) {
@@ -5897,3 +5898,6 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
     );
   }
 }
+
+
+

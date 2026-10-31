@@ -619,6 +619,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
       final now = DateTime.now();
       final existingItem = await (_db.select(_db.localOrderItems)..where((t) => t.id.equals(itemId))).getSingleOrNull();
 
+      String? cancelledItemId;
       if (existingItem != null && cancelQuantity != null && cancelQuantity > 0 && cancelQuantity < existingItem.quantity) {
         // Partial cancellation: Reduce existing item's quantity and subtotal
         final remainingQty = existingItem.quantity - cancelQuantity;
@@ -634,7 +635,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
         );
 
         // Insert separated cancelled item record with audit
-        final cancelledItemId = _uuid.v7();
+        cancelledItemId = _uuid.v7();
         await _db.into(_db.localOrderItems).insert(
           LocalOrderItemsCompanion(
             id: Value(cancelledItemId),
@@ -698,7 +699,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           payload: Value(jsonEncode({
             'order_id': orderId,
             'item_id': itemId,
-            'cancelled_item_id': cancelledItemId,
+            if (cancelledItemId != null) 'cancelled_item_id': cancelledItemId,
             if (cancelQuantity != null && cancelQuantity > 0) 'cancel_quantity': cancelQuantity,
             'voided_by': voidedBy ?? 'USER',
             'reason': reason,
@@ -842,4 +843,5 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
     );
   }
 }
+
 

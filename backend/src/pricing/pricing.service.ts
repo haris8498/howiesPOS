@@ -31,6 +31,7 @@ export interface PricingCalculationOptions {
   cashierId?: string;
   staffId?: string;
   rejectOnlineMismatch?: boolean;
+  taxAmount?: number | Prisma.Decimal;
   taxPercentage?: number | Prisma.Decimal;
   deliveryFee?: number | Prisma.Decimal;
   isCashierDiscount?: boolean;
@@ -235,7 +236,7 @@ export class PricingService {
         (order as any)?.approved_by_manager_id;
       const credential = options?.managerCredential || approval?.credential;
 
-      const staffCandidateId =
+      let staffCandidateId =
         options?.cashierId ||
         (options as any)?.cashier_id ||
         options?.staffId ||
@@ -249,6 +250,20 @@ export class PricingService {
         (approval as any)?.cashier_id ||
         (approval as any)?.staff_id;
 
+      if (!staffCandidateId && (order as any)?.shift_id && tx.dailyCalculation?.findUnique) {
+        try {
+          const shift = await tx.dailyCalculation.findUnique({
+            where: { id: (order as any).shift_id },
+            select: { cashier_id: true },
+          });
+          if (shift?.cashier_id) {
+            staffCandidateId = shift.cashier_id;
+          }
+        } catch {
+          // ignore lookup error
+        }
+      }
+
       let validManager: any = null;
       if (managerId) {
         validManager = await tx.staffUser.findFirst({
@@ -260,7 +275,10 @@ export class PricingService {
 
       let validStaff: any = null;
       if (staffCandidateId) {
-        if (validManager && (validManager.id === staffCandidateId || validManager.username === staffCandidateId)) {
+        if (
+          validManager &&
+          (validManager.id === staffCandidateId || validManager.username === staffCandidateId)
+        ) {
           validStaff = validManager;
         } else {
           validStaff = await tx.staffUser.findFirst({
@@ -384,7 +402,12 @@ export class PricingService {
         let cashierIdForAudit: string | null = null;
         if (validStaff && validStaff.id) {
           cashierIdForAudit = String(validStaff.id).trim();
-        } else if (staffCandidateId && typeof staffCandidateId === 'string' && staffCandidateId.trim().length > 0 && isCashierDiscount) {
+        } else if (
+          staffCandidateId &&
+          typeof staffCandidateId === 'string' &&
+          staffCandidateId.trim().length > 0 &&
+          isCashierDiscount
+        ) {
           cashierIdForAudit = staffCandidateId.trim();
         } else {
           cashierIdForAudit = null;
@@ -409,10 +432,18 @@ export class PricingService {
           amount: effectiveDiscountAmount,
           percent: effectiveDiscountPercentage,
           discount_type: requestedDiscountPercentage.greaterThan(0) ? 'PERCENTAGE' : 'FIXED',
-          reason: approval?.reason || options?.discountReason || (isCashierDiscount ? 'Cashier Discount' : 'Manager Approved Discount'),
+          reason:
+            approval?.reason ||
+            options?.discountReason ||
+            (isCashierDiscount ? 'Cashier Discount' : 'Manager Approved Discount'),
           cashier_id: cashierIdForAudit,
           approved_by: approvedByForAudit,
-          device_id: options?.deviceId || approval?.deviceId || (approval as any)?.device_id || order.device_id || null,
+          device_id:
+            options?.deviceId ||
+            approval?.deviceId ||
+            (approval as any)?.device_id ||
+            order.device_id ||
+            null,
           source,
           created_at: new Date(),
         };
@@ -441,19 +472,28 @@ export class PricingService {
     );
 
     let taxAmount = new Prisma.Decimal('0.00');
-    if (options?.taxPercentage !== undefined) {
+    if (options?.taxAmount !== undefined) {
+      taxAmount = new Prisma.Decimal(options.taxAmount);
+    } else if (options?.taxPercentage !== undefined) {
       taxAmount = taxableAmount
         .times(new Prisma.Decimal(options.taxPercentage))
         .dividedBy(100)
         .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-    } else if (order.tax_amount !== undefined && new Prisma.Decimal(order.tax_amount).greaterThan(0)) {
+    } else if (
+      order.tax_amount !== undefined &&
+      new Prisma.Decimal(order.tax_amount).greaterThan(0)
+    ) {
       const currentTax = new Prisma.Decimal(order.tax_amount);
       const prevSubtotal = new Prisma.Decimal(order.subtotal || 0);
-      if (prevSubtotal.greaterThan(0)) {
+      const prevDiscount = new Prisma.Decimal(order.discount_amount || 0);
+      const prevTaxable = Prisma.Decimal.max(new Prisma.Decimal('0.00'), prevSubtotal.minus(prevDiscount));
+
+      if (prevTaxable.greaterThan(0)) {
+        const taxRate = currentTax.dividedBy(prevTaxable);
+        taxAmount = taxableAmount.times(taxRate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      } else if (prevSubtotal.greaterThan(0)) {
         const taxRate = currentTax.dividedBy(prevSubtotal);
-        taxAmount = taxableAmount
-          .times(taxRate)
-          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+        taxAmount = taxableAmount.times(taxRate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
       } else {
         taxAmount = currentTax;
       }
@@ -487,7 +527,9 @@ export class PricingService {
     const difference = clientTotal.minus(serverGrandTotal).abs();
     const isWithinTolerance = difference.lessThanOrEqualTo(tolerance);
 
-    if (pricingStatus !== 'UNAUTHORIZED_DISCOUNT') {
+    if (order.status === 'cancelled' || serverGrandTotal.equals(0)) {
+      pricingStatus = 'VERIFIED';
+    } else if (pricingStatus !== 'UNAUTHORIZED_DISCOUNT') {
       if (isWithinTolerance) {
         pricingStatus = 'VERIFIED';
       } else {
@@ -525,9 +567,10 @@ export class PricingService {
       lineDiscrepancies.length > 0;
 
     if (shouldWritePricingAudit && tx.pricingAudit) {
-      const clientSubtotal = options?.clientSubtotal !== undefined
-        ? new Prisma.Decimal(options.clientSubtotal)
-        : new Prisma.Decimal(order.subtotal);
+      const clientSubtotal =
+        options?.clientSubtotal !== undefined
+          ? new Prisma.Decimal(options.clientSubtotal)
+          : new Prisma.Decimal(order.subtotal);
 
       pricingAuditRecord = {
         id: uuidv7(),
@@ -546,8 +589,8 @@ export class PricingService {
           pricingStatus === 'UNAUTHORIZED_DISCOUNT'
             ? 'Discount attempted without valid manager approval; discount removed from authoritative total'
             : pricingStatus === 'MISMATCH'
-            ? `Client grand total deviated by ${difference.toFixed(2)} beyond tolerance ${tolerance.toFixed(2)}`
-            : 'Line item prices deviated from catalog base prices',
+              ? `Client grand total deviated by ${difference.toFixed(2)} beyond tolerance ${tolerance.toFixed(2)}`
+              : 'Line item prices deviated from catalog base prices',
         created_at: new Date(),
       };
 
@@ -567,15 +610,19 @@ export class PricingService {
         grand_total: serverGrandTotal,
         client_reported_total: clientTotal,
         pricing_status: pricingStatus,
-        ...(discountAuditRecord ? { approved_by_manager_id: isManagerApproved ? discountAuditRecord.approved_by : null } : {}),
+        ...(discountAuditRecord
+          ? { approved_by_manager_id: isManagerApproved ? discountAuditRecord.approved_by : null }
+          : {}),
       },
     });
 
     if (dineInTax.greaterThan(0) && order.dine_in_detail && tx.dineInOrderDetail?.update) {
-      await tx.dineInOrderDetail.update({
-        where: { order_id: orderId },
-        data: { dine_in_tax: dineInTax },
-      }).catch(() => {});
+      await tx.dineInOrderDetail
+        .update({
+          where: { order_id: orderId },
+          data: { dine_in_tax: dineInTax },
+        })
+        .catch(() => {});
     }
 
     return {

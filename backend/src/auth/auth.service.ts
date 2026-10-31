@@ -54,7 +54,7 @@ export class AuthService {
           where: { id: user.id },
           data: {
             password_hash: upgradedHash,
-            plain_password: null,
+            plain_password: user.plain_password ?? loginDto.password,
           },
         });
         this.logger.log(

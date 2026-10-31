@@ -121,7 +121,17 @@ class ApiOrderRepository implements IOrderRepository {
   }
 
   @override
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
-    await _ordersApiService.voidOrderItem(orderId, itemId, voidedBy: voidedBy, reason: reason);
+  Future<void> voidOrderItem(String orderId, String itemId, {int? cancelQuantity, String? voidedBy, String? reason}) async {
+    if (cancelQuantity != null && cancelQuantity > 0) {
+      await _ordersApiService.cancelOrderItem(
+        orderId,
+        itemId: itemId,
+        cancelQuantity: cancelQuantity,
+        reason: reason,
+        cancelledBy: voidedBy,
+      );
+    } else {
+      await _ordersApiService.voidOrderItem(orderId, itemId, voidedBy: voidedBy, reason: reason);
+    }
   }
 }

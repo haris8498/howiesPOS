@@ -614,19 +614,59 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
   }
 
   @override
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+  Future<void> voidOrderItem(String orderId, String itemId, {int? cancelQuantity, String? voidedBy, String? reason}) async {
     await _db.transaction(() async {
       final now = DateTime.now();
-      await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
-        LocalOrderItemsCompanion(
-          isCancelled: const Value(true),
-          cancelledAt: Value(now),
-          cancelReason: Value(reason),
-          voidedAt: Value(now),
-          voidedBy: Value(voidedBy ?? 'USER'),
-          syncStatus: const Value('pending_update'),
-        ),
-      );
+      final existingItem = await (_db.select(_db.localOrderItems)..where((t) => t.id.equals(itemId))).getSingleOrNull();
+
+      if (existingItem != null && cancelQuantity != null && cancelQuantity > 0 && cancelQuantity < existingItem.quantity) {
+        // Partial cancellation: Reduce existing item's quantity and subtotal
+        final remainingQty = existingItem.quantity - cancelQuantity;
+        final unitPrice = existingItem.unitPrice;
+        final newSubtotal = unitPrice * remainingQty;
+
+        await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+          LocalOrderItemsCompanion(
+            quantity: Value(remainingQty),
+            subtotal: Value(newSubtotal),
+            syncStatus: const Value('pending_update'),
+          ),
+        );
+
+        // Insert separated cancelled item record with audit
+        final cancelledItemId = _uuid.v7();
+        await _db.into(_db.localOrderItems).insert(
+          LocalOrderItemsCompanion(
+            id: Value(cancelledItemId),
+            orderId: Value(orderId),
+            menuItemId: Value(existingItem.menuItemId),
+            itemName: Value(existingItem.itemName),
+            sizeName: Value(existingItem.sizeName),
+            unitPrice: Value(unitPrice),
+            quantity: Value(cancelQuantity),
+            subtotal: Value(unitPrice * cancelQuantity),
+            notes: Value(existingItem.notes),
+            isCancelled: const Value(true),
+            cancelledAt: Value(now),
+            cancelReason: Value(reason),
+            voidedAt: Value(now),
+            voidedBy: Value(voidedBy ?? 'USER'),
+            syncStatus: const Value('pending_update'),
+            clientCreatedAt: Value(now),
+          ),
+        );
+      } else {
+        await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(itemId))).write(
+          LocalOrderItemsCompanion(
+            isCancelled: const Value(true),
+            cancelledAt: Value(now),
+            cancelReason: Value(reason),
+            voidedAt: Value(now),
+            voidedBy: Value(voidedBy ?? 'USER'),
+            syncStatus: const Value('pending_update'),
+          ),
+        );
+      }
 
       final allItems = await _db.ordersDao.getOrderItems(orderId);
       final activeItems = allItems.where((i) => !i.isCancelled && i.voidedAt == null);
@@ -658,6 +698,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
           payload: Value(jsonEncode({
             'order_id': orderId,
             'item_id': itemId,
+            if (cancelQuantity != null && cancelQuantity > 0) 'cancel_quantity': cancelQuantity,
             'voided_by': voidedBy ?? 'USER',
             'reason': reason,
             'voided_at': now.toIso8601String(),

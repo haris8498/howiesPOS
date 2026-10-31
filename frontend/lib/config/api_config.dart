@@ -11,7 +11,9 @@ class ApiConfig {
     if (_definedBaseUrl.isNotEmpty) {
       return _definedBaseUrl;
     }
-    return 'http://213.199.57.65/api';
+    // Online Backend (Commented for testing with local database):
+    // return 'http://213.199.57.65/api';
+    return 'http://localhost:3000/api';
   }
 
   /// The base URL for WebSocket / Socket.IO connections.
@@ -19,7 +21,9 @@ class ApiConfig {
     if (_definedSocketUrl.isNotEmpty) {
       return _definedSocketUrl;
     }
-    return 'http://213.199.57.65';
+    // Online Backend (Commented for testing with local database):
+    // return 'http://213.199.57.65';
+    return 'http://localhost:3000';
   }
 
   /// Default network timeout duration

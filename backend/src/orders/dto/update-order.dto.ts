@@ -116,6 +116,22 @@ export class UpdateOrderDto {
   @IsOptional()
   managerApproval?: any;
 
+  @IsBoolean()
+  @IsOptional()
+  is_cashier_discount?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isCashierDiscount?: boolean;
+
+  @IsString()
+  @IsOptional()
+  cashier_id?: string;
+
+  @IsString()
+  @IsOptional()
+  staff_id?: string;
+
   @IsNumber()
   @Min(0)
   @IsOptional()

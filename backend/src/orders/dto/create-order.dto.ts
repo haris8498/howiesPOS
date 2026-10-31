@@ -264,6 +264,22 @@ export class CreateOrderDto {
   @IsOptional()
   managerApproval?: any;
 
+  @IsBoolean()
+  @IsOptional()
+  is_cashier_discount?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isCashierDiscount?: boolean;
+
+  @IsString()
+  @IsOptional()
+  cashier_id?: string;
+
+  @IsString()
+  @IsOptional()
+  staff_id?: string;
+
   @IsString()
   @IsOptional()
   @MaxLength(20)

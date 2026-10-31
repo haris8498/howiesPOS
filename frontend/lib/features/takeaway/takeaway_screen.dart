@@ -1,12 +1,10 @@
-import 'package:drift/drift.dart' show Value;
 import '../../config/feature_flags.dart';
-import '../../core/database/app_database.dart';
 import '../../core/sync/sync_providers.dart';
-import '../../shared/widgets/refund_order_dialog.dart';
 import '../../domain/models/order_model.dart';
 import '../../services/api/api_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../data/repositories/order_repository_provider.dart';
 import 'package:intl/intl.dart';
 import '../../config/app_colors.dart';
 import '../../data/auth_repository.dart';
@@ -392,12 +390,6 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
         !selectedOrder.isPaid &&
         selectedOrder.status.toLowerCase() != 'completed';
 
-    final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
-    final bool canRefundSelected = selectedOrder != null &&
-        selectedOrder.isPaid &&
-        selectedOrder.status.toLowerCase() != 'cancelled' &&
-        selectedOrder.status.toLowerCase() != 'refunded';
-
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
 
@@ -509,44 +501,31 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                   const SizedBox(height: 10),
 
-                  // Button 4: Refund Order (if paid) OR Full Bill & Pay (Solid Red)
-                  if (canRefundSelected) ...[
-                    _buildTakeawayActionPillButton(
-                      title: 'Refund Order',
-                      subtitle: isOnline ? null : 'Refund requires an internet connection',
-                      icon: Icons.assignment_return_rounded,
-                      color: const Color(0xFFDC2626),
-                      isFilled: true,
-                      isDark: isDark,
-                      isEnabled: isOnline,
-                      onTap: () => _handleRefundTakeawayOrder(context, ref, selectedOrder, takeawayNotifier),
-                    ),
-                  ] else ...[
-                    _buildTakeawayActionPillButton(
-                      title: 'Full Bill & Pay',
-                      icon: Icons.payments_rounded,
-                      color: const Color(0xFFDC2626),
-                      isFilled: true,
-                      isDark: isDark,
-                      isEnabled: canSettleSelected,
-                      onTap: () {
-                        final sel = _getSelectedOrder(takeawayState.orders);
-                        if (sel == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Please select an active takeaway order to pay.')),
-                          );
-                          return;
-                        }
-                        if (sel.isPaid || sel.status.toLowerCase() == 'completed') {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Token "${sel.tokenNumber}" is already paid and completed.')),
-                          );
-                          return;
-                        }
-                        _showTakeawayFullBillDialog(context, ref, sel, takeawayNotifier, isDark);
-                      },
-                    ),
-                  ],
+                  // Button 4: Full Bill & Pay (Solid Red)
+                  _buildTakeawayActionPillButton(
+                    title: 'Full Bill & Pay',
+                    icon: Icons.payments_rounded,
+                    color: const Color(0xFFDC2626),
+                    isFilled: true,
+                    isDark: isDark,
+                    isEnabled: canSettleSelected,
+                    onTap: () {
+                      final sel = _getSelectedOrder(takeawayState.orders);
+                      if (sel == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Please select an active takeaway order to pay.')),
+                        );
+                        return;
+                      }
+                      if (sel.isPaid || sel.status.toLowerCase() == 'completed') {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Token "${sel.tokenNumber}" is already paid and completed.')),
+                        );
+                        return;
+                      }
+                      _showTakeawayFullBillDialog(context, ref, sel, takeawayNotifier, isDark);
+                    },
+                  ),
 
                   const SizedBox(height: 14),
 
@@ -650,8 +629,9 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                 const SizedBox(height: 16),
 
-                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner
+                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner (Disabled per user preference)
                 () {
+                  return const SizedBox.shrink();
                   final pricingNotifs = ref.watch(pricingReconciliationNotificationProvider);
                   if (pricingNotifs.isEmpty) return const SizedBox.shrink();
                   return Column(
@@ -1390,10 +1370,6 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
     final bool canEditSelected = !isLockedFromEdit;
     final bool canSettleSelected = !isCompletedOrPaid;
-    final isOnline = ref.watch(connectivityNotifierProvider).isOnline;
-    final bool canRefundOrder = order.isPaid &&
-        order.status.toLowerCase() != 'cancelled' &&
-        order.status.toLowerCase() != 'refunded';
 
     return Padding(
       padding: EdgeInsets.fromLTRB(18.0, 18.0, 18.0, isCashier ? 0.0 : 18.0),
@@ -1473,37 +1449,24 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
 
                           const SizedBox(height: 10),
 
-                          // Button 4: Refund Order (if paid) OR Full Bill & Pay (Solid Red)
-                          if (canRefundOrder) ...[
-                            _buildTakeawayActionPillButton(
-                              title: 'Refund Order',
-                              subtitle: isOnline ? null : 'Refund requires an internet connection',
-                              icon: Icons.assignment_return_rounded,
-                              color: const Color(0xFFDC2626),
-                              isFilled: true,
-                              isDark: isDark,
-                              isEnabled: isOnline,
-                              onTap: () => _handleRefundTakeawayOrder(context, ref, order, takeawayNotifier),
-                            ),
-                          ] else ...[
-                            _buildTakeawayActionPillButton(
-                              title: 'Full Bill & Pay',
-                              icon: Icons.payments_rounded,
-                              color: const Color(0xFFDC2626),
-                              isFilled: true,
-                              isDark: isDark,
-                              isEnabled: canSettleSelected,
-                              onTap: () {
-                                if (order.isPaid || order.status.toLowerCase() == 'completed') {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Token "${order.tokenNumber}" is already paid and completed.')),
-                                  );
-                                  return;
-                                }
-                                _showTakeawayFullBillDialog(context, ref, order, takeawayNotifier, isDark);
-                              },
-                            ),
-                          ],
+                          // Button 4: Full Bill & Pay (Solid Red)
+                          _buildTakeawayActionPillButton(
+                            title: 'Full Bill & Pay',
+                            icon: Icons.payments_rounded,
+                            color: const Color(0xFFDC2626),
+                            isFilled: true,
+                            isDark: isDark,
+                            isEnabled: canSettleSelected,
+                            onTap: () {
+                              if (order.isPaid || order.status.toLowerCase() == 'completed') {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Token "${order.tokenNumber}" is already paid and completed.')),
+                                );
+                                return;
+                              }
+                              _showTakeawayFullBillDialog(context, ref, order, takeawayNotifier, isDark);
+                            },
+                          ),
 
                           const SizedBox(height: 16),
 
@@ -1857,29 +1820,6 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                     ),
                                   ),
-                                ] else if (canRefundOrder) ...[
-                                  const SizedBox(height: 10),
-                                  Tooltip(
-                                    message: isOnline ? '' : 'Refund requires an internet connection',
-                                    child: ElevatedButton.icon(
-                                      onPressed: isOnline
-                                          ? () => _handleRefundTakeawayOrder(context, ref, order, takeawayNotifier)
-                                          : null,
-                                      icon: const Icon(Icons.assignment_return_rounded, size: 16),
-                                      label: Text(
-                                        isOnline ? 'Refund Order' : 'Refund requires an internet connection',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                      ),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFFDC2626),
-                                        foregroundColor: Colors.white,
-                                        disabledBackgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                        disabledForegroundColor: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
-                                        padding: const EdgeInsets.symmetric(vertical: 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                      ),
-                                    ),
-                                  ),
                                 ],
                               ],
                             ),
@@ -1921,54 +1861,6 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
     );
   }
 
-  // Handle Takeaway Order Refund (Supervisor PIN protected)
-  Future<void> _handleRefundTakeawayOrder(
-    BuildContext context,
-    WidgetRef ref,
-    TakeawayOrder order,
-    TakeawayNotifier takeawayNotifier,
-  ) async {
-    final isOnline = ref.read(connectivityNotifierProvider).isOnline;
-    if (!isOnline) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Refund requires an internet connection'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    final ordersApiService = ref.read(ordersApiServiceProvider);
-    final result = await RefundOrderDialog.show(
-      context,
-      orderId: order.id,
-      orderNumber: order.tokenNumber.isNotEmpty ? order.tokenNumber : order.id,
-      grandTotal: order.grandTotal,
-      ordersApiService: ordersApiService,
-    );
-
-    if (result != null && context.mounted) {
-      if (FeatureFlags.offlineFirstEnabled) {
-        try {
-          final db = ref.read(appDatabaseProvider);
-          await (db.update(db.localOrders)..where((t) => t.id.equals(order.id)))
-              .write(const LocalOrdersCompanion(status: Value('cancelled')));
-        } catch (_) {}
-      }
-
-      await takeawayNotifier.loadTakeawayOrders();
-
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Order ${order.tokenNumber} has been successfully refunded.'),
-            backgroundColor: const Color(0xFF16A34A),
-          ),
-        );
-      }
-    }
-  }
 
   // Create Takeaway Order Dialog with Full Interactive Menu Selection (Same as Tables POS)
   void _openCreateTakeawayOrderDialog(
@@ -5472,6 +5364,18 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
         final cancelQty = _cancelQuantities[itemId] ?? 0;
 
         if (cancelQty > 0 && itemId.isNotEmpty) {
+          if (FeatureFlags.offlineFirstEnabled) {
+            try {
+              final orderRepo = widget.ref.read(orderRepositoryProvider);
+              await orderRepo.voidOrderItem(
+                orderId,
+                itemId,
+                cancelQuantity: cancelQty,
+                voidedBy: cashierName,
+                reason: effectiveReason,
+              );
+            } catch (_) {}
+          }
           await ordersApi.cancelOrderItem(
             orderId,
             itemId: itemId,
@@ -5480,6 +5384,9 @@ class _CancelTakeawayItemModalState extends State<_CancelTakeawayItemModal> {
             cancelledBy: cashierName,
           );
         }
+      }
+      if (FeatureFlags.offlineFirstEnabled) {
+        widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
       }
 
       // If all active items are cancelled, mark the entire takeaway order as cancelled

@@ -19,6 +19,7 @@ export interface SafeUser {
   username: string;
   role: string;
   is_default: boolean;
+  plain_password?: string | null;
   last_updated: Date;
   updated_by: string;
   staff_member?: {
@@ -47,6 +48,7 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
+        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -70,6 +72,7 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
+        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -105,7 +108,7 @@ export class UsersService {
       data: {
         username: dto.username.trim(),
         password_hash: passwordHash,
-        plain_password: null,
+        plain_password: dto.password ? dto.password.trim() : null,
         role: dto.role,
         is_default: dto.is_default ?? false,
         updated_by: actor.username,
@@ -115,6 +118,7 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
+        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -202,7 +206,12 @@ export class UsersService {
         data: {
           username: dto.username ? dto.username.trim() : existing.username,
           role: dto.role ?? existing.role,
-          ...(passwordHash ? { password_hash: passwordHash, plain_password: null } : {}),
+          ...(passwordHash
+            ? {
+                password_hash: passwordHash,
+                plain_password: dto.password ? dto.password.trim() : existing.plain_password,
+              }
+            : {}),
           updated_by: actor.username,
         },
         select: {
@@ -210,6 +219,7 @@ export class UsersService {
           username: true,
           role: true,
           is_default: true,
+          plain_password: true,
           last_updated: true,
           updated_by: true,
           staff_member: {
@@ -273,7 +283,7 @@ export class UsersService {
       where: { id: existing.id },
       data: {
         password_hash: passwordHash,
-        plain_password: null,
+        plain_password: newPassword.trim(),
         updated_by: actor.username,
       },
     });

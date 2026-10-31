@@ -5,7 +5,6 @@ import '../../config/app_colors.dart';
 import '../../core/widgets/sync_status_indicator_widget.dart';
 import '../../data/auth_repository.dart';
 import '../../data/network_speed_provider.dart';
-import '../../data/online_orders_repository.dart';
 import '../../data/role_rights_repository.dart';
 import '../../domain/models/user_role.dart';
 import '../../features/updater/auto_update_controller.dart';
@@ -21,7 +20,6 @@ class CashierTopNavigationBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final pendingOnlineOrders = ref.watch(onlineOrdersProvider).pendingCount;
     final roleRights = ref.watch(roleRightsProvider);
     final authState = ref.watch(authProvider);
     final userRole = authState.isAuthenticated ? authState.currentUser.role : UserRole.cashier;
@@ -53,14 +51,6 @@ class CashierTopNavigationBar extends ConsumerWidget {
           title: 'Delivery Tracking',
           route: '/sales/delivery',
           icon: Icons.two_wheeler_rounded,
-        ),
-      if (can('online_orders', moduleName: 'Online Orders', defaultIfMissing: true))
-        _TopNavItem(
-          title: 'Online Orders',
-          route: '/sales/online-orders',
-          icon: Icons.cloud_download_rounded,
-          badgeCount: pendingOnlineOrders,
-          isComingSoon: true,
         ),
       if (can('daily_calculation', moduleName: 'Daily Calculation', defaultIfMissing: true))
         _TopNavItem(

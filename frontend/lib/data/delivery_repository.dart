@@ -75,7 +75,11 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
 
         for (final lo in localOrders) {
           final items = await db.ordersDao.getOrderItems(lo.id);
-          final outbox = await (db.select(db.syncOutbox)..where((t) => t.entityId.equals(lo.id))).getSingleOrNull();
+          final outbox = await (db.select(db.syncOutbox)
+                ..where((t) => t.entityId.equals(lo.id))
+                ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+                ..limit(1))
+              .getSingleOrNull();
 
           String custName = 'Customer';
           String custPhone = 'N/A';

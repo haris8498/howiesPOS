@@ -45,6 +45,13 @@ class PricingReconciliationNotifier extends StateNotifier<List<PricingReconcilia
     required double difference,
     String? message,
   }) {
+    // Disabled per user preference: completely hide pricing reconciliation warning banners
+    return;
+    // Do not show warning banner if server total is 0 (order cancelled or voided)
+    if (serverTotal <= 0.0) {
+      return;
+    }
+
     final msg = message ??
         (pricingStatus == 'UNAUTHORIZED_DISCOUNT'
             ? 'Order #$orderNumber discount was unapproved and removed by server: PKR ${clientTotal.toStringAsFixed(0)} -> PKR ${serverTotal.toStringAsFixed(0)}'
@@ -102,8 +109,8 @@ class PricingReconciliationEventBus {
   static Stream<PricingReconciliationNotification> get stream => _controller.stream;
 
   static void emit(PricingReconciliationNotification notif) {
-    if (!_controller.isClosed) {
-      _controller.add(notif);
-    }
+    // Disabled per user requirement: never emit reconciliation warning banners
+    return;
   }
 }
+

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/app_colors.dart';
 import '../../data/auth_repository.dart';
 import '../../domain/models/user_role.dart';
@@ -25,21 +26,41 @@ class _StaffUsersScreenState extends ConsumerState<StaffUsersScreen> {
       return user.password;
     }
     final key = user.username.toLowerCase();
-    if (_customPlainPasswords.containsKey(key)) {
+    if (_customPlainPasswords.containsKey(key) && _customPlainPasswords[key]!.isNotEmpty) {
       return _customPlainPasswords[key]!;
     }
-    if (key == 'noman') return 'Noman123';
-    if (user.role == UserRole.owner) return 'owner123';
-    if (user.role == UserRole.manager) return 'manager123';
-    return 'cashier123';
+    if (user.isDefault) {
+      if (key == 'noman') return 'Noman123';
+      if (user.role == UserRole.owner) return 'owner123';
+      if (user.role == UserRole.manager) return 'manager123';
+      return 'cashier123';
+    }
+    return '';
   }
 
   @override
   void initState() {
     super.initState();
+    _loadCustomPasswords();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authProvider.notifier).loadUsersFromBackend();
     });
+  }
+
+  Future<void> _loadCustomPasswords() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys()) {
+        if (key.startsWith('auth_plain_pwd_')) {
+          final uname = key.substring('auth_plain_pwd_'.length);
+          final pwd = prefs.getString(key);
+          if (pwd != null && pwd.isNotEmpty) {
+            _customPlainPasswords[uname.toLowerCase()] = pwd;
+          }
+        }
+      }
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
   @override
@@ -1372,6 +1393,10 @@ class _StaffUsersScreenState extends ConsumerState<StaffUsersScreen> {
             ),
             onPressed: () async {
               await authNotifier.resetUserPassword(user.username);
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('auth_plain_pwd_${user.username.toLowerCase()}', defaultPwd);
+              } catch (_) {}
               if (context.mounted) {
                 setState(() {
                   _customPlainPasswords[user.username.toLowerCase()] = defaultPwd;

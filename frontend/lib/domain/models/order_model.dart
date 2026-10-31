@@ -465,6 +465,7 @@ class OrderModel {
       'subtotal': subtotal,
       'discount_percentage': discountPercentage,
       'discount_amount': discountAmount,
+      if (discountAmount > 0 || discountPercentage > 0) 'is_cashier_discount': true,
       'tax_amount': taxAmount,
       'grand_total': grandTotal,
       if (approvedByManagerId != null) 'approved_by_manager_id': approvedByManagerId,

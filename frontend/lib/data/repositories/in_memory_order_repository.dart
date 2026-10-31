@@ -1,3 +1,4 @@
+import 'package:uuid/uuid.dart';
 import '../../domain/models/order_model.dart';
 import '../../domain/repositories/order_repository.dart';
 
@@ -78,22 +79,37 @@ class InMemoryOrderRepository implements IOrderRepository {
   }
 
   @override
-  Future<void> voidOrderItem(String orderId, String itemId, {String? voidedBy, String? reason}) async {
+  Future<void> voidOrderItem(String orderId, String itemId, {int? cancelQuantity, String? voidedBy, String? reason}) async {
     final index = _orders.indexWhere((o) => o.id == orderId);
     if (index >= 0) {
       final order = _orders[index];
-      final updatedItems = order.items.map((i) {
+      final List<OrderItem> updatedItems = [];
+      for (final i in order.items) {
         if (i.id == itemId) {
-          return i.copyWith(
-            isCancelled: true,
-            cancelledAt: DateTime.now(),
-            cancelReason: reason,
-            voidedAt: DateTime.now(),
-            voidedBy: voidedBy,
-          );
+          if (cancelQuantity != null && cancelQuantity > 0 && cancelQuantity < i.quantity) {
+            updatedItems.add(i.copyWith(quantity: i.quantity - cancelQuantity));
+            updatedItems.add(i.copyWith(
+              id: const Uuid().v7(),
+              quantity: cancelQuantity,
+              isCancelled: true,
+              cancelledAt: DateTime.now(),
+              cancelReason: reason,
+              voidedAt: DateTime.now(),
+              voidedBy: voidedBy,
+            ));
+          } else {
+            updatedItems.add(i.copyWith(
+              isCancelled: true,
+              cancelledAt: DateTime.now(),
+              cancelReason: reason,
+              voidedAt: DateTime.now(),
+              voidedBy: voidedBy,
+            ));
+          }
+        } else {
+          updatedItems.add(i);
         }
-        return i;
-      }).toList();
+      }
       _orders[index] = order.copyWith(items: updatedItems);
     }
   }

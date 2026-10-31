@@ -108,14 +108,12 @@ describe('UsersService', () => {
     expect(users).toHaveLength(1);
     expect(users[0].username).toBe('storemanager');
     expect((users[0] as unknown as Record<string, unknown>).password_hash).toBeUndefined();
-    expect((users[0] as unknown as Record<string, unknown>).plain_password).toBeUndefined();
   });
 
   it('should get user by id', async () => {
     const user = await service.getUserById('u-1');
     expect(user.id).toBe('u-1');
     expect((user as unknown as Record<string, unknown>).password_hash).toBeUndefined();
-    expect((user as unknown as Record<string, unknown>).plain_password).toBeUndefined();
   });
 
   it('should throw NotFoundException for invalid user id', async () => {
@@ -135,7 +133,7 @@ describe('UsersService', () => {
     expect(created.username).toBe('newcashier');
     expect(created.role).toBe('cashier');
     expect((created as unknown as Record<string, unknown>).password_hash).toBeUndefined();
-    expect((created as unknown as Record<string, unknown>).plain_password).toBeUndefined();
+    expect(created.plain_password).toBe('password123');
   }, 15000);
 
   it('should throw ConflictException if username already exists', async () => {

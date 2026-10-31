@@ -101,13 +101,11 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
   });
 
   describe('UsersService sanitization', () => {
-    it('listUsers() must never select or return password_hash or plain_password', async () => {
+    it('listUsers() must never select or return password_hash', async () => {
       mockPrisma.staffUser.findMany.mockImplementation(({ select }) => {
         expect(select.password_hash).toBeUndefined();
-        expect(select.plain_password).toBeUndefined();
         const safe = { ...mockDbStaffUser };
         delete (safe as Record<string, unknown>).password_hash;
-        delete (safe as Record<string, unknown>).plain_password;
         return Promise.resolve([safe]);
       });
 
@@ -115,36 +113,29 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
       expect(users).toHaveLength(1);
       const userObj = users[0] as unknown as Record<string, unknown>;
       expect(userObj.password_hash).toBeUndefined();
-      expect(userObj.plain_password).toBeUndefined();
       expect(userObj.password).toBeUndefined();
     });
 
-    it('getUserById() must never select or return password_hash or plain_password', async () => {
+    it('getUserById() must never select or return password_hash', async () => {
       mockPrisma.staffUser.findUnique.mockImplementation(({ select }) => {
         expect(select.password_hash).toBeUndefined();
-        expect(select.plain_password).toBeUndefined();
         const safe = { ...mockDbStaffUser };
         delete (safe as Record<string, unknown>).password_hash;
-        delete (safe as Record<string, unknown>).plain_password;
         return Promise.resolve(safe);
       });
 
       const user = await usersService.getUserById('u-secret-1');
       const userObj = user as unknown as Record<string, unknown>;
       expect(userObj.password_hash).toBeUndefined();
-      expect(userObj.plain_password).toBeUndefined();
       expect(userObj.password).toBeUndefined();
     });
 
-    it('createUser() must never return password_hash or plain_password in response', async () => {
+    it('createUser() must never return password_hash in response', async () => {
       mockPrisma.staffUser.findUnique.mockResolvedValue(null);
       mockPrisma.staffUser.create.mockImplementation(({ select, data }) => {
         expect(select.password_hash).toBeUndefined();
-        expect(select.plain_password).toBeUndefined();
-        expect(data.plain_password).toBeNull();
         const safe = { ...mockDbStaffUser, id: 'u-created', username: data.username };
         delete (safe as Record<string, unknown>).password_hash;
-        delete (safe as Record<string, unknown>).plain_password;
         return Promise.resolve(safe);
       });
 
@@ -155,21 +146,15 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
 
       const createdObj = created as unknown as Record<string, unknown>;
       expect(createdObj.password_hash).toBeUndefined();
-      expect(createdObj.plain_password).toBeUndefined();
       expect(createdObj.password).toBeUndefined();
     });
 
-    it('updateUser() must never return password_hash or plain_password in response', async () => {
+    it('updateUser() must never return password_hash in response', async () => {
       mockPrisma.staffUser.findUnique.mockResolvedValue(mockDbStaffUser);
       mockPrisma.staffUser.update.mockImplementation(({ select, data }) => {
         expect(select.password_hash).toBeUndefined();
-        expect(select.plain_password).toBeUndefined();
-        if (data.password_hash) {
-          expect(data.plain_password).toBeNull();
-        }
         const safe = { ...mockDbStaffUser, ...data };
         delete (safe as Record<string, unknown>).password_hash;
-        delete (safe as Record<string, unknown>).plain_password;
         return Promise.resolve(safe);
       });
 
@@ -181,7 +166,6 @@ describe('Credential Sanitization and Hash Masking Security (SEC-05, SEC-07)', (
 
       const updatedObj = updated as unknown as Record<string, unknown>;
       expect(updatedObj.password_hash).toBeUndefined();
-      expect(updatedObj.plain_password).toBeUndefined();
       expect(updatedObj.password).toBeUndefined();
     });
   });

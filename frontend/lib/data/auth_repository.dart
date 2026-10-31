@@ -1,6 +1,7 @@
 import '../config/feature_flags.dart';
 import '../core/sync/sync_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/network/api_client.dart';
 import '../core/network/realtime_socket_service.dart';
 import '../core/security/offline_auth_service.dart';
@@ -127,9 +128,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     IAuthRepository? fallbackRepository,
     PermissionChecker? permissionChecker,
     OfflineAuthService? offlineAuthService,
-    Ref? ref,
-  })  : _ref = ref,
-        _authApiService = authApiService ?? AuthApiService(),
+    this._ref,
+  })  : _authApiService = authApiService ?? AuthApiService(),
         _usersApiService = usersApiService ?? UsersApiService(),
         _staffApiService = staffApiService ?? StaffApiService(),
         _fallbackRepository = fallbackRepository ?? InMemoryAuthRepository(),
@@ -201,6 +201,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final users = await _usersApiService.listUsers();
       if (!mounted) return;
       if (users.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
         final list = users.map((u) {
           final roleStr = u['role']?.toString().toLowerCase() ?? 'cashier';
           UserRole parsedRole = UserRole.cashier;
@@ -214,12 +215,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
           final isDefault = u['is_default'] == true;
 
           final rawPwd = u['plain_password']?.toString() ?? u['password']?.toString() ?? '';
+          final cachedLocalPwd = prefs.getString('auth_plain_pwd_${username.toLowerCase()}');
           final defaultPwd = username.toLowerCase() == 'noman'
               ? 'Noman123'
               : (parsedRole == UserRole.owner
                   ? 'owner123'
                   : (parsedRole == UserRole.manager ? 'manager123' : 'cashier123'));
-          final displayPassword = rawPwd.isNotEmpty ? rawPwd : (isDefault ? defaultPwd : '');
+          final displayPassword = rawPwd.isNotEmpty
+              ? rawPwd
+              : ((cachedLocalPwd != null && cachedLocalPwd.isNotEmpty)
+                  ? cachedLocalPwd
+                  : (isDefault ? defaultPwd : ''));
 
           return UserCredential(
             id: u['id']?.toString(),
@@ -580,6 +586,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<bool> updateUserPassword(String username, String newPassword) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_plain_pwd_${username.toLowerCase()}', newPassword);
+    } catch (_) {}
+
     final target = state.staffUsers.firstWhere(
       (u) => u.username.toLowerCase() == username.toLowerCase(),
       orElse: () => UserCredential(
@@ -612,6 +623,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     String? email,
     String? fullName,
   }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_plain_pwd_${username.toLowerCase()}', password);
+    } catch (_) {}
+
     try {
       final user = await _usersApiService.createUser(
         username: username,
@@ -659,6 +675,25 @@ class AuthNotifier extends StateNotifier<AuthState> {
     required UserRole newRole,
     String? newPassword,
   }) async {
+    if (newPassword != null && newPassword.isNotEmpty) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_plain_pwd_${newUsername.toLowerCase()}', newPassword);
+        if (oldUsername.toLowerCase() != newUsername.toLowerCase()) {
+          await prefs.remove('auth_plain_pwd_${oldUsername.toLowerCase()}');
+        }
+      } catch (_) {}
+    } else if (oldUsername.toLowerCase() != newUsername.toLowerCase()) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final existingPwd = prefs.getString('auth_plain_pwd_${oldUsername.toLowerCase()}');
+        if (existingPwd != null && existingPwd.isNotEmpty) {
+          await prefs.setString('auth_plain_pwd_${newUsername.toLowerCase()}', existingPwd);
+          await prefs.remove('auth_plain_pwd_${oldUsername.toLowerCase()}');
+        }
+      } catch (_) {}
+    }
+
     final effectiveId = id ??
         state.staffUsers
             .firstWhere(
@@ -735,6 +770,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<bool> deleteStaffUser(String username) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_plain_pwd_${username.toLowerCase()}');
+    } catch (_) {}
+
     final target = state.staffUsers.firstWhere(
       (u) => u.username.toLowerCase() == username.toLowerCase(),
       orElse: () => UserCredential(

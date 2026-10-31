@@ -573,6 +573,17 @@ export class OrdersService {
           deviceId: (createdOrder as any).device_id,
           rejectOnlineMismatch: pricingSource === 'ONLINE',
           deliveryFee: isOnlineType ? (dto.delivery_fee ?? 0.0) : 0.0,
+          isCashierDiscount: Boolean(
+            dto.is_cashier_discount ||
+            (dto as any).isCashierDiscount ||
+            (options as any)?.isCashierDiscount
+          ),
+          cashierId:
+            (dto as any).cashier_id ||
+            (dto as any).cashierId ||
+            (dto as any).staff_id ||
+            (dto as any).staffId,
+          taxAmount: taxAmountRaw,
         });
       }
 

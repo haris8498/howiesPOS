@@ -231,7 +231,7 @@ export class StaffService {
           data: {
             username: dto.username!,
             password_hash: passwordHash,
-            plain_password: null,
+            plain_password: dto.password ? dto.password.trim() : null,
             role: dto.role,
             is_default: false,
             updated_by: actor.username,

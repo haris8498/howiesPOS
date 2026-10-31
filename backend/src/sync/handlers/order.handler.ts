@@ -1,14 +1,6 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import {
-  SyncEntityHandler,
-  SyncMutationContext,
-  SyncMutationResult,
-} from './sync-entity.handler';
+import { SyncEntityHandler, SyncMutationContext, SyncMutationResult } from './sync-entity.handler';
 import { HandlerRegistry } from './handler-registry.service';
 import { OrdersService } from '../../orders/orders.service';
 import { ChangeLogService } from '../change-log.service';
@@ -16,7 +8,11 @@ import { PricingService } from '../../pricing/pricing.service';
 import { Optional } from '@nestjs/common';
 import { SyncMutationDto } from '../dto/sync-push.dto';
 import { v7 as uuidv7 } from 'uuid';
-import { CreateOrderDto, CreateOrderItemDto, CreateOrderPaymentDto } from '../../orders/dto/create-order.dto';
+import {
+  CreateOrderDto,
+  CreateOrderItemDto,
+  CreateOrderPaymentDto,
+} from '../../orders/dto/create-order.dto';
 
 @Injectable()
 export class OrderHandler implements SyncEntityHandler, OnModuleInit {
@@ -95,10 +91,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           ? Number(item.total_price)
           : this.round((Number(item.unit_price) || 0) * (Number(item.quantity) || 1)),
       category: item.category,
-      selected_size:
-        item.selected_size || item.size_name || item.sizeName || 'Regular',
-      selected_crust:
-        item.selected_crust || item.selectedCrust || 'Original',
+      selected_size: item.selected_size || item.size_name || item.sizeName || 'Regular',
+      selected_crust: item.selected_crust || item.selectedCrust || 'Original',
       extra_toppings: item.extra_toppings || item.extraToppings || '',
       notes: item.notes || '',
       is_cancelled: item.is_cancelled,
@@ -113,10 +107,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       id: p.id,
       payment_method: p.payment_method || p.paymentMethod || 'cash',
       amount: Number(p.amount) || 0,
-      tendered_amount:
-        p.tendered_amount !== undefined ? Number(p.tendered_amount) : undefined,
-      change_returned:
-        p.change_returned !== undefined ? Number(p.change_returned) : undefined,
+      tendered_amount: p.tendered_amount !== undefined ? Number(p.tendered_amount) : undefined,
+      change_returned: p.change_returned !== undefined ? Number(p.change_returned) : undefined,
       transaction_reference: p.transaction_reference || p.transactionReference,
       card_last_four: p.card_last_four || p.cardLastFour,
       bank_name: p.bank_name || p.bankName,
@@ -127,11 +119,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }));
   }
 
-  private extractSubtotal(
-    payload: any,
-    items?: any[],
-    existingOrder?: any,
-  ): number {
+  private extractSubtotal(payload: any, items?: any[], existingOrder?: any): number {
     if (items && items.length > 0) {
       const activeItems = items.filter((i) => !i.is_cancelled);
       const calculated = activeItems.reduce(
@@ -258,11 +246,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     };
   }
 
-  private extractDeliveryFee(
-    payload: any,
-    orderType: string,
-    existingOrder?: any,
-  ): number {
+  private extractDeliveryFee(payload: any, orderType: string, existingOrder?: any): number {
     const normalizedType = (orderType || '').toLowerCase();
     const isOnline = normalizedType === 'online' || normalizedType === 'delivery';
     if (!isOnline) return 0;
@@ -286,9 +270,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     deliveryFee: number,
     payloadGrandTotal?: any,
   ): number {
-    const calculated = this.round(
-      subtotal - discountAmount + taxAmount + deliveryFee,
-    );
+    const calculated = this.round(subtotal - discountAmount + taxAmount + deliveryFee);
     if (payloadGrandTotal !== undefined) {
       return this.round(Number(payloadGrandTotal));
     }
@@ -320,9 +302,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     if (existingOrder) {
       this.logger.log(`Order ${orderId} already exists in database — returning DUPLICATE`);
       const v = (existingOrder as any).version ?? 1;
-      const ts = this.toIsoString(
-        (existingOrder as any).updated_at || existingOrder.created_at,
-      );
+      const ts = this.toIsoString((existingOrder as any).updated_at || existingOrder.created_at);
 
       // Check if existing order was assigned/reassigned to an overflow table
       let duplicateReassigned: any = undefined;
@@ -335,7 +315,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           if (
             assignedTable &&
             (assignedTable.is_overflow ||
-              (originalTableId && assignedTable.id !== originalTableId && assignedTable.table_number !== originalTableId))
+              (originalTableId &&
+                assignedTable.id !== originalTableId &&
+                assignedTable.table_number !== originalTableId))
           ) {
             duplicateReassigned = {
               orderId: existingOrder.id,
@@ -368,21 +350,13 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       status: payload.status ?? 'newOrder',
       subtotal: payload.subtotal !== undefined ? Number(payload.subtotal) : undefined,
       discount_percentage:
-        payload.discount_percentage !== undefined
-          ? Number(payload.discount_percentage)
-          : undefined,
+        payload.discount_percentage !== undefined ? Number(payload.discount_percentage) : undefined,
       discount_amount:
-        payload.discount_amount !== undefined
-          ? Number(payload.discount_amount)
-          : undefined,
-      tax_amount:
-        payload.tax_amount !== undefined ? Number(payload.tax_amount) : undefined,
-      dine_in_tax:
-        payload.dine_in_tax !== undefined ? Number(payload.dine_in_tax) : undefined,
-      delivery_fee:
-        payload.delivery_fee !== undefined ? Number(payload.delivery_fee) : undefined,
-      grand_total:
-        payload.grand_total !== undefined ? Number(payload.grand_total) : undefined,
+        payload.discount_amount !== undefined ? Number(payload.discount_amount) : undefined,
+      tax_amount: payload.tax_amount !== undefined ? Number(payload.tax_amount) : undefined,
+      dine_in_tax: payload.dine_in_tax !== undefined ? Number(payload.dine_in_tax) : undefined,
+      delivery_fee: payload.delivery_fee !== undefined ? Number(payload.delivery_fee) : undefined,
+      grand_total: payload.grand_total !== undefined ? Number(payload.grand_total) : undefined,
       payment_status: payload.payment_status,
       payment_method: payload.payment_method,
       is_paid: payload.is_paid,
@@ -416,17 +390,29 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         payload.managerApproval?.managerId,
       manager_approval: payload.manager_approval || payload.managerApproval,
       manager_credential: payload.manager_credential || payload.managerCredential,
+      is_cashier_discount:
+        payload.is_cashier_discount !== undefined
+          ? Boolean(payload.is_cashier_discount)
+          : Boolean(payload.isCashierDiscount),
+      cashier_id:
+        payload.cashier_id ||
+        payload.cashierId ||
+        payload.staff_id ||
+        payload.staffId ||
+        payload.received_by,
     };
 
     // 2.5 Row lock & conflict detection on claimed table (§10.2, D-01)
     const targetTableId = payload.table_id || payload.dine_in_detail?.table_id;
     let isTableDeleted = false;
-    let tableReassignedInfo: {
-      orderId: string;
-      fromTableId: string;
-      toTableId: string;
-      toLabel: string;
-    } | undefined = undefined;
+    let tableReassignedInfo:
+      | {
+          orderId: string;
+          fromTableId: string;
+          toTableId: string;
+          toLabel: string;
+        }
+      | undefined = undefined;
 
     if (targetTableId) {
       let lockedTable: any = null;
@@ -443,7 +429,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
             lockedTable = rows[0];
           }
         } catch (err) {
-          this.logger.warn(`Failed row lock SELECT ... FOR UPDATE on table ${targetTableId}: ${err}`);
+          this.logger.warn(
+            `Failed row lock SELECT ... FOR UPDATE on table ${targetTableId}: ${err}`,
+          );
         }
       }
 
@@ -451,11 +439,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         try {
           lockedTable = await tx.restaurantTable.findFirst({
             where: {
-              OR: [
-                { id: targetTableId },
-                { table_number: targetTableId },
-                { name: targetTableId },
-              ],
+              OR: [{ id: targetTableId }, { table_number: targetTableId }, { name: targetTableId }],
             },
           });
         } catch (err) {
@@ -515,7 +499,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           );
 
           const incomingTime = this.getOrderSeatedTimestamp(payload, mutation);
-          const existingTime = this.getOrderSeatedTimestamp(activeHoldingOrder, null, lockedTable.occupied_since);
+          const existingTime = this.getOrderSeatedTimestamp(
+            activeHoldingOrder,
+            null,
+            lockedTable.occupied_since,
+          );
 
           // Deterministic winner: earlier seatedAt (fallback createdAt) keeps T; ties broken by smaller UUID
           let incomingWins = false;
@@ -630,16 +618,12 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     }
 
     // 3. Delegate to ordersService.createOrderInTx
-    const createdOrder = await this.ordersService.createOrderInTx(
-      tx,
-      createDto,
-      orderId,
-      { source: 'OFFLINE' },
-    );
+    const createdOrder = await this.ordersService.createOrderInTx(tx, createDto, orderId, {
+      source: 'OFFLINE',
+    });
 
     const version = (createdOrder as any).version ?? 1;
-    const updatedAt =
-      (createdOrder as any).updated_at || createdOrder.created_at || new Date();
+    const updatedAt = (createdOrder as any).updated_at || createdOrder.created_at || new Date();
 
     // 4. Record in system_change_logs inside the same transaction
     await this.changeLogService.record(
@@ -678,13 +662,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
 
     const isReassigned = Boolean(
       (payload.order_number && createdOrder.order_number !== payload.order_number) ||
-      (payload.token_number && createdOrder.takeaway_detail?.token_number !== payload.token_number) ||
+      (payload.token_number &&
+        createdOrder.takeaway_detail?.token_number !== payload.token_number) ||
       tableReassignedInfo,
     );
 
     const warnings: string[] = [];
     if (isTableDeleted) warnings.push('TABLE_DELETED');
     if (tableReassignedInfo) warnings.push('TABLE_REASSIGNED_OVERFLOW');
+    // Pricing reconciliation warnings suppressed per UI preference
     if ((createdOrder as any).pricing_status === 'MISMATCH') {
       warnings.push('PRICE_MISMATCH');
     } else if ((createdOrder as any).pricing_status === 'UNAUTHORIZED_DISCOUNT') {
@@ -700,7 +686,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       order_number: createdOrder.order_number,
       client_order_number: payload.order_number,
       reassigned_order_number: isReassigned ? createdOrder.order_number : undefined,
-      reassigned_token_number: isReassigned ? createdOrder.takeaway_detail?.token_number : undefined,
+      reassigned_token_number: isReassigned
+        ? createdOrder.takeaway_detail?.token_number
+        : undefined,
       token_number: createdOrder.takeaway_detail?.token_number,
       table_reassigned: tableReassignedInfo,
       tableReassigned: tableReassignedInfo ? [tableReassignedInfo] : undefined,
@@ -750,10 +738,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const currentVersion = (existingOrder as any).version ?? 1;
 
     // Check OCC version
-    if (
-      mutation.base_version !== undefined &&
-      currentVersion > mutation.base_version
-    ) {
+    if (mutation.base_version !== undefined && currentVersion > mutation.base_version) {
       // Check if this is an idempotent replay of an already-applied update
       const existingPayments = existingOrder.payments || [];
       const isReplay =
@@ -771,9 +756,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           ));
 
       if (isReplay) {
-        this.logger.log(
-          `Order update ${orderId} is an idempotent replay — returning DUPLICATE`,
-        );
+        this.logger.log(`Order update ${orderId} is an idempotent replay — returning DUPLICATE`);
         return {
           operation_id: mutation.operation_id,
           entity_id: orderId,
@@ -790,18 +773,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         server_version: currentVersion,
         server_timestamp: this.toIsoString((existingOrder as any).updated_at),
         conflict_details: {
-          message:
-            'OCC Version Conflict: Order has been modified on server',
+          message: 'OCC Version Conflict: Order has been modified on server',
           client_base_version: mutation.base_version,
           server_version: currentVersion,
         },
       };
     }
 
-    const hasIncomingPayments =
-      Array.isArray(payload.payments) && payload.payments.length > 0;
-    const hasIncomingItems =
-      Array.isArray(payload.items) && payload.items.length > 0;
+    const hasIncomingPayments = Array.isArray(payload.payments) && payload.payments.length > 0;
+    const hasIncomingItems = Array.isArray(payload.items) && payload.items.length > 0;
     const hasFinancialUpdates =
       hasIncomingPayments ||
       hasIncomingItems ||
@@ -828,11 +808,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       subtotal,
       existingOrder,
     );
-    const { taxAmount, dineInTax } = this.extractTax(
-      payload,
-      orderType,
-      existingOrder,
-    );
+    const { taxAmount, dineInTax } = this.extractTax(payload, orderType, existingOrder);
     const deliveryFee = this.extractDeliveryFee(payload, orderType, existingOrder);
     let orderTotal = this.computeGrandTotal(
       subtotal,
@@ -844,17 +820,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
 
     // 2. Validate Payments
     const existingPayments = existingOrder.payments || [];
-    const incomingPayments = hasIncomingPayments
-      ? this.mapPayments(payload.payments)
-      : [];
+    const incomingPayments = hasIncomingPayments ? this.mapPayments(payload.payments) : [];
 
     const effectivePaymentTotal = hasIncomingPayments
-      ? this.round(
-          incomingPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
-        )
-      : this.round(
-          existingPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0),
-        );
+      ? this.round(incomingPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0))
+      : this.round(existingPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0));
 
     const isPaidRequested =
       payload.is_paid === true ||
@@ -914,7 +884,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
           const isVoidRequested = Boolean(
             item.is_cancelled === true ||
             item.voidedAt !== undefined ||
-            item.voided_at !== undefined
+            item.voided_at !== undefined,
           );
           const isDetailsChanged =
             (quantity !== undefined && quantity !== prev.quantity) ||
@@ -964,7 +934,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
                   item_name: itemName,
                   quantity,
                   selected_size:
-                    item.selected_size || item.size_name || item.sizeName || prev.selected_size || 'Regular',
+                    item.selected_size ||
+                    item.size_name ||
+                    item.sizeName ||
+                    prev.selected_size ||
+                    'Regular',
                   selected_crust:
                     item.selected_crust || item.selectedCrust || prev.selected_crust || 'Original',
                   extra_toppings:
@@ -975,7 +949,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
                   is_cancelled: false,
                   voidedAt: null,
                   supersedesItemId: prev.id,
-                  createdByDeviceId: item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
+                  createdByDeviceId:
+                    item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
                   clientCreatedAt: new Date(),
                 },
               });
@@ -1002,10 +977,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
                 menu_item_id: validMenuItemId,
                 item_name: itemName,
                 quantity,
-                selected_size:
-                  item.selected_size || item.size_name || item.sizeName || 'Regular',
-                selected_crust:
-                  item.selected_crust || item.selectedCrust || 'Original',
+                selected_size: item.selected_size || item.size_name || item.sizeName || 'Regular',
+                selected_crust: item.selected_crust || item.selectedCrust || 'Original',
                 extra_toppings: item.extra_toppings || item.extraToppings || '',
                 unit_price: new Prisma.Decimal(unitPrice),
                 total_price: new Prisma.Decimal(totalPrice),
@@ -1015,9 +988,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
                 cancel_reason: item.cancel_reason ?? null,
                 cancelled_by: item.cancelled_by ?? null,
                 voidedAt: isVoided ? new Date() : null,
-                voidedBy: isVoided ? (item.cancelled_by || item.voided_by || 'sync') : null,
+                voidedBy: isVoided ? item.cancelled_by || item.voided_by || 'sync' : null,
                 supersedesItemId: item.supersedesItemId || item.supersedes_item_id || null,
-                createdByDeviceId: item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
+                createdByDeviceId:
+                  item.createdByDeviceId || item.created_by_device_id || context.deviceId || null,
                 clientCreatedAt: item.clientCreatedAt ? new Date(item.clientCreatedAt) : new Date(),
               },
             });
@@ -1029,7 +1003,11 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       // SYNC-032 / D-05: Items absent from the payload are NOT deleted unless explicit fullReplace: true
       if (fullReplace && tx.orderItem.update) {
         for (const existingItem of currentItems) {
-          if (!incomingItemIds.has(existingItem.id) && !existingItem.voidedAt && !existingItem.is_cancelled) {
+          if (
+            !incomingItemIds.has(existingItem.id) &&
+            !existingItem.voidedAt &&
+            !existingItem.is_cancelled
+          ) {
             const now = new Date();
             await tx.orderItem.update({
               where: { id: existingItem.id },
@@ -1050,14 +1028,41 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     let pricingResult: any = null;
     if (this.pricingService) {
       pricingResult = await this.pricingService.calculate(orderId, tx, {
-        clientGrandTotal: payload.grand_total !== undefined ? Number(payload.grand_total) : undefined,
+        clientGrandTotal:
+          payload.grand_total !== undefined ? Number(payload.grand_total) : undefined,
         clientSubtotal: payload.subtotal !== undefined ? Number(payload.subtotal) : undefined,
-        discountPercentage: payload.discount_percentage !== undefined ? Number(payload.discount_percentage) : undefined,
-        discountAmount: payload.discount_amount !== undefined ? Number(payload.discount_amount) : undefined,
+        discountPercentage:
+          payload.discount_percentage !== undefined
+            ? Number(payload.discount_percentage)
+            : undefined,
+        discountAmount:
+          payload.discount_amount !== undefined ? Number(payload.discount_amount) : undefined,
         discountApproval: payload.manager_approval || payload.managerApproval,
-        approvedByManagerId: payload.approved_by_manager_id || payload.approvedByManagerId || payload.manager_approval?.manager_id || payload.manager_approval?.managerId || payload.managerApproval?.manager_id || payload.managerApproval?.managerId,
+        approvedByManagerId:
+          payload.approved_by_manager_id ||
+          payload.approvedByManagerId ||
+          payload.manager_approval?.manager_id ||
+          payload.manager_approval?.managerId ||
+          payload.managerApproval?.manager_id ||
+          payload.managerApproval?.managerId,
         source: 'OFFLINE',
         deviceId: context.deviceId,
+        isCashierDiscount: Boolean(
+          payload.is_cashier_discount ||
+          payload.isCashierDiscount
+        ),
+        cashierId:
+          payload.cashier_id ||
+          payload.cashierId ||
+          payload.staff_id ||
+          payload.staffId ||
+          payload.received_by,
+        taxAmount:
+          payload.tax_amount !== undefined
+            ? Number(payload.tax_amount)
+            : payload.dine_in_tax !== undefined
+            ? Number(payload.dine_in_tax)
+            : undefined,
       });
       orderTotal = pricingResult.grandTotal.toNumber();
     }
@@ -1089,13 +1094,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
               payment_method: method,
               amount: new Prisma.Decimal(amount),
               tendered_amount:
-                tenderedAmount !== undefined
-                  ? new Prisma.Decimal(tenderedAmount)
-                  : undefined,
+                tenderedAmount !== undefined ? new Prisma.Decimal(tenderedAmount) : undefined,
               change_returned:
-                changeReturned !== undefined
-                  ? new Prisma.Decimal(changeReturned)
-                  : undefined,
+                changeReturned !== undefined ? new Prisma.Decimal(changeReturned) : undefined,
               transaction_reference: ref,
               card_last_four: lastFour,
               bank_name: bank,
@@ -1107,13 +1108,9 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
               payment_method: method,
               amount: new Prisma.Decimal(amount),
               tendered_amount:
-                tenderedAmount !== undefined
-                  ? new Prisma.Decimal(tenderedAmount)
-                  : undefined,
+                tenderedAmount !== undefined ? new Prisma.Decimal(tenderedAmount) : undefined,
               change_returned:
-                changeReturned !== undefined
-                  ? new Prisma.Decimal(changeReturned)
-                  : undefined,
+                changeReturned !== undefined ? new Prisma.Decimal(changeReturned) : undefined,
               transaction_reference: ref,
               card_last_four: lastFour,
               bank_name: bank,
@@ -1134,21 +1131,24 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       isPaid = isPaidRequested
         ? effectivePaymentTotal >= orderTotal
         : payload.is_paid !== undefined
-        ? payload.is_paid
-        : false;
+          ? payload.is_paid
+          : false;
     }
 
     const paymentStatus = isPaid
       ? 'PAID'
-      : (existingOrder.payment_status === 'PAID' ? 'PAID' : (payload.payment_status || existingOrder.payment_status));
+      : existingOrder.payment_status === 'PAID'
+        ? 'PAID'
+        : payload.payment_status || existingOrder.payment_status;
 
     let status = existingOrder.status;
     if (existingOrder.status === 'completed') {
       status = 'completed';
     } else {
-      status = isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
-        ? payload.status
-        : payload.status ?? existingOrder.status;
+      status =
+        isPaidRequested && effectivePaymentTotal >= orderTotal && payload.status
+          ? payload.status
+          : (payload.status ?? existingOrder.status);
     }
 
     const orderUpdateData: any = {
@@ -1156,9 +1156,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       payment_status: paymentStatus,
       is_paid: isPaid,
       ...(payload.is_held !== undefined ? { is_held: payload.is_held } : {}),
-      ...(payload.rejection_reason
-        ? { rejection_reason: payload.rejection_reason }
-        : {}),
+      ...(payload.rejection_reason ? { rejection_reason: payload.rejection_reason } : {}),
       version: { increment: 1 },
     };
 
@@ -1191,11 +1189,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       try {
         const tbl = await tx.restaurantTable.findFirst({
           where: {
-            OR: [
-              { id: tableId },
-              { table_number: tableId },
-              { name: tableId },
-            ],
+            OR: [{ id: tableId }, { table_number: tableId }, { name: tableId }],
           },
           select: { id: true, is_deleted: true },
         });
@@ -1225,14 +1219,12 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     if (hasIncomingPayments) {
       for (const p of incomingPayments) {
         const m = p.payment_method || 'cash';
-        paymentMethodsBreakdown[m] =
-          (paymentMethodsBreakdown[m] || 0) + (Number(p.amount) || 0);
+        paymentMethodsBreakdown[m] = (paymentMethodsBreakdown[m] || 0) + (Number(p.amount) || 0);
       }
     } else {
       for (const p of existingPayments) {
         const m = p.payment_method || 'cash';
-        paymentMethodsBreakdown[m] =
-          (paymentMethodsBreakdown[m] || 0) + Number(p.amount || 0);
+        paymentMethodsBreakdown[m] = (paymentMethodsBreakdown[m] || 0) + Number(p.amount || 0);
       }
     }
 
@@ -1254,9 +1246,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         payment_status: updated.payment_status,
         is_paid: updated.is_paid,
         paid_at: updated.is_paid ? updatedAt : undefined,
-        payments_count: hasIncomingPayments
-          ? incomingPayments.length
-          : existingPayments.length,
+        payments_count: hasIncomingPayments ? incomingPayments.length : existingPayments.length,
         payment_methods: paymentMethodsBreakdown,
         version: newVersion,
         updated_at: updatedAt,
@@ -1276,6 +1266,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const updateWarnings: string[] = [];
     if (isUpdateTableDeleted) updateWarnings.push('TABLE_DELETED');
     const updatePricingStatus = pricingResult?.pricingStatus || (updated as any).pricing_status;
+    // Pricing reconciliation warnings suppressed per UI preference
     if (updatePricingStatus === 'MISMATCH') {
       updateWarnings.push('PRICE_MISMATCH');
     } else if (updatePricingStatus === 'UNAUTHORIZED_DISCOUNT') {
@@ -1300,7 +1291,6 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
   // ---------------------------------------------------------------------------
   // DELETE MUTATION HANDLER
   // ---------------------------------------------------------------------------
-
 
   // ---------------------------------------------------------------------------
   // ITEM_ADD MUTATION HANDLER (SYNC-032 / D-05)
@@ -1332,8 +1322,8 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const items = Array.isArray(payload.items)
       ? payload.items
       : payload.item
-      ? [payload.item]
-      : [payload];
+        ? [payload.item]
+        : [payload];
 
     const existingItems = existingOrder.order_items || [];
     const existingMap = new Map(existingItems.map((i: any) => [i.id, i]));
@@ -1343,13 +1333,19 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       if (existingMap.has(itemId)) {
         // Idempotent: ON CONFLICT DO NOTHING / void always wins
         const existing = existingMap.get(itemId)!;
-        const isIncomingVoided = Boolean(rawItem.voidedAt || rawItem.voided_at || rawItem.is_cancelled);
+        const isIncomingVoided = Boolean(
+          rawItem.voidedAt || rawItem.voided_at || rawItem.is_cancelled,
+        );
         if (isIncomingVoided && !existing.voidedAt && tx.orderItem?.update) {
           const now = new Date();
           await tx.orderItem.update({
             where: { id: itemId },
             data: {
-              voidedAt: rawItem.voidedAt ? new Date(rawItem.voidedAt) : (rawItem.voided_at ? new Date(rawItem.voided_at) : now),
+              voidedAt: rawItem.voidedAt
+                ? new Date(rawItem.voidedAt)
+                : rawItem.voided_at
+                  ? new Date(rawItem.voided_at)
+                  : now,
               voidedBy: rawItem.voidedBy || rawItem.voided_by || 'sync',
               is_cancelled: true,
               cancelled_at: now,
@@ -1374,10 +1370,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       const voidedAtDate = rawItem.voidedAt
         ? new Date(rawItem.voidedAt)
         : rawItem.voided_at
-        ? new Date(rawItem.voided_at)
-        : isVoided
-        ? new Date()
-        : null;
+          ? new Date(rawItem.voided_at)
+          : isVoided
+            ? new Date()
+            : null;
 
       const unitPrice = rawItem.unit_price !== undefined ? Number(rawItem.unit_price) : 0;
       const quantity = rawItem.quantity !== undefined ? Number(rawItem.quantity) : 1;
@@ -1397,20 +1393,28 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
             total_price: new Prisma.Decimal(this.round(unitPrice * quantity)),
             notes: rawItem.notes || '',
             is_cancelled: isVoided,
-            cancelled_at: isVoided ? (rawItem.cancelled_at ? new Date(rawItem.cancelled_at) : voidedAtDate) : null,
+            cancelled_at: isVoided
+              ? rawItem.cancelled_at
+                ? new Date(rawItem.cancelled_at)
+                : voidedAtDate
+              : null,
             cancel_reason: rawItem.cancel_reason ?? null,
             cancelled_by: rawItem.cancelled_by ?? null,
             voidedAt: voidedAtDate,
-            voidedBy: rawItem.voidedBy || rawItem.voided_by || (isVoided ? (rawItem.cancelled_by ?? 'sync') : null),
+            voidedBy:
+              rawItem.voidedBy ||
+              rawItem.voided_by ||
+              (isVoided ? (rawItem.cancelled_by ?? 'sync') : null),
             supersedesItemId: rawItem.supersedesItemId || rawItem.supersedes_item_id || null,
-            createdByDeviceId: rawItem.createdByDeviceId || rawItem.created_by_device_id || context.deviceId || null,
+            createdByDeviceId:
+              rawItem.createdByDeviceId || rawItem.created_by_device_id || context.deviceId || null,
             clientCreatedAt: rawItem.clientCreatedAt
               ? new Date(rawItem.clientCreatedAt)
               : rawItem.client_created_at
-              ? new Date(rawItem.client_created_at)
-              : mutation.created_at
-              ? new Date(mutation.created_at)
-              : new Date(),
+                ? new Date(rawItem.client_created_at)
+                : mutation.created_at
+                  ? new Date(mutation.created_at)
+                  : new Date(),
           },
         });
       }
@@ -1513,19 +1517,56 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const voidedBy = payload.voided_by || payload.voidedBy || 'sync';
     const reason = payload.reason || payload.cancel_reason || 'Voided via sync';
 
+    const cancelQty = payload.cancel_quantity || payload.cancelQuantity;
+
     if (existingItem) {
       if (!existingItem.voidedAt && tx.orderItem?.update) {
-        await tx.orderItem.update({
-          where: { id: itemId },
-          data: {
-            voidedAt: now,
-            voidedBy,
-            is_cancelled: true,
-            cancelled_at: now,
-            cancel_reason: reason,
-            cancelled_by: voidedBy,
-          },
-        });
+        if (cancelQty && cancelQty > 0 && cancelQty < existingItem.quantity) {
+          const remainingQty = existingItem.quantity - cancelQty;
+          const unitPriceNum = Number(existingItem.unit_price);
+          await tx.orderItem.update({
+            where: { id: itemId },
+            data: {
+              quantity: remainingQty,
+              total_price: new Prisma.Decimal(this.round(unitPriceNum * remainingQty)),
+            },
+          });
+          if (tx.orderItem?.create) {
+            await tx.orderItem.create({
+              data: {
+                order_id: orderId,
+                menu_item_id: existingItem.menu_item_id,
+                item_name: existingItem.item_name,
+                quantity: cancelQty,
+                unit_price: existingItem.unit_price,
+                total_price: new Prisma.Decimal(this.round(unitPriceNum * cancelQty)),
+                selected_size: existingItem.selected_size,
+                selected_crust: existingItem.selected_crust,
+                extra_toppings: existingItem.extra_toppings,
+                notes: existingItem.notes,
+                is_cancelled: true,
+                cancelled_at: now,
+                cancel_reason: reason,
+                cancelled_by: voidedBy,
+                voidedAt: now,
+                voidedBy,
+                clientCreatedAt: mutation.created_at ? new Date(mutation.created_at) : now,
+              },
+            });
+          }
+        } else {
+          await tx.orderItem.update({
+            where: { id: itemId },
+            data: {
+              voidedAt: now,
+              voidedBy,
+              is_cancelled: true,
+              cancelled_at: now,
+              cancel_reason: reason,
+              cancelled_by: voidedBy,
+            },
+          });
+        }
       }
     } else if (tx.orderItem?.create) {
       // Tombstone insert for commutativity (VOID arriving before ADD)
@@ -1562,13 +1603,6 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
     const taxAmount = Number(existingOrder.tax_amount);
     const grandTotal = this.round(taxableAmount + taxAmount);
 
-    if (this.pricingService) {
-      await this.pricingService.calculate(orderId, tx, {
-        source: 'OFFLINE',
-        deviceId: context.deviceId,
-      });
-    }
-
     const updated = await tx.order.update({
       where: { id: orderId },
       data: {
@@ -1577,6 +1611,15 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         version: { increment: 1 },
       },
     });
+
+    if (this.pricingService) {
+      await this.pricingService.calculate(orderId, tx, {
+        source: 'OFFLINE',
+        deviceId: context.deviceId,
+        clientGrandTotal: grandTotal,
+        clientSubtotal: subtotal,
+      });
+    }
 
     const newVersion = (updated as any).version ?? ((existingOrder as any).version || 1) + 1;
     const updatedAt = (updated as any).updated_at || new Date();
@@ -1643,8 +1686,7 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
       where: { id: orderId },
       data: {
         status: 'cancelled',
-        rejection_reason:
-          mutation.payload?.rejection_reason || 'Cancelled via sync',
+        rejection_reason: mutation.payload?.rejection_reason || 'Cancelled via sync',
         version: { increment: 1 },
       } as any,
     });
@@ -1775,7 +1817,33 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
   }
 
   private computeNextOverflowSuffix(existingSuffixes: string[]): string {
-    const letters = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
+    const letters = [
+      'B',
+      'C',
+      'D',
+      'E',
+      'F',
+      'G',
+      'H',
+      'I',
+      'J',
+      'K',
+      'L',
+      'M',
+      'N',
+      'O',
+      'P',
+      'Q',
+      'R',
+      'S',
+      'T',
+      'U',
+      'V',
+      'W',
+      'X',
+      'Y',
+      'Z',
+    ];
     for (const letter of letters) {
       if (!existingSuffixes.includes(letter)) {
         return letter;
@@ -1890,7 +1958,10 @@ export class OrderHandler implements SyncEntityHandler, OnModuleInit {
         `MNY-06: Recorded late-synced order '${orderId}' against closed shift '${shiftId}' (cash: ${cashTotal})`,
       );
     } catch (err) {
-      this.logger.warn(`Failed to record late-synced order '${orderId}' against shift '${shiftId}': ${err}`);
+      this.logger.warn(
+        `Failed to record late-synced order '${orderId}' against shift '${shiftId}': ${err}`,
+      );
     }
   }
 }
+

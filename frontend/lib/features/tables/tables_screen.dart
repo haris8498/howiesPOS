@@ -1136,8 +1136,9 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                       ),
                     ),
                 ],
-                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner
+                // D-03 (SYNC-016): Pricing Reconciliation Notification Banner (Disabled per user preference)
                 () {
+                  return const SizedBox.shrink();
                   final pricingNotifs = ref.watch(pricingReconciliationNotificationProvider);
                   if (pricingNotifs.isEmpty) return const SizedBox.shrink();
                   return Column(
@@ -2343,6 +2344,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                   await ordersApi.updateOrder(activeOrderId, {
                     'discount_amount': discountAmount,
                     'discount_percentage': discountPercentage,
+                    'is_cashier_discount': true,
                     'tax_amount': taxAmount,
                     'dine_in_tax': taxAmount,
                     'grand_total': grandTotal,
@@ -6968,18 +6970,37 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
           final orderRepo = widget.ref.read(orderRepositoryProvider);
           for (final item in widget.table.currentOrderItems) {
             if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
-            final itemId = item['id']?.toString() ?? '';
+            final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
             final cancelQty = _cancelQuantities[itemId] ?? 0;
 
             if (cancelQty > 0 && itemId.isNotEmpty) {
               await orderRepo.voidOrderItem(
                 orderId,
                 itemId,
+                cancelQuantity: cancelQty,
                 voidedBy: cashierName,
                 reason: effectiveReason,
               );
             }
           }
+          // Direct API attempt when connected so backend updates immediately
+          try {
+            final ordersApi = widget.ref.read(ordersApiServiceProvider);
+            for (final item in widget.table.currentOrderItems) {
+              if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
+              final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
+              final cancelQty = _cancelQuantities[itemId] ?? 0;
+              if (cancelQty > 0 && itemId.isNotEmpty) {
+                await ordersApi.cancelOrderItem(
+                  orderId,
+                  itemId: itemId,
+                  cancelQuantity: cancelQty,
+                  reason: effectiveReason,
+                  cancelledBy: cashierName,
+                );
+              }
+            }
+          } catch (_) {}
           widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
         } else {
           final ordersApi = widget.ref.read(ordersApiServiceProvider);
@@ -6987,7 +7008,7 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
           // Cancel each item with its designated cancel quantity (skipping already cancelled items)
           for (final item in widget.table.currentOrderItems) {
             if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
-            final itemId = item['id']?.toString() ?? '';
+            final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
             final cancelQty = _cancelQuantities[itemId] ?? 0;
 
             if (cancelQty > 0 && itemId.isNotEmpty) {
@@ -7015,21 +7036,39 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
         );
 
         // Prepare updated items with cancelled status for table state
-        final updatedItems = widget.table.currentOrderItems.map((item) {
-          final itemId = item['id']?.toString() ?? '';
-          if ((_cancelQuantities[itemId] ?? 0) > 0) {
-            final copy = Map<String, dynamic>.from(item);
-            copy['is_cancelled'] = true;
-            copy['cancel_reason'] = effectiveReason;
-            copy['cancelled_by'] = cashierName;
-            return copy;
-          }
-          return item;
-        }).toList();
+        final List<Map<String, dynamic>> updatedItems = [];
+        for (final item in widget.table.currentOrderItems) {
+          final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
+          final cancelQty = _cancelQuantities[itemId] ?? 0;
+          final currentQty = (item['quantity'] as num?)?.toInt() ?? int.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
 
-        final updatedTable = widget.table.copyWith(
-          currentOrderItems: updatedItems,
-        );
+          if (cancelQty > 0 && item['is_cancelled'] != true && item['is_cancelled'] != 1) {
+            if (cancelQty < currentQty) {
+              // Partial cancel: active item retains remaining quantity
+              final activeCopy = Map<String, dynamic>.from(item);
+              activeCopy['quantity'] = currentQty - cancelQty;
+              updatedItems.add(activeCopy);
+
+              // Cancelled entry reflects only the cancelled quantity
+              final cancelledCopy = Map<String, dynamic>.from(item);
+              cancelledCopy['id'] = const Uuid().v7();
+              cancelledCopy['quantity'] = cancelQty;
+              cancelledCopy['is_cancelled'] = true;
+              cancelledCopy['cancel_reason'] = effectiveReason;
+              cancelledCopy['cancelled_by'] = cashierName;
+              updatedItems.add(cancelledCopy);
+            } else {
+              // Full item cancel
+              final copy = Map<String, dynamic>.from(item);
+              copy['is_cancelled'] = true;
+              copy['cancel_reason'] = effectiveReason;
+              copy['cancelled_by'] = cashierName;
+              updatedItems.add(copy);
+            }
+          } else {
+            updatedItems.add(item);
+          }
+        }
 
         // Update local table bill & items in state
         double newBill = 0.0;

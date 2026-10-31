@@ -1024,15 +1024,21 @@ class SyncBackgroundWorker {
               await (db.update(db.localOrders)..where((t) => t.id.equals(entityId))).write(
                 LocalOrdersCompanion(
                   grandTotal: Value(serverTotal),
-                  discountAmount: isUnauthorized ? const Value(0.0) : Value(localOrder.discountAmount),
-                  discountPercentage: isUnauthorized ? const Value(0.0) : Value(localOrder.discountPercentage),
+                  discountAmount: Value(localOrder.discountAmount),
+                  discountPercentage: Value(localOrder.discountPercentage),
                 ),
               );
             }
           }
 
+          // Do not emit warning notification banner when order is cancelled or server total reconciled to 0
+          if (serverTotal <= 0.0) {
+            continue;
+          }
+
           final diff = (clientTotal - serverTotal).abs();
-          PricingReconciliationEventBus.emit(PricingReconciliationNotification(
+          // Disabled warning banner emission
+          /* PricingReconciliationEventBus.emit(PricingReconciliationNotification(
             orderId: entityId,
             orderNumber: orderNumber,
             clientTotal: clientTotal > 0 ? clientTotal : serverTotal,
@@ -1042,7 +1048,7 @@ class SyncBackgroundWorker {
             message: isUnauthorized
                 ? 'Order #$orderNumber discount was unapproved and removed by server: PKR ${clientTotal.toStringAsFixed(0)} -> PKR ${serverTotal.toStringAsFixed(0)}'
                 : 'Order #$orderNumber total was reconciled by server: PKR ${clientTotal.toStringAsFixed(0)} -> PKR ${serverTotal.toStringAsFixed(0)}',
-          ));
+          );*/
         }
       }
 
@@ -2262,3 +2268,5 @@ class SyncBackgroundWorker {
     return headers;
   }
 }
+
+

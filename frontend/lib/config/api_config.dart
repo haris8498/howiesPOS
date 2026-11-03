@@ -1,5 +1,3 @@
-
-
 class ApiConfig {
   ApiConfig._();
 
@@ -11,9 +9,7 @@ class ApiConfig {
     if (_definedBaseUrl.isNotEmpty) {
       return _definedBaseUrl;
     }
-    // Online Backend (Commented for testing with local database):
-    // return 'http://213.199.57.65/api';
-    return 'http://localhost:3000/api';
+    return 'http://213.199.57.65/api';
   }
 
   /// The base URL for WebSocket / Socket.IO connections.
@@ -21,9 +17,7 @@ class ApiConfig {
     if (_definedSocketUrl.isNotEmpty) {
       return _definedSocketUrl;
     }
-    // Online Backend (Commented for testing with local database):
-    // return 'http://213.199.57.65';
-    return 'http://localhost:3000';
+    return 'http://213.199.57.65';
   }
 
   /// Default network timeout duration
@@ -35,9 +29,8 @@ class ApiConfig {
     switch (env.toLowerCase()) {
       case 'prod':
       case 'production':
-        return 'https://api.hungryhowiespos.com/api';
       case 'staging':
-        return 'https://staging-api.hungryhowiespos.com/api';
+        return 'http://213.199.57.65/api';
       case 'android_emulator':
         return 'http://10.0.2.2:3000/api';
       case 'dev':

@@ -1,3 +1,4 @@
+import 'package:uuid/uuid.dart';
 import '../../config/feature_flags.dart';
 import '../../core/sync/sync_providers.dart';
 import '../../domain/models/order_model.dart';
@@ -3386,8 +3387,8 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
 
                                 final itemsList = _cart.entries.map((e) {
                                   final existing = _existingItemsByName[e.key];
-                                  final itemId = (existing?.id != null && existing!.id!.isNotEmpty) ? existing.id! : const Uuid().v7();
-                                  final menuItemId = (existing?.item.id != null && existing!.item.id.isNotEmpty) ? existing.item.id : const Uuid().v7();
+                                  final itemId = (existing?.id != null && existing!.id!.isNotEmpty) ? existing.id! : Uuid().v4();
+                                  final menuItemId = (existing?.item.id != null && existing!.item.id.isNotEmpty) ? existing.item.id : Uuid().v4();
                                   double price = _customItemPrices[e.key] ?? (existing?.unitPrice ?? 0.0);
                                   if (price <= 0.0) {
                                     final matchItem = _menuItems.firstWhere(

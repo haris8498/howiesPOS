@@ -5705,6 +5705,17 @@ void _showFinalPaidReceiptDialog(
 ) {
   // Get items from the table
   final items = table.currentOrderItems;
+  final activeDisplayItems = items.where((item) {
+    return !(item['is_cancelled'] == true ||
+        item['is_cancelled'] == 1 ||
+        item['is_cancelled'] == 'true' ||
+        item['is_cancelled'] == '1' ||
+        item['isCancelled'] == true ||
+        item['isCancelled'] == 'true' ||
+        item['voided_at'] != null ||
+        item['voidedAt'] != null ||
+        (item['status'] != null && item['status'].toString().toLowerCase() == 'cancelled'));
+  }).toList();
   final rawOrderNo = (table.activeOrderNumber != null && table.activeOrderNumber!.isNotEmpty)
       ? table.activeOrderNumber!
       : (orderId.isNotEmpty ? orderId : (table.activeOrderId ?? table.tableNumber));
@@ -5807,17 +5818,6 @@ void _showFinalPaidReceiptDialog(
                       const SizedBox(height: 4),
 
                       // Items List (Customer Receipt excludes cancelled and voided items)
-                      final activeDisplayItems = items.where((item) {
-                        return !(item['is_cancelled'] == true ||
-                            item['is_cancelled'] == 1 ||
-                            item['is_cancelled'] == 'true' ||
-                            item['is_cancelled'] == '1' ||
-                            item['isCancelled'] == true ||
-                            item['isCancelled'] == 'true' ||
-                            item['voided_at'] != null ||
-                            item['voidedAt'] != null ||
-                            (item['status'] != null && item['status'].toString().toLowerCase() == 'cancelled'));
-                      }).toList();
                       if (activeDisplayItems.isNotEmpty)
                         ...activeDisplayItems.map((item) {
                           final name = item['name'] as String? ?? 'Item';

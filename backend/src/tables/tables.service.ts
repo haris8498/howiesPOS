@@ -114,6 +114,11 @@ export class TablesService {
               occupied_since: null,
             },
           })
+          .then((healed) => {
+            if (this.realtimeGateway) {
+              this.realtimeGateway.emitTableStatusChanged(healed as any);
+            }
+          })
           .catch((err) => this.logger.warn(`Failed to auto-heal table ${t.id}: ${err}`));
       }
 
@@ -438,6 +443,10 @@ export class TablesService {
       } catch (_) {}
     }
 
+    if (this.realtimeGateway) {
+      this.realtimeGateway.emitTableStatusChanged(updated as any);
+    }
+
     this.logger.log(`Updated table '${updated.name}' status to '${dto.status}'`);
     return updated;
   }
@@ -481,6 +490,10 @@ export class TablesService {
         );
       }
     } catch (_) {}
+
+    if (this.realtimeGateway) {
+      this.realtimeGateway.emitTableStatusChanged(updated as any);
+    }
 
     this.logger.log(`Released table '${updated.name}' (${id}) to available`);
     return updated;

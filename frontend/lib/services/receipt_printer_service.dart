@@ -245,7 +245,15 @@ class ReceiptData {
   }) {
     final items = <ReceiptItemData>[];
     for (final item in table.currentOrderItems) {
-      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      final isCancelled = item['is_cancelled'] == true ||
+          item['is_cancelled'] == 1 ||
+          item['is_cancelled'] == 'true' ||
+          item['is_cancelled'] == '1' ||
+          item['isCancelled'] == true ||
+          item['isCancelled'] == 'true' ||
+          item['voided_at'] != null ||
+          item['voidedAt'] != null ||
+          (item['status'] != null && item['status'].toString().toLowerCase() == 'cancelled');
       if (isCancelled) continue; // Do NOT include cancelled items in final customer bill
       final name = item['name']?.toString() ?? 'Item';
       final qty = (item['quantity'] as num?)?.toInt() ?? 1;
@@ -314,7 +322,15 @@ class ReceiptData {
   }) {
     final items = <ReceiptItemData>[];
     for (final item in table.currentOrderItems) {
-      final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
+      final isCancelled = item['is_cancelled'] == true ||
+          item['is_cancelled'] == 1 ||
+          item['is_cancelled'] == 'true' ||
+          item['is_cancelled'] == '1' ||
+          item['isCancelled'] == true ||
+          item['isCancelled'] == 'true' ||
+          item['voided_at'] != null ||
+          item['voidedAt'] != null ||
+          (item['status'] != null && item['status'].toString().toLowerCase() == 'cancelled');
       if (isCancelled) continue; // Do NOT include cancelled items in customer pre-bill
       final name = item['name']?.toString() ?? 'Item';
       final qty = (item['quantity'] as num?)?.toInt() ?? 1;

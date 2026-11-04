@@ -2998,6 +2998,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
 
   final Map<String, int> _cart = {};
   final Map<String, double> _customItemPrices = {};
+  final Map<String, OrderItem> _existingItemsByName = {};
 
   @override
   void initState() {
@@ -3015,6 +3016,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
         for (final oi in ord.items) {
           if (oi.isCancelled) continue;
           _cart[oi.item.name] = oi.quantity;
+          _existingItemsByName[oi.item.name] = oi;
           if (oi.unitPrice > 0) {
             _customItemPrices[oi.item.name] = oi.unitPrice;
           }
@@ -3383,7 +3385,10 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                 }
 
                                 final itemsList = _cart.entries.map((e) {
-                                  double price = _customItemPrices[e.key] ?? 0.0;
+                                  final existing = _existingItemsByName[e.key];
+                                  final itemId = (existing?.id != null && existing!.id!.isNotEmpty) ? existing.id! : const Uuid().v7();
+                                  final menuItemId = (existing?.item.id != null && existing!.item.id.isNotEmpty) ? existing.item.id : const Uuid().v7();
+                                  double price = _customItemPrices[e.key] ?? (existing?.unitPrice ?? 0.0);
                                   if (price <= 0.0) {
                                     final matchItem = _menuItems.firstWhere(
                                       (m) => m['name'].toString().toLowerCase() == e.key.toLowerCase() ||
@@ -3394,12 +3399,14 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                     price = ((matchItem['price'] as num?)?.toDouble() ?? 0.0);
                                   }
                                   return {
+                                    'id': itemId,
+                                    'menu_item_id': menuItemId,
                                     'item_name': e.key,
                                     'quantity': e.value,
                                     'unit_price': price,
                                     'total_price': price * e.value,
-                                    'selected_size': 'Regular',
-                                    'selected_crust': 'Original',
+                                    'selected_size': existing?.selectedSize ?? 'Regular',
+                                    'selected_crust': existing?.selectedCrust ?? 'Original',
                                   };
                                 }).toList();
 

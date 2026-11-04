@@ -2320,54 +2320,8 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
           ref: ref,
           isDark: isDark,
           onPrint: (subtotal, discountAmount, taxAmount, grandTotal, taxRate, discountPercentage, managerApproval) async {
-            // 1. Update order in database with discount, tax, and grand total
-            final activeOrderId = table.activeOrderId;
-            if (activeOrderId != null && activeOrderId.isNotEmpty) {
-              try {
-                if (FeatureFlags.offlineFirstEnabled) {
-                  final orderRepo = ref.read(orderRepositoryProvider);
-                  final existing = await orderRepo.getOrderById(activeOrderId);
-                  if (existing != null) {
-                    final updated = existing.copyWith(
-                      discountAmount: discountAmount,
-                      discountPercentage: discountPercentage,
-                      taxAmount: taxAmount,
-                      grandTotalOverride: grandTotal,
-                      approvedByManagerId: managerApproval?.managerId,
-                      managerApproval: managerApproval?.toJson(),
-                      dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmount),
-                    );
-                    await orderRepo.updateOrder(updated);
-                  }
-                } else if (activeOrderId.length >= 20) {
-                  final ordersApi = ref.read(ordersApiServiceProvider);
-                  await ordersApi.updateOrder(activeOrderId, {
-                    'discount_amount': discountAmount,
-                    'discount_percentage': discountPercentage,
-                    'is_cashier_discount': true,
-                    'tax_amount': taxAmount,
-                    'dine_in_tax': taxAmount,
-                    'grand_total': grandTotal,
-                    if (managerApproval != null) 'approved_by_manager_id': managerApproval.managerId,
-                    if (managerApproval != null) 'manager_approval': managerApproval.toJson(),
-                  });
-                }
-                final notifier = ref.read(tableProvider.notifier);
-                await notifier.updateTableBillAndStatus(
-                  table.id,
-                  grandTotal,
-                  TableStatus.occupied,
-                  activeOrderId: activeOrderId,
-                  activeOrderNumber: table.activeOrderNumber,
-                  orderItems: table.currentOrderItems,
-                );
-                await notifier.loadTables();
-              } catch (e) {
-                debugPrint('⚠️ Error saving customer bill discount in DB: $e');
-              }
-            }
-
-            // 2. Physical Thermal Print to Attached Laptop Printer
+            // Printing a final bill / pre-bill is strictly a read-only operation.
+            // It must never modify order items, cancellation status, quantities, payments, or order totals.
             if (!context.mounted) return;
             await ReceiptPrinterService.printReceipt(
               context: context,
@@ -4160,6 +4114,8 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                           imageUrl: c.item.imagePath,
                                         ),
                                         quantity: c.quantity,
+                                        selectedSize: 'Regular',
+                                        selectedCrust: 'Original',
                                         backendUnitPrice: c.item.price,
                                       );
                                     }).toList();
@@ -5850,18 +5806,28 @@ void _showFinalPaidReceiptDialog(
                       const Divider(),
                       const SizedBox(height: 4),
 
-                      // Items List
-                      if (items.isNotEmpty)
-                        ...items.map((item) {
+                      // Items List (Customer Receipt excludes cancelled and voided items)
+                      final activeDisplayItems = items.where((item) {
+                        return !(item['is_cancelled'] == true ||
+                            item['is_cancelled'] == 1 ||
+                            item['is_cancelled'] == 'true' ||
+                            item['is_cancelled'] == '1' ||
+                            item['isCancelled'] == true ||
+                            item['isCancelled'] == 'true' ||
+                            item['voided_at'] != null ||
+                            item['voidedAt'] != null ||
+                            (item['status'] != null && item['status'].toString().toLowerCase() == 'cancelled'));
+                      }).toList();
+                      if (activeDisplayItems.isNotEmpty)
+                        ...activeDisplayItems.map((item) {
                           final name = item['name'] as String? ?? 'Item';
                           final qty = item['quantity'] as int? ?? 1;
                           final price = (item['price'] as num?)?.toDouble() ?? 0.0;
-                          final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
                           final lineTotal = price > 0
                               ? price * qty
-                              : (items.length == 1 && subtotal > 0
+                              : (activeDisplayItems.length == 1 && subtotal > 0
                                   ? subtotal
-                                  : (subtotal > 0 ? subtotal / items.length : 0.0));
+                                  : (subtotal > 0 ? subtotal / activeDisplayItems.length : 0.0));
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
@@ -5870,20 +5836,15 @@ void _showFinalPaidReceiptDialog(
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                                   decoration: BoxDecoration(
-                                    color: isCancelled
-                                        ? AppColors.primaryRed.withValues(alpha: 0.15)
-                                        : AppColors.primaryRed.withValues(alpha: 0.1),
+                                    color: AppColors.primaryRed.withValues(alpha: 0.1),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
-                                    isCancelled ? '-$qty×' : '$qty×',
-                                    style: TextStyle(
-                                      color: isCancelled ? AppColors.danger : AppColors.primaryRed,
+                                    '$qty×',
+                                    style: const TextStyle(
+                                      color: AppColors.primaryRed,
                                       fontWeight: FontWeight.bold,
                                       fontSize: 13,
-                                      decoration: isCancelled ? TextDecoration.lineThrough : null,
-                                      decorationColor: AppColors.danger,
-                                      decorationThickness: 2,
                                     ),
                                   ),
                                 ),
@@ -5894,31 +5855,19 @@ void _showFinalPaidReceiptDialog(
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
-                                      color: isCancelled
-                                          ? AppColors.danger
-                                          : (isDark ? Colors.white : AppColors.textPrimary),
-                                      decoration: isCancelled ? TextDecoration.lineThrough : null,
-                                      decorationColor: AppColors.danger,
-                                      decorationThickness: 2,
+                                      color: isDark ? Colors.white : AppColors.textPrimary,
                                     ),
                                   ),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  isCancelled
-                                      ? '- PKR ${(price * qty).toStringAsFixed(0)}'
-                                      : (lineTotal > 0
-                                          ? 'PKR ${lineTotal.toStringAsFixed(0)}'
-                                          : (price > 0 ? 'PKR ${(price * qty).toStringAsFixed(0)}' : 'PKR 0')),
+                                  lineTotal > 0
+                                      ? 'PKR ${lineTotal.toStringAsFixed(0)}'
+                                      : (price > 0 ? 'PKR ${(price * qty).toStringAsFixed(0)}' : 'PKR 0'),
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w800,
-                                    color: isCancelled
-                                        ? AppColors.danger
-                                        : (isDark ? Colors.white : AppColors.textPrimary),
-                                    decoration: isCancelled ? TextDecoration.lineThrough : null,
-                                    decorationColor: AppColors.danger,
-                                    decorationThickness: 2,
+                                    color: isDark ? Colors.white : AppColors.textPrimary,
                                   ),
                                 ),
                               ],

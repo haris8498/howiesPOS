@@ -436,12 +436,16 @@ class TableNotifier extends StateNotifier<TableState> {
     state = state.copyWith(tables: updated);
 
     try {
-      await _tablesApiService.updateTableStatus(
-        tableId,
-        status: newStatus.name,
-        currentBillAmount: billAmount,
-        activeOrderId: activeOrderId,
-      );
+      if (newStatus == TableStatus.available) {
+        await _tablesApiService.releaseTable(tableId);
+      } else {
+        await _tablesApiService.updateTableStatus(
+          tableId,
+          status: newStatus.name,
+          currentBillAmount: billAmount,
+          activeOrderId: activeOrderId,
+        );
+      }
     } catch (_) {}
   }
 

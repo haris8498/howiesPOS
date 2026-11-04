@@ -14,6 +14,7 @@ import { HandlerRegistry } from './handler-registry.service';
 import { ChangeLogService } from '../change-log.service';
 import { SyncMutationDto } from '../dto/sync-push.dto';
 import { KitchenGateway } from '../../kitchen/kitchen.gateway';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -25,6 +26,7 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
     private readonly handlerRegistry: HandlerRegistry,
     private readonly changeLogService: ChangeLogService,
     @Optional() private readonly kitchenGateway?: KitchenGateway,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
   onModuleInit() {
@@ -264,15 +266,13 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
           grand_total: true,
         },
       });
-      if (
-        activeOrd &&
-        activeOrd.status !== 'completed' &&
-        activeOrd.status !== 'cancelled' &&
-        activeOrd.status !== 'rejected'
-      ) {
+      const isCompleted = activeOrd
+        ? Boolean(activeOrd.status === 'completed' || activeOrd.status === 'cancelled' || activeOrd.status === 'rejected')
+        : true;
+      if (activeOrd && !isCompleted) {
         serverHasActiveOrder = true;
         activeOrderSummary = activeOrd;
-      } else if (!activeOrd || activeOrd.status === 'completed' || activeOrd.status === 'cancelled') {
+      } else {
         serverHasActiveOrder = false;
       }
     }
@@ -707,6 +707,10 @@ export class TableHandler implements SyncEntityHandler, OnModuleInit {
       where: { id: existing.id },
       data: updateData,
     });
+
+    if (this.realtimeGateway) {
+      this.realtimeGateway.emitTableStatusChanged(updated as any);
+    }
 
     const newVersion = updated.version ?? currentVersion + 1;
     const updatedAt = updated.updated_at || new Date();

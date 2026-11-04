@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { OrderItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { KitchenGateway } from '../kitchen/kitchen.gateway';
@@ -55,6 +56,7 @@ export class OrdersService {
     @Optional() private readonly pricingService?: PricingService,
     @Optional() private readonly changeLogService?: ChangeLogService,
     @Optional() private readonly passwordService?: PasswordService,
+    @Optional() private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
   private round(val: number): number {
@@ -971,15 +973,70 @@ export class OrdersService {
             },
           });
 
-          // Update table with current bill and keep status as occupied.
-          // Tables remain occupied until staff explicitly clicks 'Free Table' or releases the table.
-          await tx.restaurantTable.update({
-            where: { id: tableId },
-            data: {
-              current_bill_amount: grandTotal,
-              status: 'occupied',
-            },
-          }).catch(() => {});
+          const isOrderCompleteOrPaid = (dto.status === 'completed' || isPaid);
+          if (isOrderCompleteOrPaid) {
+            // Check if any other unpaid, active order exists for this table
+            const otherUnpaidOrders = await tx.order.findMany({
+              where: {
+                id: { not: id },
+                status: { notIn: ['completed', 'cancelled', 'rejected'] },
+                is_paid: false,
+                payment_status: { not: 'PAID' },
+                dine_in_detail: { table_id: tableId },
+              },
+            });
+
+            if (otherUnpaidOrders.length === 0) {
+              // No other active orders exist on this table - release the table to available!
+              const releasedTable = await tx.restaurantTable.update({
+                where: { id: tableId },
+                data: {
+                  status: 'available',
+                  active_order_id: null,
+                  occupied_since: null,
+                  current_bill_amount: 0.0,
+                  current_customer_count: 0,
+                  reserved_customer_name: null,
+                  reservation_time: null,
+                  version: { increment: 1 },
+                },
+              }).catch(() => null);
+
+              if (releasedTable && this.realtimeGateway) {
+                this.realtimeGateway.emitTableStatusChanged(releasedTable as any);
+              }
+            } else {
+              // Still has another active unpaid order: keep table occupied with remaining balance
+              const remainingTotal = otherUnpaidOrders.reduce((sum, o) => sum + Number(o.grand_total), 0);
+              const remainingOrderId = otherUnpaidOrders[0].id;
+              const updatedTable = await tx.restaurantTable.update({
+                where: { id: tableId },
+                data: {
+                  current_bill_amount: remainingTotal,
+                  active_order_id: remainingOrderId,
+                  status: 'occupied',
+                },
+              }).catch(() => null);
+
+              if (updatedTable && this.realtimeGateway) {
+                this.realtimeGateway.emitTableStatusChanged(updatedTable as any);
+              }
+            }
+          } else {
+            // Order is still active / unpaid - table remains occupied
+            const updatedTable = await tx.restaurantTable.update({
+              where: { id: tableId },
+              data: {
+                current_bill_amount: grandTotal,
+                status: 'occupied',
+                active_order_id: id,
+              },
+            }).catch(() => null);
+
+            if (updatedTable && this.realtimeGateway) {
+              this.realtimeGateway.emitTableStatusChanged(updatedTable as any);
+            }
+          }
         }
       }
 

@@ -350,7 +350,7 @@ class PosNotifier extends StateNotifier<PosState> {
     );
   }
 
-  void addToCart(MenuItem item, {String size = 'Large', String crust = 'Butter Cheese'}) {
+  void addToCart(MenuItem item, {String size = 'Regular', String crust = 'Original'}) {
     final existingIndex = state.currentCart.indexWhere(
       (i) => i.item.id == item.id && i.selectedSize == size && i.selectedCrust == crust,
     );

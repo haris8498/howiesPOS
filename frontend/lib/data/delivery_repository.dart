@@ -423,6 +423,30 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
   }) async {
     final rawOrderId = orderId.startsWith('del-') || orderId.startsWith('del_') ? (orderId.contains('_') ? orderId.substring(4) : orderId) : orderId;
 
+    final domainItems = items.map((it) {
+      final itemId = (it['id'] != null && it['id'].toString().isNotEmpty) ? it['id'].toString() : const Uuid().v7();
+      final itemName = it['item_name']?.toString() ?? it['name']?.toString() ?? 'Item';
+      final qty = (it['quantity'] as num?)?.toInt() ?? 1;
+      final unitPrice = (it['unit_price'] as num?)?.toDouble() ?? (subtotal / (qty > 0 ? qty : 1));
+      final size = it['selected_size']?.toString() ?? 'Regular';
+      final crust = it['selected_crust']?.toString() ?? 'Original';
+      return OrderItem(
+        id: itemId,
+        item: MenuItem(
+          id: (it['menu_item_id'] != null && it['menu_item_id'].toString().isNotEmpty) ? it['menu_item_id'].toString() : const Uuid().v7(),
+          name: itemName,
+          category: 'General',
+          description: '',
+          basePrice: unitPrice,
+          imageUrl: '',
+        ),
+        quantity: qty,
+        selectedSize: size,
+        selectedCrust: crust,
+        backendUnitPrice: unitPrice,
+      );
+    }).toList();
+
     // Update local SQLite order atomically
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
@@ -430,6 +454,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
         final existingLocal = await orderRepo.getOrderById(rawOrderId);
         if (existingLocal != null) {
           final updated = existingLocal.copyWith(
+            items: domainItems,
             subtotalOverride: subtotal,
             discountPercentage: discountPercentage,
             discountAmount: discountAmount,
@@ -468,6 +493,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
         'grand_total': grandTotal,
         'payment_method': paymentMethod.toLowerCase(),
         'items': items,
+        'full_replace': true,
       });
       // Invalidate KOT print lock so modified order can be printed to the kitchen
       await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(orderId: orderId);
@@ -489,6 +515,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
           totalAmount: grandTotal,
           itemsSummary: itemsSummary,
           paymentMethod: paymentMethod,
+          items: domainItems,
         );
       }
       return del;

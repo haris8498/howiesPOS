@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -211,6 +211,51 @@ describe('DailyCalculationService - Shift Locking & Management System', () => {
         cash_skimming: 0,
         cashier_id: 'cashier-1',
         cashier_name: 'Alexander Pierce',
+      });
+
+      expect(result.status).toBe('CLOSED');
+      expect(prisma.dailyCalculation.update).toHaveBeenCalled();
+    });
+
+    it('Case 7: should throw BadRequestException when cash_skimming does not match total expenses', async () => {
+      prisma.dailyCalculation.findUnique.mockResolvedValue(mockActiveShift);
+      prisma.dailyCalculation.findFirst.mockResolvedValue(mockActiveShift);
+      prisma.order.findMany.mockResolvedValueOnce([]);
+      prisma.deliveryDispatch.findMany.mockResolvedValueOnce([]);
+      prisma.order.findMany.mockResolvedValueOnce([]);
+
+      await expect(
+        service.submitDailyCalculation({
+          shift_id: mockActiveShift.id,
+          cash_submitted: 5000,
+          total_cash: 4500,
+          cash_skimming: 0, // 0 skimming
+          expense_items: [
+            { item_name: 'Kitchen Supplies', category: 'Supplies', amount: 500 }, // 500 expenses
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('Case 8: should successfully close shift when cash_skimming matches total expenses', async () => {
+      prisma.dailyCalculation.findUnique.mockResolvedValue(mockActiveShift);
+      prisma.dailyCalculation.findFirst.mockResolvedValue(mockActiveShift);
+      prisma.order.findMany.mockResolvedValueOnce([]);
+      prisma.deliveryDispatch.findMany.mockResolvedValueOnce([]);
+      prisma.order.findMany.mockResolvedValueOnce([]);
+      prisma.dailyCalculation.update.mockResolvedValueOnce({
+        ...mockActiveShift,
+        status: 'CLOSED',
+      });
+
+      const result = await service.submitDailyCalculation({
+        shift_id: mockActiveShift.id,
+        cash_submitted: 5000,
+        total_cash: 4500,
+        cash_skimming: 500, // 500 skimming
+        expense_items: [
+          { item_name: 'Kitchen Supplies', category: 'Supplies', amount: 500 }, // 500 expenses
+        ],
       });
 
       expect(result.status).toBe('CLOSED');

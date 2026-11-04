@@ -576,8 +576,12 @@ export class DailyCalculationService {
       totalExpenses += Number(item.amount || 0);
     }
 
-    // Validation: Cash Skimming and Expenses are independent cash drawer deductions
-    // Expected drawer cash is calculated as startingCash + cashSales - cashSkimming - totalExpenses
+    // Business Rule: Skimming must equal total expenses
+    if (Math.abs(cashSkimming - totalExpenses) > 0.01) {
+      throw new BadRequestException(
+        `Validation failed: Cash Skimming (PKR ${cashSkimming.toFixed(0)}) must equal total expenses (PKR ${totalExpenses.toFixed(0)}).`,
+      );
+    }
 
     const submittedAmount = dto.total_cash !== undefined
       ? Number(dto.total_cash)

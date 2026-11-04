@@ -30,7 +30,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     return expenses.fold(0.0, (sum, item) => sum + item.amount);
   }
 
-  bool get _isSkimmingMatched => true;
+  bool get _isSkimmingMatched => (_cashSkimming - _totalExpenses).abs() < 1.0;
   bool _isRevenueMatched(double systemCashSales) => (_cashSubmitted - (systemCashSales - _totalExpenses)).abs() < 1.0;
 
   void _autoFillExpectedCash(double startingCash, double systemCashSales) {
@@ -39,7 +39,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     setState(() {
       _cashSubmittedController.text = expectedCounted.toStringAsFixed(0);
       _totalCashController.text = expectedSubmitted.toStringAsFixed(0);
-      _cashSkimmingController.text = '0';
+      _cashSkimmingController.text = _totalExpenses.toStringAsFixed(0);
     });
     _onDraftFieldsChanged();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -52,10 +52,9 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
   }
 
   bool _isReconciliationComplete(double systemCashSales, double startingCash) {
-    return _cashSubmittedController.text.trim().isNotEmpty ||
-        _totalCashController.text.trim().isNotEmpty ||
-        _cashSubmitted > 0 ||
-        _cashCounted > 0;
+    return _cashSubmittedController.text.trim().isNotEmpty &&
+        _totalCashController.text.trim().isNotEmpty &&
+        _isSkimmingMatched;
   }
 
 
@@ -247,6 +246,9 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                       cashierId: authState.currentUser.id,
                     );
                     if (ctx.mounted) {
+                      final newExpenses = _totalExpenses;
+                      _cashSkimmingController.text = newExpenses.toStringAsFixed(0);
+                      _onDraftFieldsChanged();
                       Navigator.pop(ctx);
                     }
                   }
@@ -299,6 +301,37 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
       if (!mounted) return;
     }
 
+
+    if (!_isSkimmingMatched) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline_rounded, color: AppColors.danger, size: 28),
+              SizedBox(width: 10),
+              Text('Skimming Mismatch', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ],
+          ),
+          content: Text(
+            'Cannot submit daily calculation: Cash Skimming (PKR ${_cashSkimming.toStringAsFixed(0)}) must equal Total Expenses (PKR ${_totalExpenses.toStringAsFixed(0)}).\n\nPlease correct the Skimming amount before closing shift.',
+            style: const TextStyle(fontSize: 13),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryRed,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     // Calculate cash variance per Spec §21 Decision 2 (negative = shortage, positive = overage)
     final double cashVariance = _cashCounted - expectedCounted;
@@ -657,6 +690,20 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
       submittedHelperText = 'Expected Submitted: PKR ${expectedCashSubmitted.toStringAsFixed(0)} (Net Revenue)';
     }
 
+    final double skimmingDiff = _cashSkimming - _totalExpenses;
+    final bool hasEnteredSkimming = _cashSkimmingController.text.trim().isNotEmpty;
+    final bool isSkimmingBalanced = hasEnteredSkimming && skimmingDiff.abs() < 1.0;
+    final bool isSkimmingError = hasEnteredSkimming && !isSkimmingBalanced;
+
+    String? skimmingHelperText;
+    if (isSkimmingBalanced) {
+      skimmingHelperText = '✓ Perfect Match: Skimming matches expenses (PKR ${_totalExpenses.toStringAsFixed(0)})';
+    } else if (hasEnteredSkimming) {
+      skimmingHelperText = '✗ Mismatch: Must equal total expenses (PKR ${_totalExpenses.toStringAsFixed(0)}). Diff: PKR ${skimmingDiff.abs().toStringAsFixed(0)}';
+    } else {
+      skimmingHelperText = 'Must equal total expenses: PKR ${_totalExpenses.toStringAsFixed(0)}';
+    }
+
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       body: calcState.isLoading
@@ -930,12 +977,16 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                       Expanded(
                         child: _buildInputCard(
                           title: '3. Cash Skimming *',
-                          subtitle: 'Mid-shift cash dropped into safe',
+                          subtitle: 'Skimming must equal expenses',
                           controller: _cashSkimmingController,
                           icon: Icons.security_rounded,
                           iconColor: const Color(0xFFD97706),
                           bgColor: isDark ? const Color(0xFF1E293B) : Colors.white,
                           isDark: isDark,
+                          isValid: isSkimmingBalanced,
+                          isError: isSkimmingError,
+                          helperText: skimmingHelperText,
+                          helperColor: isSkimmingBalanced ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
                         ),
                       ),
                     ],

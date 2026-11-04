@@ -296,11 +296,17 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
                   syncStatus: const Value('pending_update'),
                 ),
               );
-            } else if (!isVoidedOrCancelled &&
-                (oldItem.quantity != item.quantity ||
-                    oldItem.sizeName != item.selectedSize ||
-                    oldItem.notes != (item.notes.isNotEmpty ? item.notes : null) ||
-                    oldItem.unitPrice != item.unitPrice)) {
+            } else if (!isVoidedOrCancelled) {
+              final oldSize = (oldItem.sizeName == null || oldItem.sizeName!.isEmpty) ? 'Regular' : oldItem.sizeName;
+              final itemSize = item.selectedSize.isEmpty ? 'Regular' : item.selectedSize;
+              final oldNotes = (oldItem.notes == null || oldItem.notes!.trim().isEmpty) ? null : oldItem.notes!.trim();
+              final itemNotes = item.notes.trim().isEmpty ? null : item.notes.trim();
+              final isPriceDiff = (oldItem.unitPrice - item.unitPrice).abs() > 0.01;
+
+              if (oldItem.quantity != item.quantity ||
+                  oldSize != itemSize ||
+                  oldNotes != itemNotes ||
+                  isPriceDiff) {
               // Item modified: void old item and insert new superseding item
               final voidTime = DateTime.now();
               await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(item.id!))).write(
@@ -333,6 +339,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
                   serverVersion: const Value(1),
                 ),
               );
+            }
             }
           } else {
             // New item appended

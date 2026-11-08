@@ -544,27 +544,6 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                     },
                   ),
 
-                  const SizedBox(height: 10),
-
-                  // Button 5: Assign Rider & Dispatch (Solid Red)
-                  _buildDeliveryActionPillButton(
-                    title: 'Assign Rider & Dispatch',
-                    icon: Icons.person_add_rounded,
-                    color: const Color(0xFFDC2626),
-                    isFilled: true,
-                    isDark: isDark,
-                    isEnabled: canAssignRider,
-                    onTap: () {
-                      if (selectedDel == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select a delivery order first.')),
-                        );
-                        return;
-                      }
-                      _showAssignRiderModal(context, delNotifier, delState, selectedDel);
-                    },
-                  ),
-
                   const SizedBox(height: 14),
 
                   // Direct Action: Create Delivery Order Button
@@ -1020,19 +999,6 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                               }
                               _showFinalBillModal(context, del, isDark);
                             },
-                          ),
-
-                          const SizedBox(height: 10),
-
-                          // Button 5: Assign Rider & Dispatch
-                          _buildDeliveryActionPillButton(
-                            title: del.riderName == null ? 'Assign Rider & Dispatch' : 'Change Rider',
-                            icon: Icons.person_add_rounded,
-                            color: const Color(0xFFDC2626),
-                            isFilled: true,
-                            isDark: isDark,
-                            isEnabled: canAssignRider,
-                            onTap: () => _showAssignRiderModal(context, delNotifier, delState, del),
                           ),
 
                           const SizedBox(height: 16),

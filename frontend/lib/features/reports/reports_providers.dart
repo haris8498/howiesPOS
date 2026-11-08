@@ -5,7 +5,7 @@ import '../../core/database/app_database.dart';
 import '../../services/api/api_providers.dart';
 
 final reportFiltersProvider = StateProvider<Map<String, String?>>((ref) {
-  return {'period': 'This Month'};
+  return {'period': 'today'};
 });
 
 /// Matches an order against active report filter period / dates (with offline fallback support)

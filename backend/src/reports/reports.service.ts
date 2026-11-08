@@ -103,7 +103,7 @@ export class ReportsService {
     }
 
     // For Active Shift / Live Cashier reports: Calculate strictly from Opening Time until Closing Time
-    if (p === 'current_shift' || p === 'shift') {
+    if (p === 'currentshift' || p === 'shift') {
       // 1. Check if there is an active session in dailyCalculation
       const activeSession = this.prisma.dailyCalculation
         ? await this.prisma.dailyCalculation.findFirst({
@@ -125,14 +125,12 @@ export class ReportsService {
         };
       }
 
-      if (p === 'current_shift' || p === 'shift') {
-        return {
-          start: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0),
-          end: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999),
-          periodLabel: 'Today (Shift Closed)',
-          isClosedAndEmpty: true,
-        };
-      }
+      return {
+        start: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0),
+        end: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999),
+        periodLabel: 'Today (Shift Closed)',
+        isClosedAndEmpty: true,
+      };
     }
 
     return this.resolveDateRange(dto);
@@ -271,7 +269,7 @@ export class ReportsService {
       periodLabel = 'Custom Date';
     } else if (dto.period) {
       const p = dto.period.toLowerCase().replace(/[\s_-]/g, '');
-      if (p === 'today') {
+      if (p === 'today' || p === 'currentshift' || p === 'shift') {
         start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
         end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         periodLabel = 'Today';

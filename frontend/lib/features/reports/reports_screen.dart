@@ -127,7 +127,7 @@ class ReportsScreen extends ConsumerStatefulWidget {
 }
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
-  String _selectedDateFilter = 'This Month';
+  String _selectedDateFilter = 'Today';
   DateTime _customSelectedDate = DateTime.now();
   String _selectedProductFilter = 'All Products';
   String _selectedCategoryFilter = 'All Categories';
@@ -141,7 +141,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         setState(() {
           _selectedDateFilter = 'Today';
         });
-        ref.read(reportFiltersProvider.notifier).state = {'period': 'current_shift'};
+        ref.read(reportFiltersProvider.notifier).state = {'period': 'today'};
       }
     });
   }

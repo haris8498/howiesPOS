@@ -76,6 +76,9 @@ class DeliveryOrder {
   final String deliveryAddress;
   final double deliveryCharge;
   final double totalAmount;
+  final double discountAmount;
+  final double discountPercentage;
+  final double taxAmount;
   final String itemsSummary;
   final String paymentStatus; // 'UNPAID', 'PAID'
   final String paymentMethod;
@@ -98,6 +101,9 @@ class DeliveryOrder {
     required this.deliveryAddress,
     this.deliveryCharge = 150.0,
     this.totalAmount = 1449.0,
+    this.discountAmount = 0.0,
+    this.discountPercentage = 0.0,
+    this.taxAmount = 0.0,
     this.itemsSummary = '1x Classic Fajita Pizza (Medium), 2x Fresh Lime',
     this.paymentStatus = 'UNPAID',
     this.paymentMethod = 'Cash on Delivery',
@@ -112,6 +118,13 @@ class DeliveryOrder {
     this.shiftId,
   });
 
+  double get subtotal {
+    final active = items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice);
+    if (active > 0) return active;
+    final fallback = (totalAmount - deliveryCharge - taxAmount + discountAmount);
+    return fallback > 0 ? fallback : (totalAmount - deliveryCharge).clamp(0.0, double.infinity);
+  }
+
   DeliveryOrder copyWith({
     DeliveryStatus? status,
     String? riderId,
@@ -119,6 +132,9 @@ class DeliveryOrder {
     String? paymentStatus,
     String? paymentMethod,
     double? totalAmount,
+    double? discountAmount,
+    double? discountPercentage,
+    double? taxAmount,
     String? itemsSummary,
     String? orderSource,
     String? customerName,
@@ -138,6 +154,9 @@ class DeliveryOrder {
       deliveryAddress: deliveryAddress ?? this.deliveryAddress,
       deliveryCharge: deliveryCharge ?? this.deliveryCharge,
       totalAmount: totalAmount ?? this.totalAmount,
+      discountAmount: discountAmount ?? this.discountAmount,
+      discountPercentage: discountPercentage ?? this.discountPercentage,
+      taxAmount: taxAmount ?? this.taxAmount,
       itemsSummary: itemsSummary ?? this.itemsSummary,
       paymentStatus: paymentStatus ?? this.paymentStatus,
       paymentMethod: paymentMethod ?? this.paymentMethod,
@@ -214,6 +233,21 @@ class DeliveryOrder {
         json['order_source']?.toString() ??
         'POS';
 
+    final discountAmount = double.tryParse((onlineDetail != null ? onlineDetail['discount_amount']?.toString() : null) ??
+        order['discount_amount']?.toString() ??
+        json['discount_amount']?.toString() ??
+        '0') ?? 0.0;
+
+    final discountPercentage = double.tryParse((onlineDetail != null ? onlineDetail['discount_percentage']?.toString() : null) ??
+        order['discount_percentage']?.toString() ??
+        json['discount_percentage']?.toString() ??
+        '0') ?? 0.0;
+
+    final taxAmount = double.tryParse((onlineDetail != null ? onlineDetail['tax_amount']?.toString() : null) ??
+        order['tax_amount']?.toString() ??
+        json['tax_amount']?.toString() ??
+        '0') ?? 0.0;
+
     return DeliveryOrder(
       id: json['id']?.toString() ?? '',
       orderId: order['id']?.toString() ?? json['order_id']?.toString() ?? json['id']?.toString() ?? '',
@@ -223,6 +257,9 @@ class DeliveryOrder {
       deliveryAddress: deliveryAddress,
       deliveryCharge: deliveryFee,
       totalAmount: double.tryParse(order['grand_total']?.toString() ?? json['grand_total']?.toString() ?? '0') ?? 0.0,
+      discountAmount: discountAmount,
+      discountPercentage: discountPercentage,
+      taxAmount: taxAmount,
       itemsSummary: summary,
       paymentStatus: order['payment_status']?.toString() ?? json['payment_status']?.toString() ?? 'UNPAID',
       paymentMethod: order['payment_method']?.toString() ?? json['payment_method']?.toString() ?? 'Cash on Delivery',

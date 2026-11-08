@@ -155,6 +155,9 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
             deliveryAddress: delAddress,
             deliveryCharge: fee,
             totalAmount: lo.grandTotal,
+            discountAmount: lo.discountAmount,
+            discountPercentage: lo.discountPercentage,
+            taxAmount: lo.taxAmount,
             itemsSummary: itemsDesc.isNotEmpty ? itemsDesc : 'Delivery Order',
             paymentStatus: lo.paymentStatus,
             paymentMethod: payMethod,
@@ -315,6 +318,9 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       deliveryAddress: deliveryAddress,
       deliveryCharge: deliveryFee,
       totalAmount: grandTotal,
+      discountAmount: discountAmount,
+      discountPercentage: discountPercentage,
+      taxAmount: taxAmount,
       itemsSummary: itemsSummary,
       paymentStatus: paymentStatus,
       paymentMethod: paymentMethod,
@@ -566,6 +572,108 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     } else {
       state = state.copyWith(deliveries: [order, ...state.deliveries]);
     }
+  }
+
+  Future<void> updateOrderDiscount(
+    String deliveryId, {
+    double? discountPercentage,
+    double? discountAmount,
+    double? taxAmount,
+    double? grandTotal,
+    Map<String, dynamic>? managerApproval,
+    String? approvedByManagerId,
+  }) async {
+    final target = state.deliveries.firstWhere(
+      (d) => d.id == deliveryId || d.orderId == deliveryId,
+      orElse: () => DeliveryOrder(
+        id: deliveryId,
+        orderId: deliveryId,
+        orderNumber: '',
+        customerName: '',
+        customerPhone: '',
+        deliveryAddress: '',
+        status: DeliveryStatus.pending,
+        createdAt: DateTime.now(),
+        estimatedDeliveryTime: DateTime.now(),
+      ),
+    );
+
+    final rawOrderId = target.orderId.isNotEmpty
+        ? target.orderId
+        : (deliveryId.startsWith('del_') ? deliveryId.substring(4) : (deliveryId.startsWith('del-') ? deliveryId.substring(4) : deliveryId));
+
+    final baseSubtotal = target.subtotal;
+    final pct = discountPercentage ?? target.discountPercentage;
+    final amt = discountAmount ?? (baseSubtotal * (pct / 100));
+    final taxable = (baseSubtotal - amt).clamp(0.0, double.infinity);
+    final effTax = taxAmount ?? (taxable * 0.05);
+    final effGrandTotal = grandTotal ?? (taxable + effTax + target.deliveryCharge).clamp(0.0, double.infinity);
+
+    // 1. Update in Local SQLite & sync outbox atomically
+    OrderModel? existingLocal;
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
+      try {
+        final orderRepo = _ref!.read(orderRepositoryProvider);
+        if (rawOrderId.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(rawOrderId);
+        }
+        if (existingLocal == null && target.orderNumber.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(target.orderNumber);
+        }
+        if (existingLocal == null && target.id.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(target.id);
+        }
+
+        if (existingLocal != null) {
+          final updated = existingLocal.copyWith(
+            discountPercentage: pct,
+            discountAmount: amt,
+            taxAmount: effTax,
+            grandTotalOverride: effGrandTotal,
+            approvedByManagerId: approvedByManagerId ?? managerApproval?['manager_id']?.toString(),
+            managerApproval: managerApproval,
+          );
+          await orderRepo.updateOrder(updated);
+        }
+        try {
+          _ref!.read(syncBackgroundWorkerProvider).triggerPush();
+        } catch (_) {}
+      } catch (err) {
+        print('Error updating local delivery order discount in Drift: $err');
+      }
+    }
+
+    // 2. Update backend online API
+    final backendOrderId = existingLocal?.id ?? (rawOrderId.length >= 20 ? rawOrderId : null);
+    if (backendOrderId != null && backendOrderId.isNotEmpty) {
+      try {
+        await _ordersApiService.updateOrder(backendOrderId, {
+          'discount_percentage': pct,
+          'discount_amount': amt,
+          'tax_amount': effTax,
+          'grand_total': effGrandTotal,
+          if (approvedByManagerId != null || managerApproval != null)
+            'approved_by_manager_id': approvedByManagerId ?? managerApproval?['manager_id'],
+          if (managerApproval != null) 'manager_approval': managerApproval,
+        });
+      } catch (e) {
+        print('Error updating delivery discount on backend: $e');
+      }
+    }
+
+    // 3. Update state
+    final updated = state.deliveries.map((del) {
+      if (del.id == deliveryId || del.orderId == deliveryId || (rawOrderId.isNotEmpty && del.orderId == rawOrderId)) {
+        return del.copyWith(
+          discountAmount: amt,
+          discountPercentage: pct,
+          taxAmount: effTax,
+          totalAmount: effGrandTotal,
+        );
+      }
+      return del;
+    }).toList();
+    state = state.copyWith(deliveries: updated);
   }
 
   Future<bool> assignRider(String deliveryId, String riderId, String riderName) async {

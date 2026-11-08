@@ -616,6 +616,10 @@ class ReceiptData {
     ReceiptType type = ReceiptType.customerReceipt,
     double tenderedAmount = 0.0,
     double changeReturned = 0.0,
+    double? discountAmount,
+    double? discountPercentage,
+    double? taxAmount,
+    double? taxRate,
     String? paymentMethod,
     String storeName = "HUNGRY HOWIES",
     String branchName = 'Near UOG Gate # 2 Nawaz Sharif Medical College Gujrat.',
@@ -624,7 +628,7 @@ class ReceiptData {
     bool isModified = false,
   }) {
     final items = <ReceiptItemData>[];
-    final subtotal = (order.totalAmount - order.deliveryCharge).clamp(0.0, double.infinity);
+    final subtotal = (order.totalAmount - order.deliveryCharge - order.taxAmount + order.discountAmount).clamp(0.0, double.infinity);
 
     if (order.items.isNotEmpty) {
       for (final i in order.items) {
@@ -681,7 +685,10 @@ class ReceiptData {
     final payMethod = paymentMethod ?? order.paymentMethod;
     final activeSubtotal = items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice);
     final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
-    final effGrandTotal = (effSubtotal + order.deliveryCharge).clamp(0.0, double.infinity);
+    final effDiscount = discountAmount ?? order.discountAmount;
+    final taxable = (effSubtotal - effDiscount).clamp(0.0, double.infinity);
+    final effTax = taxAmount ?? (order.taxAmount > 0 ? order.taxAmount : (taxRate != null && taxRate > 0 ? (taxable * taxRate / 100) : 0.0));
+    final effGrandTotal = (taxable + effTax + order.deliveryCharge).clamp(0.0, double.infinity);
 
     return ReceiptData(
       type: type,
@@ -698,6 +705,9 @@ class ReceiptData {
       dateTime: DateTime.now(),
       items: items,
       subtotal: effSubtotal,
+      discountAmount: effDiscount,
+      taxAmount: effTax,
+      taxRate: taxRate ?? (effSubtotal > 0 && effTax > 0 ? (effTax / effSubtotal * 100) : 0.0),
       deliveryFee: order.deliveryCharge,
       grandTotal: effGrandTotal,
       paymentMethod: payMethod.toUpperCase(),

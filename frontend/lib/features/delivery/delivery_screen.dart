@@ -1869,11 +1869,22 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
       return;
     }
 
-    final taxAmount = del.totalAmount * 0.05;
-    final grandTotal = del.totalAmount + del.deliveryCharge + taxAmount;
-    int shippingMinutes = 20;
-    final shippingController = TextEditingController(text: '$shippingMinutes');
-    final quickTimers = [10, 15, 20, 25, 30, 40, 50, 60];
+    final subtotal = del.subtotal;
+    double discountPercentage = del.discountPercentage;
+    double customDiscountAmount = del.discountAmount;
+    bool isDiscountAmountMode = customDiscountAmount > 0 && discountPercentage == 0;
+
+    if (discountPercentage > 0 && customDiscountAmount == 0 && subtotal > 0) {
+      customDiscountAmount = subtotal * (discountPercentage / 100.0);
+    } else if (customDiscountAmount > 0 && discountPercentage == 0 && subtotal > 0) {
+      discountPercentage = (customDiscountAmount / subtotal) * 100.0;
+    }
+
+    final discountController = TextEditingController(
+      text: isDiscountAmountMode
+          ? (customDiscountAmount > 0 ? customDiscountAmount.toStringAsFixed(0) : '')
+          : (discountPercentage > 0 ? discountPercentage.toStringAsFixed(0) : ''),
+    );
 
     showDialog(
       context: context,
@@ -1881,7 +1892,16 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
         builder: (context, setDialogState) {
           final now = DateTime.now();
           final dispatchTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-          final arrivalTime = DateFormat('hh:mm a').format(now.add(Duration(minutes: shippingMinutes)));
+
+          double currentDiscount = isDiscountAmountMode
+              ? customDiscountAmount
+              : (subtotal * (discountPercentage / 100.0));
+          if (currentDiscount > subtotal) currentDiscount = subtotal;
+          if (currentDiscount < 0) currentDiscount = 0;
+
+          final taxableAmount = (subtotal - currentDiscount).clamp(0.0, double.infinity);
+          final currentTax = taxableAmount * 0.05;
+          final currentGrandTotal = (taxableAmount + currentTax + del.deliveryCharge).clamp(0.0, double.infinity);
 
           return Dialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -1912,143 +1932,194 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                     const Divider(),
                     const SizedBox(height: 8),
 
-                    // Interactive Shipping Time Input Field & Presets Box
+                    // 1. DISCOUNT INPUT & SELECTOR SECTION (Matching Hungry Howie's Theme)
                     Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2563EB).withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.3)),
+                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: const Color(0xFF16A34A).withValues(alpha: 0.35),
+                          width: 1.5,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.local_shipping_rounded, size: 15, color: Color(0xFF2563EB)),
-                              SizedBox(width: 6),
-                              Text(
-                                'Shipping / Estimated Delivery Time (Minutes):',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1D4ED8)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
                           Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // Decrement Button
-                              InkWell(
-                                onTap: () {
-                                  if (shippingMinutes > 5) {
-                                    setDialogState(() {
-                                      shippingMinutes -= 5;
-                                      shippingController.text = '$shippingMinutes';
-                                    });
-                                  }
-                                },
-                                borderRadius: BorderRadius.circular(8),
-                                child: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.4)),
+                              Row(
+                                children: [
+                                  const Icon(Icons.discount_rounded, color: Color(0xFF16A34A), size: 18),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'APPLY DISCOUNT',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 12,
+                                      color: isDark ? Colors.white : AppColors.textPrimary,
+                                      letterSpacing: 0.5,
+                                    ),
                                   ),
-                                  child: const Icon(Icons.remove, size: 16, color: Color(0xFF2563EB)),
-                                ),
+                                ],
                               ),
-                              const SizedBox(width: 8),
-                              // Numeric Input Field
-                              Expanded(
-                                child: SizedBox(
-                                  height: 38,
-                                  child: TextField(
-                                    controller: shippingController,
-                                    keyboardType: TextInputType.number,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF2563EB)),
-                                    decoration: InputDecoration(
-                                      isDense: true,
-                                      contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                                      suffixText: 'mins',
-                                      suffixStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF2563EB)),
-                                      filled: true,
-                                      fillColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-                                      enabledBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.2),
-                                      ),
-                                      focusedBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        borderSide: const BorderSide(color: Color(0xFF2563EB), width: 2),
+                              // Mode Switcher: % Percent vs PKR Flat
+                              Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: AppColors.borderGray),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(() {
+                                          isDiscountAmountMode = false;
+                                          discountController.text = discountPercentage > 0 ? discountPercentage.toStringAsFixed(0) : '';
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: !isDiscountAmountMode ? const Color(0xFF16A34A) : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          '% Percent',
+                                          style: TextStyle(
+                                            color: !isDiscountAmountMode ? Colors.white : (isDark ? Colors.white70 : AppColors.textSecondary),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                    onChanged: (val) {
-                                      final parsed = int.tryParse(val.trim());
-                                      if (parsed != null && parsed > 0 && parsed <= 300) {
-                                        setDialogState(() => shippingMinutes = parsed);
-                                      }
-                                    },
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              // Increment Button
-                              InkWell(
-                                onTap: () {
-                                  if (shippingMinutes < 180) {
-                                    setDialogState(() {
-                                      shippingMinutes += 5;
-                                      shippingController.text = '$shippingMinutes';
-                                    });
-                                  }
-                                },
-                                borderRadius: BorderRadius.circular(8),
-                                child: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.4)),
-                                  ),
-                                  child: const Icon(Icons.add, size: 16, color: Color(0xFF2563EB)),
+                                    GestureDetector(
+                                      onTap: () {
+                                        setDialogState(() {
+                                          isDiscountAmountMode = true;
+                                          customDiscountAmount = (subtotal * (discountPercentage / 100.0));
+                                          discountController.text = customDiscountAmount > 0 ? customDiscountAmount.toStringAsFixed(0) : '';
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: isDiscountAmountMode ? const Color(0xFF16A34A) : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          'PKR Flat',
+                                          style: TextStyle(
+                                            color: isDiscountAmountMode ? Colors.white : (isDark ? Colors.white70 : AppColors.textSecondary),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
-                          // Quick Preset Chips
+                          const SizedBox(height: 10),
+
+                          // Quick Preset Chips for Discount
                           Wrap(
                             spacing: 6,
-                            runSpacing: 4,
-                            children: quickTimers.map((mins) {
-                              final isSel = shippingMinutes == mins;
+                            runSpacing: 6,
+                            children: (!isDiscountAmountMode
+                                ? [0.0, 5.0, 10.0, 15.0, 20.0, 50.0]
+                                : [0.0, 50.0, 100.0, 200.0, 500.0, 1000.0]).map((val) {
+                              final isSelected = !isDiscountAmountMode
+                                  ? (discountPercentage == val)
+                                  : (customDiscountAmount == val);
+                              final label = !isDiscountAmountMode
+                                  ? (val == 0.0 ? '0% (None)' : '${val.toInt()}%')
+                                  : (val == 0.0 ? 'None' : 'PKR ${val.toInt()}');
                               return InkWell(
                                 onTap: () {
                                   setDialogState(() {
-                                    shippingMinutes = mins;
-                                    shippingController.text = '$mins';
+                                    if (!isDiscountAmountMode) {
+                                      discountPercentage = val;
+                                      customDiscountAmount = subtotal * (val / 100.0);
+                                      discountController.text = val > 0 ? val.toStringAsFixed(0) : '';
+                                    } else {
+                                      customDiscountAmount = val;
+                                      discountPercentage = subtotal > 0 ? (val / subtotal) * 100.0 : 0.0;
+                                      discountController.text = val > 0 ? val.toStringAsFixed(0) : '';
+                                    }
                                   });
                                 },
                                 borderRadius: BorderRadius.circular(6),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: isSel ? const Color(0xFF2563EB) : (isDark ? const Color(0xFF1E293B) : Colors.white),
+                                    color: isSelected ? const Color(0xFF16A34A) : (isDark ? const Color(0xFF0F172A) : Colors.white),
                                     borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(color: isSel ? const Color(0xFF2563EB) : AppColors.borderGray),
+                                    border: Border.all(
+                                      color: isSelected ? const Color(0xFF16A34A) : AppColors.borderGray,
+                                      width: isSelected ? 1.5 : 1,
+                                    ),
                                   ),
                                   child: Text(
-                                    '$mins min',
+                                    label,
                                     style: TextStyle(
+                                      color: isSelected ? Colors.white : (isDark ? Colors.white70 : AppColors.textPrimary),
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                                       fontSize: 11,
-                                      fontWeight: isSel ? FontWeight.bold : FontWeight.w500,
-                                      color: isSel ? Colors.white : AppColors.textSecondary,
                                     ),
                                   ),
                                 ),
                               );
                             }).toList(),
+                          ),
+                          const SizedBox(height: 10),
+
+                          // Custom Discount TextField
+                          TextField(
+                            controller: discountController,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            style: TextStyle(
+                              color: isDark ? Colors.white : AppColors.textPrimary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: isDiscountAmountMode ? 'Discount Amount (PKR)' : 'Discount Rate (%)',
+                              labelStyle: const TextStyle(fontSize: 12),
+                              hintText: isDiscountAmountMode ? 'Enter flat discount amount' : 'Enter discount percentage',
+                              prefixText: isDiscountAmountMode ? 'PKR ' : null,
+                              prefixStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF16A34A)),
+                              suffixText: isDiscountAmountMode ? null : '%',
+                              suffixStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF16A34A)),
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              filled: true,
+                              fillColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: const BorderSide(color: Color(0xFF16A34A), width: 2),
+                              ),
+                            ),
+                            onChanged: (val) {
+                              setDialogState(() {
+                                final parsed = double.tryParse(val) ?? 0.0;
+                                if (isDiscountAmountMode) {
+                                  customDiscountAmount = parsed;
+                                  discountPercentage = subtotal > 0 ? (parsed / subtotal) * 100.0 : 0.0;
+                                } else {
+                                  discountPercentage = parsed;
+                                  customDiscountAmount = subtotal * (parsed / 100.0);
+                                }
+                              });
+                            },
                           ),
                         ],
                       ),
@@ -2081,51 +2152,68 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                           Text('Customer: ${del.customerName} (${del.customerPhone})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                           Text('Delivery Address: ${del.deliveryAddress}', style: const TextStyle(fontSize: 11)),
                           Text('Dispatched At: $dispatchTime', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                          const SizedBox(height: 8),
-
-                          // Dynamic Shipping Time Banner
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2563EB).withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.35)),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.two_wheeler_rounded, size: 14, color: Color(0xFF2563EB)),
-                                    const SizedBox(width: 5),
-                                    Text('SHIPPING TIME: $shippingMinutes MINS', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: Color(0xFF1D4ED8))),
-                                  ],
-                                ),
-                                Text(
-                                  'Est. Arrival: $arrivalTime',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF1D4ED8)),
-                                ),
-                              ],
-                            ),
-                          ),
-
                           const Divider(height: 16),
                           const Text('ORDER ITEMS SUMMARY:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF2563EB))),
                           const SizedBox(height: 4),
                           Text('• ${del.itemsSummary}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          const Divider(height: 16),
+
+                          // Itemized breakdown: Subtotal, Discount, Delivery Charge, Tax
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Subtotal:', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                              Text('PKR ${subtotal.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                            ],
+                          ),
+                          if (currentDiscount > 0) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Discount (${discountPercentage > 0 ? "${discountPercentage.toStringAsFixed(1)}%" : "Flat"}):',
+                                  style: const TextStyle(fontSize: 12, color: Color(0xFF16A34A), fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  '- PKR ${currentDiscount.toStringAsFixed(0)}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF16A34A)),
+                                ),
+                              ],
+                            ),
+                          ],
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Delivery Charges:', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                              Text('+ PKR ${del.deliveryCharge.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                            ],
+                          ),
+                          if (currentTax > 0) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('Tax (5%):', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                                Text('+ PKR ${currentTax.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                          ],
                           const Divider(height: 16),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text('CASH TO COLLECT FROM CUSTOMER:', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
                               Text(
-                                'PKR ${grandTotal.toStringAsFixed(0)}',
+                                'PKR ${currentGrandTotal.toStringAsFixed(0)}',
                                 style: const TextStyle(color: Color(0xFF2563EB), fontWeight: FontWeight.w900, fontSize: 15),
                               ),
                             ],
                           ),
+                          const SizedBox(height: 4),
                           Text(
-                            'Payment Status: ${del.paymentStatus == 'PAID' ? 'PAID ONLINE (DO NOT COLLECT)' : 'CASH ON DELIVERY (COLLECT RS/- ${grandTotal.toStringAsFixed(0)})'}',
+                            'Payment Status: ${del.paymentStatus == 'PAID' ? 'PAID ONLINE (DO NOT COLLECT)' : 'CASH ON DELIVERY (COLLECT RS/- ${currentGrandTotal.toStringAsFixed(0)})'}',
                             style: TextStyle(
                               fontSize: 10.5,
                               fontWeight: FontWeight.bold,
@@ -2142,19 +2230,39 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                         onPressed: () async {
                           Navigator.pop(dialogContext);
 
+                          // Persist the discount to delivery order (Local SQLite, Backend API, and State)
+                          await ref.read(deliveryProvider.notifier).updateOrderDiscount(
+                            del.id,
+                            discountPercentage: discountPercentage,
+                            discountAmount: currentDiscount,
+                            taxAmount: currentTax,
+                            grandTotal: currentGrandTotal,
+                          );
+
                           ref.read(deliveryProvider.notifier).markBillPrinted(del.id);
+
+                          final updatedDel = del.copyWith(
+                            discountAmount: currentDiscount,
+                            discountPercentage: discountPercentage,
+                            taxAmount: currentTax,
+                            totalAmount: currentGrandTotal,
+                            isBillPrinted: true,
+                          );
 
                           // Physical Thermal Print to Attached Laptop Printer
                           await ReceiptPrinterService.printReceipt(
                             context: context,
                             receipt: ReceiptData.fromDeliveryOrder(
-                              order: del,
+                              order: updatedDel,
                               type: ReceiptType.deliveryDispatch,
+                              discountAmount: currentDiscount,
+                              discountPercentage: discountPercentage,
+                              taxAmount: currentTax,
                             ),
                           );
                         },
                         icon: const Icon(Icons.print_rounded, size: 16),
-                        label: Text('PRINT DISPATCH BILL ($shippingMinutes MINS)'),
+                        label: Text('PRINT DISPATCH BILL (PKR ${currentGrandTotal.toStringAsFixed(0)})'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF2563EB),
                           foregroundColor: Colors.white,

@@ -121,7 +121,7 @@ class TableNotifier extends StateNotifier<TableState> {
               // Server knows occupied but doesn't have order items breakdown yet
               return st.copyWith(
                 currentOrderItems: local.currentOrderItems,
-                currentBillAmount: st.currentBillAmount > 0 ? st.currentBillAmount : local.currentBillAmount,
+                currentBillAmount: local.liveBillAmount > 0 ? local.liveBillAmount : (st.currentBillAmount > 0 ? st.currentBillAmount : local.currentBillAmount),
                 activeOrderId: st.activeOrderId ?? local.activeOrderId,
                 activeOrderNumber: st.activeOrderNumber ?? local.activeOrderNumber,
               );
@@ -152,7 +152,7 @@ class TableNotifier extends StateNotifier<TableState> {
               final localTotal = localItems.where((i) => !i.isCancelled).fold<double>(0.0, (acc, i) => acc + i.subtotal);
               return st.copyWith(
                 currentOrderItems: mappedItems,
-                currentBillAmount: st.currentBillAmount > 0 ? st.currentBillAmount : localTotal,
+                currentBillAmount: localTotal > 0 ? localTotal : st.currentBillAmount,
               );
             }
           } catch (_) {}

@@ -53,6 +53,39 @@ class RestaurantTable {
     return DateTime.now().difference(occupiedSince!).inMinutes;
   }
 
+  /// Live computed subtotal from non-cancelled active order items.
+  /// Falls back to currentBillAmount if order items are empty.
+  double get liveSubtotal {
+    if (currentOrderItems.isEmpty) return currentBillAmount;
+    double sub = 0.0;
+    bool hasItems = false;
+    for (final item in currentOrderItems) {
+      final isCancelled = item['is_cancelled'] == true ||
+          item['is_cancelled'] == 1 ||
+          item['is_cancelled'] == 'true' ||
+          item['isCancelled'] == true;
+      if (isCancelled) continue;
+      final price = (item['price'] is num)
+          ? (item['price'] as num).toDouble()
+          : (double.tryParse(item['price']?.toString() ?? '0') ?? 0.0);
+      final qty = (item['quantity'] is num)
+          ? (item['quantity'] as num).toInt()
+          : (int.tryParse(item['quantity']?.toString() ?? '1') ?? 1);
+      sub += (price * qty);
+      hasItems = true;
+    }
+    return hasItems ? sub : currentBillAmount;
+  }
+
+  /// Live payable bill amount: (liveSubtotal - discountAmount + dineInTax).
+  double get liveBillAmount {
+    if (currentOrderItems.isEmpty) return currentBillAmount;
+    final sub = liveSubtotal;
+    if (sub <= 0) return currentBillAmount;
+    final discounted = (sub - discountAmount).clamp(0.0, double.infinity);
+    return discounted + dineInTax;
+  }
+
   RestaurantTable copyWith({
     String? id,
     String? tableNumber,
@@ -228,13 +261,28 @@ class RestaurantTable {
 
     final bool isTableOccupied = parsedStatus == TableStatus.occupied;
 
+    final double rawBill = isTableOccupied ? (double.tryParse(json['current_bill_amount']?.toString() ?? '0') ?? 0.0) : 0.0;
+    double computedFromItems = 0.0;
+    if (isTableOccupied && orderItems.isNotEmpty) {
+      for (final it in orderItems) {
+        if (it['is_cancelled'] == true || it['is_cancelled'] == 1) continue;
+        final p = (it['price'] is num) ? (it['price'] as num).toDouble() : (double.tryParse(it['price']?.toString() ?? '0') ?? 0.0);
+        final q = (it['quantity'] is num) ? (it['quantity'] as num).toInt() : (int.tryParse(it['quantity']?.toString() ?? '1') ?? 1);
+        computedFromItems += (p * q);
+      }
+      if (computedFromItems > 0) {
+        computedFromItems = (computedFromItems - parsedDiscountAmount).clamp(0.0, double.infinity) + parsedDineInTax;
+      }
+    }
+    final double finalBill = computedFromItems > 0 ? computedFromItems : rawBill;
+
     return RestaurantTable(
       id: json['id']?.toString() ?? '',
       tableNumber: json['table_number']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       capacity: (json['capacity'] as num?)?.toInt() ?? 4,
       currentCustomerCount: isTableOccupied ? ((json['current_customer_count'] as num?)?.toInt() ?? 0) : 0,
-      currentBillAmount: isTableOccupied ? (double.tryParse(json['current_bill_amount']?.toString() ?? '0') ?? 0.0) : 0.0,
+      currentBillAmount: finalBill,
       dineInTax: isTableOccupied ? parsedDineInTax : 0.0,
       discountAmount: isTableOccupied ? parsedDiscountAmount : 0.0,
       discountPercentage: isTableOccupied ? parsedDiscountPercentage : 0.0,

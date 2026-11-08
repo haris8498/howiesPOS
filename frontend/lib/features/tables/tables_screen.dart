@@ -431,7 +431,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                         children: [
                                           const Text('Current Total: ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                                           Text(
-                                            'PKR ${table.currentBillAmount.toStringAsFixed(0)}',
+                                            'PKR ${table.liveBillAmount.toStringAsFixed(0)}',
                                             style: const TextStyle(
                                               color: AppColors.primaryRed,
                                               fontWeight: FontWeight.w900,
@@ -615,7 +615,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                       ),
                                     ),
                                     Text(
-                                      'PKR ${table.currentBillAmount.toStringAsFixed(0)}',
+                                      'PKR ${table.liveBillAmount.toStringAsFixed(0)}',
                                       style: const TextStyle(
                                         color: AppColors.primaryRed,
                                         fontWeight: FontWeight.w900,
@@ -824,7 +824,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                         );
                         return;
                       }
-                      if (selected.status != TableStatus.occupied && selected.currentBillAmount <= 0) {
+                      if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(content: Text('Table "${selected.name}" has no active bill.')),
                         );
@@ -848,7 +848,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                         );
                         return;
                       }
-                      if (selected.status != TableStatus.occupied && selected.currentBillAmount <= 0) {
+                      if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(content: Text('Table "${selected.name}" has no active bill to settle.')),
                         );
@@ -1242,7 +1242,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                               'tables_delete',
                               defaultIfMissing: isOwner,
                             );
-                            final bool hasBill = table.status == TableStatus.occupied && table.currentBillAmount > 0;
+                            final bool hasBill = table.status == TableStatus.occupied && table.liveBillAmount > 0;
                             final bool isSelected = _selectedTableId == table.id;
 
                             return Stack(
@@ -1294,7 +1294,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                         const SizedBox(height: 6),
                                         if (hasBill)
                                           Text(
-                                            'Bill: PKR ${table.currentBillAmount.toStringAsFixed(0)}',
+                                            'Bill: PKR ${table.liveBillAmount.toStringAsFixed(0)}',
                                             textAlign: TextAlign.center,
                                             style: const TextStyle(
                                               color: AppColors.primaryRed,
@@ -1572,7 +1572,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    'Bill: PKR ${table.currentBillAmount.toStringAsFixed(0)}',
+                                    'Bill: PKR ${table.liveBillAmount.toStringAsFixed(0)}',
                                     style: const TextStyle(
                                       color: AppColors.primaryRed,
                                       fontWeight: FontWeight.w900,
@@ -1711,7 +1711,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text('Total Bill Amount:', style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 14)),
-                                    Text('PKR ${table.currentBillAmount.toStringAsFixed(0)}', style: const TextStyle(color: AppColors.primaryRed, fontWeight: FontWeight.w900, fontSize: 18)),
+                                    Text('PKR ${table.liveBillAmount.toStringAsFixed(0)}', style: const TextStyle(color: AppColors.primaryRed, fontWeight: FontWeight.w900, fontSize: 18)),
                                   ],
                                 ),
                               ],
@@ -3087,7 +3087,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
   }
 
   Future<void> _confirmDeleteTable(BuildContext context, WidgetRef ref, RestaurantTable table, bool isDark) async {
-    final isOccupied = table.status == TableStatus.occupied && table.currentBillAmount > 0;
+    final isOccupied = table.status == TableStatus.occupied && table.liveBillAmount > 0;
     final confirmed = await showConfirmDeleteDialog(
       context: context,
       title: 'DELETE RESTAURANT TABLE',
@@ -3095,7 +3095,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
       itemType: 'Floor Table',
       description: 'Are you sure you want to delete table "${table.name}" (${table.tableNumber}) located in "${table.section}"? This table will be permanently removed from the floor layout and database.',
       warningNote: isOccupied
-          ? '⚠️ WARNING: Table is currently OCCUPIED with an active bill of PKR ${table.currentBillAmount.toStringAsFixed(0)}.'
+          ? '⚠️ WARNING: Table is currently OCCUPIED with an active bill of PKR ${table.liveBillAmount.toStringAsFixed(0)}.'
           : 'This action is permanent and cannot be undone.',
       confirmButtonText: 'DELETE TABLE',
     );
@@ -3763,7 +3763,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.6),
                       ),
                       Text(
-                        'Section: ${table.section} • Current Status: ${table.status.name.toUpperCase()}${table.currentBillAmount > 0 ? ' (Bill: PKR ${table.currentBillAmount.toStringAsFixed(0)})' : ''}',
+                        'Section: ${table.section} • Current Status: ${table.status.name.toUpperCase()}${table.liveBillAmount > 0 ? ' (Bill: PKR ${table.liveBillAmount.toStringAsFixed(0)})' : ''}',
                         style: const TextStyle(color: AppColors.brandYellow, fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                     ],

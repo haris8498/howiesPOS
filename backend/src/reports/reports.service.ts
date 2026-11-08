@@ -103,7 +103,7 @@ export class ReportsService {
     }
 
     // For Active Shift / Live Cashier reports: Calculate strictly from Opening Time until Closing Time
-    if (p === 'current_shift' || p === 'shift' || p === 'today') {
+    if (p === 'current_shift' || p === 'shift') {
       // 1. Check if there is an active session in dailyCalculation
       const activeSession = this.prisma.dailyCalculation
         ? await this.prisma.dailyCalculation.findFirst({
@@ -149,29 +149,13 @@ export class ReportsService {
     const conditions: Prisma.OrderWhereInput[] = [];
 
     if (scope.shiftId) {
-      const startOfDay = new Date(
-        scope.start.getFullYear(),
-        scope.start.getMonth(),
-        scope.start.getDate(),
-        0,
-        0,
-        0,
-        0,
-      );
-      const effectiveStart = scope.start < startOfDay ? scope.start : startOfDay;
       conditions.push({
         OR: [
           { shift_id: scope.shiftId },
           {
             shift_id: null,
             created_at: {
-              gte: effectiveStart,
-              lte: scope.end,
-            },
-          },
-          {
-            created_at: {
-              gte: effectiveStart,
+              gte: scope.start,
               lte: scope.end,
             },
           },
@@ -403,10 +387,8 @@ export class ReportsService {
     for (const ord of orders) {
       const gTotal = Number(ord.grand_total || 0);
       if (ord.payments && ord.payments.length > 0) {
-        let orderPaidSum = 0;
         for (const p of ord.payments) {
           const amt = Number(p.amount || 0);
-          orderPaidSum += amt;
           const method = (p.payment_method || '').toLowerCase();
           if (method === 'cash') {
             totalCashSales += amt;
@@ -416,10 +398,8 @@ export class ReportsService {
             totalOnlineSales += amt;
           }
         }
-        if (orderPaidSum < gTotal) {
-          totalCashSales += (gTotal - orderPaidSum);
-        }
-      } else {
+      } else if (ord.is_paid || (ord.payment_status && ord.payment_status.toUpperCase() === 'PAID')) {
+        // Fallback for legacy paid orders with no itemized payment breakdown
         totalCashSales += gTotal;
       }
     }
@@ -619,12 +599,6 @@ export class ReportsService {
               { shift_id: scope.shiftId },
               {
                 shift_id: null,
-                created_at: {
-                  gte: effectiveStart,
-                  lte: scope.end,
-                },
-              },
-              {
                 created_at: {
                   gte: effectiveStart,
                   lte: scope.end,

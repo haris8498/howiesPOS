@@ -21,19 +21,28 @@ bool _orderMatchesReportFilter(
   final now = DateTime.now();
   final oDate = order.createdAt.toLocal();
 
-  // If order explicitly belongs to active shift, or shiftId is null (pending active shift assignment)
-  if (activeShift != null && (order.shiftId == activeShift.id || order.shiftId == null)) {
+  // If order explicitly belongs to active shift
+  if (activeShift != null && order.shiftId == activeShift.id) {
     if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'thismonth') {
       return true;
     }
   }
 
-  // If unassigned shift, also treat today's orders as matching active shift/today
+  // If order explicitly belongs to another shift, do NOT match active shift
+  if (activeShift != null && order.shiftId != null && order.shiftId != activeShift.id) {
+    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
+      return false;
+    }
+  }
+
+  // If unassigned shift, only match if created during active shift window and today
   if (order.shiftId == null) {
-    if (cleanPeriod == 'today' || cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'thismonth') {
-      if (oDate.year == now.year && oDate.month == now.month && oDate.day == now.day) {
-        return true;
+    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
+      if (activeShift != null) {
+        final shiftStart = activeShift.createdAt.toLocal().subtract(const Duration(minutes: 5));
+        return oDate.isAfter(shiftStart) && oDate.year == now.year && oDate.month == now.month && oDate.day == now.day;
       }
+      return oDate.year == now.year && oDate.month == now.month && oDate.day == now.day;
     }
   }
 
@@ -86,15 +95,23 @@ final reportProductsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 
       final Map<String, Map<String, dynamic>> aggregated = {};
 
+      final db = ref.watch(appDatabaseProvider);
+      final activeShift = await db.dailyCalculationsDao.getAnyActiveCalculation();
+
       for (final ord in orders) {
         final status = (ord['status'] ?? '').toString().toLowerCase();
         if (status == 'cancelled' || status == 'rejected') continue;
+
+        final ordShiftId = ord['shift_id']?.toString();
+        if (activeShift != null && ordShiftId != null && ordShiftId != activeShift.id) {
+          continue;
+        }
 
         final createdRaw = ord['created_at'];
         if (createdRaw != null) {
           final dt = DateTime.tryParse(createdRaw.toString())?.toLocal();
           if (dt != null && dt.isBefore(todayStart)) {
-            if (filters['period']?.toLowerCase() == 'today') continue;
+            continue;
           }
         }
 

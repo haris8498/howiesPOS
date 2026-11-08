@@ -1,3 +1,5 @@
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Manages the state of active in-memory order carts across POS screens (e.g. Takeaway and Dine-In).
@@ -9,10 +11,24 @@ class OpenOrderGuardNotifier extends StateNotifier<bool> {
 
   final Set<String> _openSources = {};
 
+  void _safelyUpdateState(bool newValue) {
+    if (state == newValue) return;
+    final binding = WidgetsBinding.instance;
+    if (binding.schedulerPhase != SchedulerPhase.idle) {
+      binding.addPostFrameCallback((_) {
+        if (mounted) {
+          state = newValue;
+        }
+      });
+    } else {
+      state = newValue;
+    }
+  }
+
   /// Registers an active order cart from a given [sourceId].
   void setOrderOpen(String sourceId) {
     if (_openSources.add(sourceId)) {
-      state = true;
+      _safelyUpdateState(true);
     }
   }
 
@@ -20,7 +36,7 @@ class OpenOrderGuardNotifier extends StateNotifier<bool> {
   void clearOrderOpen(String sourceId) {
     if (!mounted) return;
     if (_openSources.remove(sourceId)) {
-      state = _openSources.isNotEmpty;
+      _safelyUpdateState(_openSources.isNotEmpty);
     }
   }
 

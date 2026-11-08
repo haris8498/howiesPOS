@@ -48,7 +48,6 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
-        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -72,7 +71,6 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
-        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -118,7 +116,6 @@ export class UsersService {
         username: true,
         role: true,
         is_default: true,
-        plain_password: true,
         last_updated: true,
         updated_by: true,
         staff_member: {
@@ -219,7 +216,6 @@ export class UsersService {
           username: true,
           role: true,
           is_default: true,
-          plain_password: true,
           last_updated: true,
           updated_by: true,
           staff_member: {

@@ -17,13 +17,13 @@ class DailyCalculationScreen extends ConsumerStatefulWidget {
 }
 
 class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen> {
+  final _cashCountedController = TextEditingController();
   final _cashSubmittedController = TextEditingController();
-  final _totalCashController = TextEditingController();
   final _cashSkimmingController = TextEditingController();
   final _closingNotesController = TextEditingController();
 
-  double get _cashCounted => double.tryParse(_cashSubmittedController.text.trim()) ?? 0.0;
-  double get _cashSubmitted => double.tryParse(_totalCashController.text.trim()) ?? 0.0;
+  double get _cashCounted => double.tryParse(_cashCountedController.text.trim()) ?? 0.0;
+  double get _cashSubmitted => double.tryParse(_cashSubmittedController.text.trim()) ?? 0.0;
   double get _cashSkimming => double.tryParse(_cashSkimmingController.text.trim()) ?? 0.0;
   double get _totalExpenses {
     final expenses = ref.read(dailyCalculationProvider).activeShiftExpenses;
@@ -31,14 +31,17 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
   }
 
   bool get _isSkimmingMatched => (_cashSkimming - _totalExpenses).abs() < 1.0;
-  bool _isRevenueMatched(double systemCashSales) => (_cashSubmitted - (systemCashSales - _totalExpenses)).abs() < 1.0;
+  bool _isRevenueMatched(double systemCashSales) {
+    final expectedSubmitted = (systemCashSales - _totalExpenses).clamp(0.0, double.infinity);
+    return (_cashSubmitted - expectedSubmitted).abs() < 1.0;
+  }
 
   void _autoFillExpectedCash(double startingCash, double systemCashSales) {
     final expectedCounted = startingCash + systemCashSales;
     final expectedSubmitted = (systemCashSales - _totalExpenses).clamp(0.0, double.infinity);
     setState(() {
-      _cashSubmittedController.text = expectedCounted.toStringAsFixed(0);
-      _totalCashController.text = expectedSubmitted.toStringAsFixed(0);
+      _cashCountedController.text = expectedCounted.toStringAsFixed(0);
+      _cashSubmittedController.text = expectedSubmitted.toStringAsFixed(0);
       _cashSkimmingController.text = _totalExpenses.toStringAsFixed(0);
     });
     _onDraftFieldsChanged();
@@ -52,8 +55,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
   }
 
   bool _isReconciliationComplete(double systemCashSales, double startingCash) {
-    return _cashSubmittedController.text.trim().isNotEmpty &&
-        _totalCashController.text.trim().isNotEmpty &&
+    return _cashCountedController.text.trim().isNotEmpty &&
+        _cashSubmittedController.text.trim().isNotEmpty &&
         _isSkimmingMatched;
   }
 
@@ -62,13 +65,13 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
   void initState() {
     super.initState();
     final state = ref.read(dailyCalculationProvider);
-    if (state.draftCashCounted > 0) _cashSubmittedController.text = state.draftCashCounted.toStringAsFixed(0);
-    if (state.draftCashSubmitted > 0) _totalCashController.text = state.draftCashSubmitted.toStringAsFixed(0);
+    if (state.draftCashCounted > 0) _cashCountedController.text = state.draftCashCounted.toStringAsFixed(0);
+    if (state.draftCashSubmitted > 0) _cashSubmittedController.text = state.draftCashSubmitted.toStringAsFixed(0);
     if (state.draftCashSkimming > 0) _cashSkimmingController.text = state.draftCashSkimming.toStringAsFixed(0);
     if (state.draftClosingNotes.isNotEmpty) _closingNotesController.text = state.draftClosingNotes;
 
+    _cashCountedController.addListener(_onDraftFieldsChanged);
     _cashSubmittedController.addListener(_onDraftFieldsChanged);
-    _totalCashController.addListener(_onDraftFieldsChanged);
     _cashSkimmingController.addListener(_onDraftFieldsChanged);
     _closingNotesController.addListener(_onDraftFieldsChanged);
 
@@ -79,8 +82,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
 
   void _onDraftFieldsChanged() {
     ref.read(dailyCalculationProvider.notifier).updateDraftInputs(
-      cashCounted: double.tryParse(_cashSubmittedController.text.trim()) ?? 0.0,
-      cashSubmitted: double.tryParse(_totalCashController.text.trim()) ?? 0.0,
+      cashCounted: double.tryParse(_cashCountedController.text.trim()) ?? 0.0,
+      cashSubmitted: double.tryParse(_cashSubmittedController.text.trim()) ?? 0.0,
       cashSkimming: double.tryParse(_cashSkimmingController.text.trim()) ?? 0.0,
       closingNotes: _closingNotesController.text.trim(),
     );
@@ -90,7 +93,9 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
   Future<void> _checkSessionAndFetch() async {
     final authState = ref.read(authProvider);
     final cashierId = authState.currentUser.id;
-    await ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(cashierId: cashierId);
+    final currentState = ref.read(dailyCalculationProvider);
+    final bool hasExisting = currentState.selectedRecord != null || currentState.liveSummary.status.isNotEmpty;
+    await ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(cashierId: cashierId, silent: hasExisting);
     final hasSession = await ref.read(dailyCalculationProvider.notifier).checkActiveSession(cashierId: cashierId);
 
     if (!hasSession && mounted) {
@@ -100,12 +105,12 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
 
   @override
   void dispose() {
+    _cashCountedController.removeListener(_onDraftFieldsChanged);
     _cashSubmittedController.removeListener(_onDraftFieldsChanged);
-    _totalCashController.removeListener(_onDraftFieldsChanged);
     _cashSkimmingController.removeListener(_onDraftFieldsChanged);
     _closingNotesController.removeListener(_onDraftFieldsChanged);
+    _cashCountedController.dispose();
     _cashSubmittedController.dispose();
-    _totalCashController.dispose();
     _cashSkimmingController.dispose();
     _closingNotesController.dispose();
     super.dispose();
@@ -268,7 +273,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     final double startingCash = calcState.startingCash > 0 ? calcState.startingCash : live.startingCash;
     final double expectedCounted = startingCash + live.totalCashSales;
 
-    if (_cashSubmittedController.text.trim().isEmpty && _totalCashController.text.trim().isEmpty) {
+    if (_cashCountedController.text.trim().isEmpty && _cashSubmittedController.text.trim().isEmpty) {
       final shouldAutoFill = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -443,8 +448,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     );
 
     if (record != null && mounted) {
+      _cashCountedController.clear();
       _cashSubmittedController.clear();
-      _totalCashController.clear();
       _cashSkimmingController.clear();
       _closingNotesController.clear();
       ref.read(dailyCalculationProvider.notifier).clearDraftInputs();
@@ -645,15 +650,16 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     final calcState = ref.watch(dailyCalculationProvider);
     final live = calcState.liveSummary;
 
-    // Expected Cash = Starting Cash + System Cash Sales - Cash Skimming - Cash Expenses
+    // Expected Cash = Starting Cash + System Cash Sales - Cash Skimming (which covers expenses)
     final double startingCash = calcState.startingCash > 0 ? calcState.startingCash : live.startingCash;
     final double totalChangeCash = calcState.totalChangeCash > 0 ? calcState.totalChangeCash : startingCash;
-    final double expectedCash = startingCash + live.totalCashSales - _cashSkimming - _totalExpenses;
+    final double effectiveDeduction = _cashSkimming > 0 ? _cashSkimming : _totalExpenses;
+    final double expectedCash = startingCash + live.totalCashSales - effectiveDeduction;
 
     // Expected Cash Counted = System Cash Sales + Starting Cash Float
     final double expectedCashCounted = startingCash + live.totalCashSales;
     final double countedDiff = _cashCounted - expectedCashCounted;
-    final bool hasEnteredCounted = _cashSubmittedController.text.trim().isNotEmpty;
+    final bool hasEnteredCounted = _cashCountedController.text.trim().isNotEmpty;
     final bool isCountedBalanced = hasEnteredCounted && countedDiff.abs() < 1.0;
     final bool isCountedError = false;
 
@@ -673,7 +679,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
     // Expected Cash Submitted = System Cash Sales - Total Expenses
     final double expectedCashSubmitted = (live.totalCashSales - _totalExpenses).clamp(0.0, double.infinity);
     final double submittedDiff = _cashSubmitted - expectedCashSubmitted;
-    final bool hasEnteredSubmitted = _totalCashController.text.trim().isNotEmpty;
+    final bool hasEnteredSubmitted = _cashSubmittedController.text.trim().isNotEmpty;
     final bool isSubmittedBalanced = hasEnteredSubmitted && submittedDiff.abs() < 1.0;
     final bool isSubmittedError = false;
 
@@ -704,9 +710,15 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
       skimmingHelperText = 'Must equal total expenses: PKR ${_totalExpenses.toStringAsFixed(0)}';
     }
 
+    final bool isInitialLoading = calcState.isLoading &&
+        calcState.selectedRecord == null &&
+        calcState.liveSummary.status.isEmpty &&
+        calcState.liveSummary.totalGrossSales == 0 &&
+        calcState.startingCash == 0;
+
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-      body: calcState.isLoading
+      body: isInitialLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(22.0),
@@ -808,7 +820,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                             tooltip: 'Refresh Live Metrics',
                             onPressed: () {
                               final authState = ref.read(authProvider);
-                              ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(cashierId: authState.currentUser.id);
+                              ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(cashierId: authState.currentUser.id, silent: true);
+                              ref.read(dailyCalculationProvider.notifier).checkActiveSession(cashierId: authState.currentUser.id);
                             },
                           ),
                         ],
@@ -942,7 +955,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                         child: _buildInputCard(
                           title: '1. Cash Counted *',
                           subtitle: 'Physical cash in drawer (Revenue + Start)',
-                          controller: _cashSubmittedController,
+                          controller: _cashCountedController,
                           icon: Icons.calculate_rounded,
                           iconColor: const Color(0xFF2563EB),
                           bgColor: isDark ? const Color(0xFF1E293B) : Colors.white,
@@ -960,7 +973,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                         child: _buildInputCard(
                           title: '2. Cash Submitted *',
                           subtitle: 'Cash Sub = Revenue - Expense',
-                          controller: _totalCashController,
+                          controller: _cashSubmittedController,
                           icon: Icons.upload_rounded,
                           iconColor: const Color(0xFF16A34A),
                           bgColor: isDark ? const Color(0xFF1E293B) : Colors.white,
@@ -1032,7 +1045,8 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                               const Divider(height: 16),
                               _buildSummaryLine('(+) Starting Cash Float:', 'PKR ${startingCash.toStringAsFixed(2)}', isDark),
                               _buildSummaryLine('(-) Cash Skimming (Safe Drops):', 'PKR ${_cashSkimming.toStringAsFixed(2)}', isDark, isRed: true),
-                              _buildSummaryLine('(-) Total Shift Cash Expenses:', 'PKR ${_totalExpenses.toStringAsFixed(2)}', isDark, isRed: true),
+                              if (_totalExpenses > 0 && (_cashSkimming - _totalExpenses).abs() > 0.01)
+                                _buildSummaryLine('(-) Unskimmed Expenses:', 'PKR ${(_totalExpenses - _cashSkimming).clamp(0.0, double.infinity).toStringAsFixed(2)}', isDark, isRed: true),
                               
                               const Divider(height: 20),
 
@@ -1313,7 +1327,7 @@ class _DailyCalculationScreenState extends ConsumerState<DailyCalculationScreen>
                                     Text(
                                       _isRevenueMatched(live.totalCashSales)
                                           ? '✓ PKR ${_cashSubmitted.toStringAsFixed(0)} == Revenue - Expenses'
-                                          : '✗ Diff: PKR ${(_cashSubmitted - (live.totalCashSales - _totalExpenses)).abs().toStringAsFixed(0)}',
+                                          : '✗ Diff: PKR ${(_cashSubmitted - ((live.totalCashSales - _totalExpenses).clamp(0.0, double.infinity))).abs().toStringAsFixed(0)}',
                                       style: TextStyle(
                                         fontSize: 10.5,
                                         fontWeight: FontWeight.w700,

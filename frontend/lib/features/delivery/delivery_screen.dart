@@ -513,12 +513,18 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
                   const SizedBox(height: 10),
 
-                  // Button 4: Receive Payment (Solid Green)
+                  // Button 4: Receive Payment (or Payment Received ✓ if paid)
                   _buildDeliveryActionPillButton(
-                    title: selectedDel != null ? 'Receive Payment (PKR ${selectedDel.totalAmount.toStringAsFixed(0)})' : 'Receive Payment',
-                    icon: Icons.attach_money_rounded,
-                    color: const Color(0xFF16A34A),
-                    isFilled: true,
+                    title: isPaid
+                        ? 'Payment Received ✓'
+                        : (selectedDel != null
+                            ? 'Receive Payment (PKR ${selectedDel.totalAmount.toStringAsFixed(0)})'
+                            : 'Receive Payment'),
+                    icon: isPaid ? Icons.check_circle_rounded : Icons.attach_money_rounded,
+                    color: isPaid
+                        ? (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8))
+                        : const Color(0xFF16A34A),
+                    isFilled: !isPaid,
                     isDark: isDark,
                     isEnabled: canReceivePayment,
                     onTap: () {
@@ -993,12 +999,16 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
                           const SizedBox(height: 10),
 
-                          // Button 4: Receive Payment
+                          // Button 4: Receive Payment (or Payment Received ✓ if paid)
                           _buildDeliveryActionPillButton(
-                            title: 'Receive Payment (PKR ${del.totalAmount.toStringAsFixed(0)})',
-                            icon: Icons.attach_money_rounded,
-                            color: const Color(0xFF16A34A),
-                            isFilled: true,
+                            title: isPaid
+                                ? 'Payment Received ✓'
+                                : 'Receive Payment (PKR ${del.totalAmount.toStringAsFixed(0)})',
+                            icon: isPaid ? Icons.check_circle_rounded : Icons.attach_money_rounded,
+                            color: isPaid
+                                ? (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8))
+                                : const Color(0xFF16A34A),
+                            isFilled: !isPaid,
                             isDark: isDark,
                             isEnabled: canSettleSelected,
                             onTap: () {
@@ -5093,14 +5103,15 @@ class _CancelDeliveryItemModalState extends State<_CancelDeliveryItemModal> {
                 reason: effectiveReason,
               );
             } catch (_) {}
+          } else {
+            await ordersApi.cancelOrderItem(
+              orderId,
+              itemId: itemId,
+              cancelQuantity: cancelQty,
+              reason: effectiveReason,
+              cancelledBy: cashierName,
+            );
           }
-          await ordersApi.cancelOrderItem(
-            orderId,
-            itemId: itemId,
-            cancelQuantity: cancelQty,
-            reason: effectiveReason,
-            cancelledBy: cashierName,
-          );
         }
       }
       if (FeatureFlags.offlineFirstEnabled) {

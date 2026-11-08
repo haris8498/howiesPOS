@@ -442,10 +442,21 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
 
   @override
   Future<OrderModel?> getOrderById(String id) async {
-    final o = await _db.ordersDao.getOrderById(id);
+    var o = await _db.ordersDao.getOrderById(id);
+    if (o == null) {
+      final clean = id.replaceAll('#', '').trim();
+      final withHash = '#$clean';
+      o = await (_db.select(_db.localOrders)
+            ..where((t) => (t.orderNumber.equals(id) |
+                            t.orderNumber.equals(clean) |
+                            t.orderNumber.equals(withHash)) &
+                           t.isDeleted.equals(false))
+            ..limit(1))
+          .getSingleOrNull();
+    }
     if (o == null || o.isDeleted) return null;
-    final items = await _db.ordersDao.getOrderItems(id);
-    final payments = await _db.ordersDao.getOrderPayments(id);
+    final items = await _db.ordersDao.getOrderItems(o.id);
+    final payments = await _db.ordersDao.getOrderPayments(o.id);
     return _mapToOrderModel(o, items, payments);
   }
 

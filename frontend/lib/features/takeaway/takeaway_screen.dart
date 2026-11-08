@@ -1992,7 +1992,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                           ],
                         ),
                         const SizedBox(height: 4),
-                        Text('Time: ${order.createdAt.hour.toString().padLeft(2, '0')}:${order.createdAt.minute.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                        Text('Time: ${DateFormat('hh:mm a').format(order.createdAt.toLocal())}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
                         const Divider(height: 16),
                         const Text('ITEMS TO PREPARE:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFD97706))),
                         const SizedBox(height: 6),
@@ -4535,7 +4535,11 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     }
 
     if (_cartItems.isNotEmpty) {
-      _orderGuardNotifier.setOrderOpen(_orderGuardId);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _orderGuardNotifier.setOrderOpen(_orderGuardId);
+        }
+      });
     }
   }
 

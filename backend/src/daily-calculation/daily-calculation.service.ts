@@ -589,7 +589,8 @@ export class DailyCalculationService {
     const expectedSubmitted = Math.max(0, live.total_cash_sales - cashRefundsTotal - totalExpenses);
     const expectedCounted = startingCash + live.total_cash_sales - cashRefundsTotal;
 
-    const expectedCash = startingCash + live.total_cash_sales - cashRefundsTotal - cashSkimming - totalExpenses;
+    const effectiveExpenseDeduction = cashSkimming > 0 ? cashSkimming : totalExpenses;
+    const expectedCash = startingCash + live.total_cash_sales - cashRefundsTotal - effectiveExpenseDeduction;
     const variance = dto.cash_variance !== undefined
       ? Number(dto.cash_variance)
       : (submittedAmount - expectedSubmitted);
@@ -807,6 +808,13 @@ export class DailyCalculationService {
       },
       orderBy: { created_at: 'desc' },
     });
+
+    if (!activeSession) {
+      activeSession = await this.prisma.dailyCalculation.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { created_at: 'desc' },
+      });
+    }
 
     if (!activeSession) {
       activeSession = await this.prisma.dailyCalculation.create({

@@ -2320,9 +2320,61 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
           ref: ref,
           isDark: isDark,
           onPrint: (subtotal, discountAmount, taxAmount, grandTotal, taxRate, discountPercentage, managerApproval) async {
-            // Printing a final bill / pre-bill is strictly a read-only operation.
-            // It must never modify order items, cancellation status, quantities, payments, or order totals.
             if (!context.mounted) return;
+
+            // 1. Update Table in memory state and repository so discount and tax persist
+            final notifier = ref.read(tableProvider.notifier);
+            await notifier.updateTableBillAndStatus(
+              table.id,
+              grandTotal,
+              TableStatus.occupied,
+              activeOrderId: table.activeOrderId,
+              activeOrderNumber: table.activeOrderNumber,
+              orderItems: table.currentOrderItems,
+              discountAmount: discountAmount,
+              discountPercentage: discountPercentage,
+              dineInTax: taxAmount,
+            );
+
+            // 2. Persist discount and tax into active Order in Drift SQLite & PostgreSQL
+            final effectiveOrderId = table.activeOrderId ?? table.activeOrderNumber;
+            if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
+              try {
+                if (FeatureFlags.offlineFirstEnabled) {
+                  final orderRepo = ref.read(orderRepositoryProvider);
+                  var existing = await orderRepo.getOrderById(effectiveOrderId);
+                  if (existing == null && table.activeOrderNumber != null) {
+                    existing = await orderRepo.getOrderById(table.activeOrderNumber!);
+                  }
+                  if (existing != null) {
+                    final updated = existing.copyWith(
+                      discountAmount: discountAmount,
+                      discountPercentage: discountPercentage,
+                      taxAmount: taxAmount,
+                      grandTotalOverride: grandTotal,
+                      dineInDetail: existing.dineInDetail?.copyWith(
+                        dineInTax: taxAmount,
+                      ),
+                    );
+                    await orderRepo.updateOrder(updated);
+                    ref.read(syncBackgroundWorkerProvider).triggerPush();
+                  }
+                } else {
+                  final ordersApi = ref.read(ordersApiServiceProvider);
+                  await ordersApi.updateOrder(effectiveOrderId, {
+                    'discount_amount': discountAmount,
+                    'discount_percentage': discountPercentage,
+                    'tax_amount': taxAmount,
+                    'dine_in_tax': taxAmount,
+                    'grand_total': grandTotal,
+                  });
+                }
+              } catch (e) {
+                debugPrint('⚠️ Error saving discount & tax to order in DB: $e');
+              }
+            }
+
+            // 3. Print the receipt slip
             await ReceiptPrinterService.printReceipt(
               context: context,
               receipt: ReceiptData.fromTablePreBill(
@@ -3266,7 +3318,11 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
       }
     }
     if (_cartItems.isNotEmpty) {
-      _orderGuardNotifier.setOrderOpen(_orderGuardId);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _orderGuardNotifier.setOrderOpen(_orderGuardId);
+        }
+      });
     }
     _loadMenuAndDatabaseOrder();
   }
@@ -5557,12 +5613,19 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () async {
-                        final effectiveOrderId = widget.table.activeOrderId ?? (orderId.length >= 20 ? orderId : null);
+                        final effectiveOrderId = (widget.table.activeOrderId != null && widget.table.activeOrderId!.isNotEmpty)
+                            ? widget.table.activeOrderId!
+                            : ((widget.table.activeOrderNumber != null && widget.table.activeOrderNumber!.isNotEmpty)
+                                ? widget.table.activeOrderNumber!
+                                : (orderId.isNotEmpty && !orderId.startsWith('INV-') ? orderId : null));
                         if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
                           try {
                             if (FeatureFlags.offlineFirstEnabled) {
                               final orderRepo = widget.ref.read(orderRepositoryProvider);
-                              final existing = await orderRepo.getOrderById(effectiveOrderId);
+                              var existing = await orderRepo.getOrderById(effectiveOrderId);
+                              if (existing == null && widget.table.activeOrderNumber != null) {
+                                existing = await orderRepo.getOrderById(widget.table.activeOrderNumber!);
+                              }
                               if (existing != null) {
                                 final paidOrder = existing.copyWith(
                                   status: OrderStatus.completed,
@@ -5587,6 +5650,7 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                                   dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmount),
                                 );
                                 await orderRepo.updateOrder(paidOrder);
+                                widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
                               }
                             } else {
                               final ordersApi = widget.ref.read(ordersApiServiceProvider);
@@ -6121,7 +6185,11 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
       return;
     }
 
-    final effectiveOrderId = widget.table.activeOrderId ?? (widget.orderId.length >= 20 ? widget.orderId : null);
+    final effectiveOrderId = (widget.table.activeOrderId != null && widget.table.activeOrderId!.isNotEmpty)
+        ? widget.table.activeOrderId!
+        : ((widget.table.activeOrderNumber != null && widget.table.activeOrderNumber!.isNotEmpty)
+            ? widget.table.activeOrderNumber!
+            : (widget.orderId.isNotEmpty && !widget.orderId.startsWith('INV-') ? widget.orderId : null));
 
     final cash = double.tryParse(_cashController.text) ?? 0.0;
     final credit = double.tryParse(_creditController.text) ?? 0.0;
@@ -6220,7 +6288,10 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
       try {
         if (FeatureFlags.offlineFirstEnabled) {
           final orderRepo = widget.ref.read(orderRepositoryProvider);
-          final existing = await orderRepo.getOrderById(effectiveOrderId);
+          var existing = await orderRepo.getOrderById(effectiveOrderId);
+          if (existing == null && widget.table.activeOrderNumber != null) {
+            existing = await orderRepo.getOrderById(widget.table.activeOrderNumber!);
+          }
           if (existing != null) {
             final mappedPayments = paymentsList.map((p) => OrderPaymentModel(
               id: const Uuid().v7(),
@@ -6245,6 +6316,7 @@ class _PaymentTenderDialogState extends State<_PaymentTenderDialog> {
               dineInDetail: existing.dineInDetail?.copyWith(dineInTax: taxAmt),
             );
             await orderRepo.updateOrder(updated);
+            widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
           }
         } else {
           final ordersApi = widget.ref.read(ordersApiServiceProvider);

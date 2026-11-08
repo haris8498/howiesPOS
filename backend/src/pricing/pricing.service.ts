@@ -33,6 +33,8 @@ export interface PricingCalculationOptions {
   rejectOnlineMismatch?: boolean;
   taxAmount?: number | Prisma.Decimal;
   taxPercentage?: number | Prisma.Decimal;
+  serviceChargeAmount?: number | Prisma.Decimal;
+  serviceChargePercentage?: number | Prisma.Decimal;
   deliveryFee?: number | Prisma.Decimal;
   isCashierDiscount?: boolean;
   staffRole?: string;
@@ -55,6 +57,7 @@ export interface PricingCalculationResult {
   taxableAmount: Prisma.Decimal;
   taxAmount: Prisma.Decimal;
   dineInTax: Prisma.Decimal;
+  serviceChargeAmount: Prisma.Decimal;
   deliveryFee: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
   clientReportedTotal?: Prisma.Decimal;
@@ -507,9 +510,26 @@ export class PricingService {
       order.online_detail?.delivery_fee ?? options?.deliveryFee ?? 0,
     );
 
+    let serviceChargeAmount = new Prisma.Decimal('0.00');
+    if (options?.serviceChargeAmount !== undefined) {
+      serviceChargeAmount = new Prisma.Decimal(options.serviceChargeAmount);
+    } else if (options?.serviceChargePercentage !== undefined) {
+      serviceChargeAmount = isDineIn
+        ? taxableAmount.times(new Prisma.Decimal(options.serviceChargePercentage)).dividedBy(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+        : new Prisma.Decimal('0.00');
+    } else if (isDineIn) {
+      const standard5Pct = taxableAmount.times(0.05).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      const expectedWith5Pct = taxableAmount.plus(taxAmount).plus(standard5Pct);
+      const currentClientTotal = options?.clientGrandTotal !== undefined ? new Prisma.Decimal(options.clientGrandTotal) : new Prisma.Decimal(order.grand_total);
+      if (currentClientTotal.minus(expectedWith5Pct).abs().lessThanOrEqualTo(new Prisma.Decimal(process.env.PRICING_ROUNDING_TOLERANCE || '1.00'))) {
+        serviceChargeAmount = standard5Pct;
+      }
+    }
+
     // 7. Authoritative Grand Total
     const serverGrandTotal = taxableAmount
       .plus(taxAmount)
+      .plus(serviceChargeAmount)
       .plus(deliveryFee)
       .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 
@@ -633,6 +653,7 @@ export class PricingService {
       taxableAmount,
       taxAmount,
       dineInTax,
+      serviceChargeAmount,
       deliveryFee,
       grandTotal: serverGrandTotal,
       clientReportedTotal: clientTotal,

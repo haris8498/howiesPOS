@@ -87,6 +87,7 @@ class DeliveryOrder {
   final String orderSource; // 'Online Orders', 'Direct Delivery'
   final bool isBillPrinted;
   final List<OrderItem> items;
+  final String? shiftId;
 
   const DeliveryOrder({
     required this.id,
@@ -108,6 +109,7 @@ class DeliveryOrder {
     this.orderSource = 'Direct Delivery',
     this.isBillPrinted = false,
     this.items = const [],
+    this.shiftId,
   });
 
   DeliveryOrder copyWith({
@@ -125,6 +127,7 @@ class DeliveryOrder {
     double? deliveryCharge,
     bool? isBillPrinted,
     List<OrderItem>? items,
+    String? shiftId,
   }) {
     return DeliveryOrder(
       id: id,
@@ -146,6 +149,7 @@ class DeliveryOrder {
       orderSource: orderSource ?? this.orderSource,
       isBillPrinted: isBillPrinted ?? this.isBillPrinted,
       items: items ?? this.items,
+      shiftId: shiftId ?? this.shiftId,
     );
   }
 
@@ -226,13 +230,14 @@ class DeliveryOrder {
       riderId: json['rider_id']?.toString() ?? rider?['id']?.toString(),
       riderName: rider?['name']?.toString(),
       createdAt: order['created_at'] != null
-          ? DateTime.tryParse(order['created_at'].toString()) ?? DateTime.now()
+          ? DateTime.tryParse(order['created_at'].toString())?.toLocal() ?? DateTime.now()
           : DateTime.now(),
       estimatedDeliveryTime: json['estimated_delivery_time'] != null
-          ? DateTime.tryParse(json['estimated_delivery_time'].toString()) ?? DateTime.now().add(const Duration(minutes: 30))
+          ? DateTime.tryParse(json['estimated_delivery_time'].toString())?.toLocal() ?? DateTime.now().add(const Duration(minutes: 30))
           : DateTime.now().add(const Duration(minutes: 30)),
       orderSource: orderSource,
       items: parsedItems,
+      shiftId: order['shift_id']?.toString() ?? json['shift_id']?.toString(),
     );
   }
 }

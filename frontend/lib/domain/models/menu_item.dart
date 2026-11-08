@@ -11,6 +11,8 @@ class MenuItem {
   final List<String> availableSizes;
   final List<String> availableCrustsOrBuns;
   final List<String> availableToppings;
+  final Map<String, double> sizePrices;
+  final Map<String, double> optionPrices;
 
   const MenuItem({
     required this.id,
@@ -25,6 +27,8 @@ class MenuItem {
     this.availableSizes = const ['Regular', 'Large', 'Extra Large'],
     this.availableCrustsOrBuns = const ['Original', 'Butter Cheese', 'Garlic Herb', 'Sesame Bun', 'Brioche Bun'],
     this.availableToppings = const ['Extra Cheese', 'Pepperoni', 'Bacon', 'Jalapeños', 'Mushrooms'],
+    this.sizePrices = const {},
+    this.optionPrices = const {},
   });
 
   MenuItem copyWith({
@@ -40,6 +44,8 @@ class MenuItem {
     List<String>? availableSizes,
     List<String>? availableCrustsOrBuns,
     List<String>? availableToppings,
+    Map<String, double>? sizePrices,
+    Map<String, double>? optionPrices,
   }) {
     return MenuItem(
       id: id ?? this.id,
@@ -54,6 +60,8 @@ class MenuItem {
       availableSizes: availableSizes ?? this.availableSizes,
       availableCrustsOrBuns: availableCrustsOrBuns ?? this.availableCrustsOrBuns,
       availableToppings: availableToppings ?? this.availableToppings,
+      sizePrices: sizePrices ?? this.sizePrices,
+      optionPrices: optionPrices ?? this.optionPrices,
     );
   }
 
@@ -98,10 +106,15 @@ class MenuItem {
 
     // Sizes
     List<String> sizes = [];
+    Map<String, double> sizePrices = {};
     if (json['sizes'] is List) {
       for (final s in json['sizes'] as List) {
         if (s is Map && s['size_name'] != null) {
-          sizes.add(s['size_name'].toString());
+          final sName = s['size_name'].toString();
+          sizes.add(sName);
+          if (s['price'] != null) {
+            sizePrices[sName] = double.tryParse(s['price'].toString()) ?? 0.0;
+          }
         }
       }
     }
@@ -112,14 +125,19 @@ class MenuItem {
     // Options (crusts, buns, toppings)
     List<String> crusts = [];
     List<String> toppings = [];
+    Map<String, double> optionPrices = {};
     if (json['options'] is List) {
       for (final o in json['options'] as List) {
         if (o is Map && o['option_name'] != null) {
+          final oName = o['option_name'].toString();
           final type = o['option_type']?.toString().toLowerCase() ?? '';
+          if (o['additional_price'] != null) {
+            optionPrices[oName] = double.tryParse(o['additional_price'].toString()) ?? 0.0;
+          }
           if (type.contains('topping')) {
-            toppings.add(o['option_name'].toString());
+            toppings.add(oName);
           } else {
-            crusts.add(o['option_name'].toString());
+            crusts.add(oName);
           }
         }
       }
@@ -144,6 +162,8 @@ class MenuItem {
       availableSizes: sizes,
       availableCrustsOrBuns: crusts,
       availableToppings: toppings,
+      sizePrices: sizePrices,
+      optionPrices: optionPrices,
     );
   }
 }

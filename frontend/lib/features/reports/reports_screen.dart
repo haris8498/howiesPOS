@@ -141,7 +141,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         setState(() {
           _selectedDateFilter = 'Today';
         });
-        ref.read(reportFiltersProvider.notifier).state = {'period': 'today'};
+        ref.read(reportFiltersProvider.notifier).state = {'period': 'current_shift'};
       }
     });
   }
@@ -758,10 +758,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 const SizedBox(width: 14),
                 Expanded(
                   child: _buildReportStatCard(
-                    title: 'AVG ITEM PRICE',
-                    value: 'PKR ${avgItemPrice.toStringAsFixed(0)}',
-                    subtitle: 'Weighted avg / dish',
-                    icon: Icons.shopping_bag_rounded,
+                    title: 'DIGITAL AMOUNT',
+                    value: 'PKR ${(totalCardSales + totalOnlineSales).toStringAsFixed(0)}',
+                    subtitle: 'Card & digital receipts',
+                    icon: Icons.credit_card_rounded,
                     iconColor: const Color(0xFF0284C7),
                     bgColor: const Color(0xFFF0F9FF),
                     isDark: isDark,
@@ -782,12 +782,12 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 const SizedBox(width: 14),
                 Expanded(
                   child: _buildReportStatCard(
-                    title: 'ESTIMATED NET PROFIT',
-                    value: 'PKR ${netProfit.toStringAsFixed(0)}',
-                    subtitle: 'Revenue minus expenses',
-                    icon: Icons.trending_up_rounded,
-                    iconColor: netProfit >= 0 ? const Color(0xFF059669) : AppColors.danger,
-                    bgColor: netProfit >= 0 ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+                    title: 'AMOUNT IN CASH',
+                    value: 'PKR ${totalCashSales.toStringAsFixed(0)}',
+                    subtitle: 'Physical cash received',
+                    icon: Icons.payments_rounded,
+                    iconColor: const Color(0xFF059669),
+                    bgColor: const Color(0xFFECFDF5),
                     isDark: isDark,
                   ),
                 ),

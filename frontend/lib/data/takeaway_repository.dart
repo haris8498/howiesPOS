@@ -64,6 +64,13 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
 
     // 1. First, load from local Drift SQLite if offline-first is enabled:
     List<TakeawayOrder> localTakeawayOrders = [];
+    final calcState = _ref?.read(dailyCalculationProvider);
+    final bool hasActiveSession = calcState?.hasActiveSession ?? true;
+    final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+        ? calcState.liveSummary.shiftId
+        : calcState?.selectedRecord?.id;
+    final DateTime? activeShiftStartTime = calcState?.liveSummary.openedAt ?? calcState?.selectedRecord?.createdAt;
+
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final db = _ref!.read(appDatabaseProvider);
@@ -73,6 +80,16 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             .get();
 
         for (final lo in localOrders) {
+          final isCompleted = lo.status == 'completed' || lo.status == 'served';
+          if (isCompleted) {
+            if (!hasActiveSession) continue;
+            if (activeShiftId != null && lo.shiftId != null && lo.shiftId != activeShiftId) {
+              continue;
+            }
+            if (activeShiftStartTime != null && lo.createdAt.isBefore(activeShiftStartTime.subtract(const Duration(seconds: 10)))) {
+              continue;
+            }
+          }
           final items = await db.ordersDao.getOrderItems(lo.id);
           final outbox = await (db.select(db.syncOutbox)
                 ..where((t) => t.entityId.equals(lo.id))
@@ -149,8 +166,10 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
       if (jsonList.isNotEmpty) {
         final calcState = _ref?.read(dailyCalculationProvider);
         final bool hasActiveSession = calcState?.hasActiveSession ?? true;
-        final String? activeShiftId = calcState?.selectedRecord?.id;
-        final DateTime? activeShiftStartTime = calcState?.selectedRecord?.createdAt;
+        final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+            ? calcState.liveSummary.shiftId
+            : calcState?.selectedRecord?.id;
+        final DateTime? activeShiftStartTime = calcState?.liveSummary.openedAt ?? calcState?.selectedRecord?.createdAt;
 
         int maxToken = 1;
         final list = jsonList
@@ -176,11 +195,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
                 return ord.createdAt.isAfter(activeShiftStartTime.subtract(const Duration(seconds: 10)));
               }
 
-              // Fallback to today if no shift record found
-              final now = DateTime.now();
-              return ord.createdAt.year == now.year &&
-                  ord.createdAt.month == now.month &&
-                  ord.createdAt.day == now.day;
+              return false;
             })
             .map((ord) {
               String status = 'In Kitchen';

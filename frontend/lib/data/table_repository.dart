@@ -107,8 +107,8 @@ class TableNotifier extends StateNotifier<TableState> {
                       keepLocalOccupied = true;
                     }
                   } else {
-                    // Local unpushed order or test placeholder
-                    keepLocalOccupied = true;
+                    // No local order exists on this terminal; defer to server authority
+                    keepLocalOccupied = false;
                   }
                 } catch (_) {}
               }
@@ -377,6 +377,9 @@ class TableNotifier extends StateNotifier<TableState> {
     String? activeOrderId,
     String? activeOrderNumber,
     List<Map<String, dynamic>>? orderItems,
+    double? discountAmount,
+    double? discountPercentage,
+    double? dineInTax,
   }) async {
     final localDb = db;
     if (FeatureFlags.offlineFirstEnabled && localDb != null) {
@@ -429,6 +432,9 @@ class TableNotifier extends StateNotifier<TableState> {
           currentOrderItems: newStatus == TableStatus.occupied
               ? (orderItems ?? table.currentOrderItems)
               : [],
+          discountAmount: newStatus == TableStatus.occupied ? (discountAmount ?? table.discountAmount) : 0.0,
+          discountPercentage: newStatus == TableStatus.occupied ? (discountPercentage ?? table.discountPercentage) : 0.0,
+          dineInTax: newStatus == TableStatus.occupied ? (dineInTax ?? table.dineInTax) : 0.0,
         );
       }
       return table;

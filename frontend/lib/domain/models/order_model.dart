@@ -143,11 +143,15 @@ class OrderItem {
 
   double get unitPrice {
     if (backendUnitPrice != null) return backendUnitPrice!;
-    double price = item.basePrice;
-    if (selectedSize == 'Medium') price += 2.0;
-    if (selectedSize == 'Large') price += 5.0;
-    if (selectedSize == 'Extra Large') price += 8.0;
-    price += extraToppings.length * 1.5;
+    double price = item.sizePrices[selectedSize] ?? item.basePrice;
+    if (item.sizePrices.isEmpty) {
+      if (selectedSize == 'Medium') price += 2.0;
+      if (selectedSize == 'Large') price += 5.0;
+      if (selectedSize == 'Extra Large') price += 8.0;
+    }
+    for (final t in extraToppings) {
+      price += item.optionPrices[t] ?? 50.0;
+    }
     return price;
   }
 

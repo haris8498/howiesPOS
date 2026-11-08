@@ -297,7 +297,7 @@ class EscPosBuilder {
 
     // 2. METADATA: Receipt # and Date
     final displayOrderNum = format3DigitOrderNumber(receipt.orderNumber);
-    final dateStr = DateFormat('dd-MMM-yyyy hh:mm:ss a').format(receipt.dateTime);
+    final dateStr = DateFormat('dd-MMM-yyyy hh:mm:ss a').format(receipt.dateTime.toLocal());
     builder.writeLine('Receipt #: $displayOrderNum', align: EscPosAlign.left);
     builder.writeLine('Date: $dateStr', align: EscPosAlign.left);
 
@@ -531,8 +531,8 @@ class EscPosBuilder {
     }
 
     // 3. METADATA: Date & Time (immediately following subheader without extra gap)
-    final dateStr = 'Date: ${DateFormat('MMM d yyyy').format(receipt.dateTime)}';
-    final timeStr = 'Time: ${DateFormat('HH:mm').format(receipt.dateTime)}';
+    final dateStr = 'Date: ${DateFormat('MMM d yyyy').format(receipt.dateTime.toLocal())}';
+    final timeStr = 'Time: ${DateFormat('hh:mm a').format(receipt.dateTime.toLocal())}';
 
     _writeTwoColumnLine(builder, width, 'Ticket: #$displayOrderNum', timeStr);
     builder.writeLine(dateStr, align: EscPosAlign.left);
@@ -823,7 +823,7 @@ class EscPosBuilder {
     }
 
     builder.divider();
-    final dateStr = DateFormat('dd-MMM-yyyy hh:mm a').format(date);
+    final dateStr = DateFormat('dd-MMM-yyyy hh:mm a').format(date.toLocal());
     builder.writeLine('Date: $dateStr', align: EscPosAlign.left);
     builder.writeLine('Shift ID: $shiftId', align: EscPosAlign.left);
     builder.writeLine('Cashier: $cashierName', align: EscPosAlign.left);

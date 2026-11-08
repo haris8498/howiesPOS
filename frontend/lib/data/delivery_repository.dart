@@ -65,6 +65,13 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
 
     // 1. First, load any delivery/online orders from local Drift SQLite
     List<DeliveryOrder> localDeliveries = [];
+    final calcState = _ref?.read(dailyCalculationProvider);
+    final bool hasActiveSession = calcState?.hasActiveSession ?? true;
+    final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+        ? calcState.liveSummary.shiftId
+        : calcState?.selectedRecord?.id;
+    final DateTime? activeShiftStartTime = calcState?.liveSummary.openedAt ?? calcState?.selectedRecord?.createdAt;
+
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final db = _ref!.read(appDatabaseProvider);
@@ -74,6 +81,16 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
             .get();
 
         for (final lo in localOrders) {
+          final isCompleted = lo.status == 'completed' || lo.status == 'delivered';
+          if (isCompleted) {
+            if (!hasActiveSession) continue;
+            if (activeShiftId != null && lo.shiftId != null && lo.shiftId != activeShiftId) {
+              continue;
+            }
+            if (activeShiftStartTime != null && lo.createdAt.isBefore(activeShiftStartTime.subtract(const Duration(seconds: 10)))) {
+              continue;
+            }
+          }
           final items = await db.ordersDao.getOrderItems(lo.id);
           final outbox = await (db.select(db.syncOutbox)
                 ..where((t) => t.entityId.equals(lo.id))
@@ -161,8 +178,10 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       final now = DateTime.now();
       final calcState = _ref?.read(dailyCalculationProvider);
       final bool hasActiveSession = calcState?.hasActiveSession ?? true;
-      final String? activeShiftId = calcState?.selectedRecord?.id;
-      final DateTime? activeShiftStartTime = calcState?.selectedRecord?.createdAt;
+      final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+          ? calcState.liveSummary.shiftId
+          : calcState?.selectedRecord?.id;
+      final DateTime? activeShiftStartTime = calcState?.liveSummary.openedAt ?? calcState?.selectedRecord?.createdAt;
 
       // 2. Dispatches (already created dispatch records)
       final dispatchesJson = await _deliveryApiService.listDispatches();
@@ -173,13 +192,13 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
                 d.status != DeliveryStatus.cancelled;
             if (isActive) return true;
             if (!hasActiveSession) return false;
+            if (activeShiftId != null && d.shiftId != null) {
+              return d.shiftId == activeShiftId;
+            }
             if (activeShiftStartTime != null) {
               return d.createdAt.isAfter(activeShiftStartTime.subtract(const Duration(seconds: 10)));
             }
-            final isToday = d.createdAt.year == now.year &&
-                d.createdAt.month == now.month &&
-                d.createdAt.day == now.day;
-            return isToday;
+            return false;
           })
           .where((d) =>
               d.orderSource.toLowerCase() == 'pos' ||
@@ -202,9 +221,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
               } else if (activeShiftStartTime != null) {
                 shouldInclude = ord.createdAt.isAfter(activeShiftStartTime.subtract(const Duration(seconds: 10)));
               } else {
-                shouldInclude = ord.createdAt.year == now.year &&
-                    ord.createdAt.month == now.month &&
-                    ord.createdAt.day == now.day;
+                shouldInclude = false;
               }
             }
             return (src == 'pos' || src == 'direct delivery' || src.isEmpty) && shouldInclude;
@@ -651,10 +668,20 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
         : (deliveryId.startsWith('del_') ? deliveryId.substring(4) : (deliveryId.startsWith('del-') ? deliveryId.substring(4) : deliveryId));
 
     // 1. Update in Local SQLite & sync outbox atomically
-    if (FeatureFlags.offlineFirstEnabled && _ref != null && rawOrderId.isNotEmpty && rawOrderId.length >= 20) {
+    OrderModel? existingLocal;
+    if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
-        final existingLocal = await orderRepo.getOrderById(rawOrderId);
+        if (rawOrderId.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(rawOrderId);
+        }
+        if (existingLocal == null && target.orderNumber.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(target.orderNumber);
+        }
+        if (existingLocal == null && target.id.isNotEmpty) {
+          existingLocal = await orderRepo.getOrderById(target.id);
+        }
+
         final calcState = _ref!.read(dailyCalculationProvider);
         final String? activeShiftId = calcState.selectedRecord?.id;
 
@@ -665,8 +692,8 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
               paymentList.add(OrderPaymentModel(
                 id: const Uuid().v7(),
                 paymentMethod: (p['payment_method']?.toString() ?? paymentMethod ?? 'cash').toLowerCase(),
-                amount: double.tryParse(p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? 0.0),
-                tenderedAmount: double.tryParse(p['tendered_amount']?.toString() ?? p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? 0.0),
+                amount: double.tryParse(p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? target.totalAmount),
+                tenderedAmount: double.tryParse(p['tendered_amount']?.toString() ?? p['amount']?.toString() ?? '0') ?? (existingLocal?.grandTotal ?? target.totalAmount),
                 changeReturned: double.tryParse(p['change_returned']?.toString() ?? '0') ?? 0.0,
                 paymentStatus: 'COMPLETED',
                 createdAt: DateTime.now(),
@@ -676,8 +703,8 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
             paymentList.add(OrderPaymentModel(
               id: const Uuid().v7(),
               paymentMethod: (paymentMethod ?? 'cash').toLowerCase(),
-              amount: existingLocal?.grandTotal ?? 0.0,
-              tenderedAmount: existingLocal?.grandTotal ?? 0.0,
+              amount: existingLocal?.grandTotal ?? target.totalAmount,
+              tenderedAmount: existingLocal?.grandTotal ?? target.totalAmount,
               changeReturned: 0.0,
               paymentStatus: 'COMPLETED',
               createdAt: DateTime.now(),
@@ -703,9 +730,10 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       }
     }
 
-    if (rawOrderId.isNotEmpty && rawOrderId.length >= 20) {
+    final backendOrderId = existingLocal?.id ?? (rawOrderId.length >= 20 ? rawOrderId : null);
+    if (backendOrderId != null && backendOrderId.isNotEmpty) {
       try {
-        await _ordersApiService.updateOrder(rawOrderId, {
+        await _ordersApiService.updateOrder(backendOrderId, {
           'is_paid': isPaid,
           'payment_status': paymentStatus.toUpperCase(),
           if (isPaid) 'status': 'completed',

@@ -640,11 +640,22 @@ export class OrdersService {
       throw new NotFoundException(`Order with ID '${id}' not found`);
     }
 
-    // Guard: completed or paid orders are immutable historical records.
-    // Only a status-only patch (via updateOrderStatus) to 'cancelled' is allowed after completion.
-    if (existing.is_paid || existing.status === 'completed' || existing.status === 'cancelled') {
+    // Guard: completed and paid orders, or cancelled orders, are immutable historical records.
+    // However, an order that is completed but unpaid (e.g. delivered delivery order) can accept payment settlement.
+    if (existing.is_paid || existing.status === 'cancelled') {
       throw new BadRequestException(
         `Order '${existing.order_number}' is already ${existing.is_paid ? 'paid' : existing.status} and cannot be modified.`,
+      );
+    }
+
+    if (
+      existing.status === 'completed' &&
+      !dto.is_paid &&
+      dto.payment_status !== 'PAID' &&
+      (!dto.payments || dto.payments.length === 0)
+    ) {
+      throw new BadRequestException(
+        `Order '${existing.order_number}' is already completed and cannot be modified except for payment settlement.`,
       );
     }
 
@@ -1071,25 +1082,51 @@ export class OrdersService {
         }
       }
 
-      // Payments
+      // Payments: Append-only / Idempotent reconciliation
       if (dto.payments && dto.payments.length > 0) {
-        await tx.orderPayment.deleteMany({ where: { order_id: id } });
-        await tx.orderPayment.createMany({
-          data: dto.payments.map((p) => ({
-            order_id: id,
-            payment_method: p.payment_method,
-            amount: p.amount,
-            tendered_amount: p.tendered_amount,
-            change_returned: p.change_returned,
-            transaction_reference: p.transaction_reference,
-            card_last_four: p.card_last_four,
-            bank_name: p.bank_name,
-            payment_status: p.payment_status ?? 'COMPLETED',
-            notes: p.notes,
-            received_by: p.received_by ?? dto.waiter_name ?? 'Cashier',
-          })),
+        const existingPayments = await tx.orderPayment.findMany({
+          where: { order_id: id },
         });
-      } else if (isPaid || paymentStatus === 'PAID') {
+        const existingIds = new Set(existingPayments.map((ep) => ep.id));
+
+        for (const p of dto.payments) {
+          if (p.id && existingIds.has(p.id)) {
+            await tx.orderPayment.update({
+              where: { id: p.id },
+              data: {
+                payment_method: p.payment_method,
+                amount: p.amount,
+                tendered_amount: p.tendered_amount,
+                change_returned: p.change_returned,
+                transaction_reference: p.transaction_reference,
+                card_last_four: p.card_last_four,
+                bank_name: p.bank_name,
+                payment_status: p.payment_status ?? 'COMPLETED',
+                notes: p.notes,
+                received_by: p.received_by ?? dto.waiter_name ?? 'Cashier',
+              },
+            });
+          } else {
+            await tx.orderPayment.create({
+              data: {
+                ...(p.id ? { id: p.id } : {}),
+                order_id: id,
+                payment_method: p.payment_method,
+                amount: p.amount,
+                tendered_amount: p.tendered_amount,
+                change_returned: p.change_returned,
+                transaction_reference: p.transaction_reference,
+                card_last_four: p.card_last_four,
+                bank_name: p.bank_name,
+                payment_status: p.payment_status ?? 'COMPLETED',
+                notes: p.notes,
+                received_by: p.received_by ?? dto.waiter_name ?? 'Cashier',
+                ...(p.created_at ? { created_at: new Date(p.created_at) } : {}),
+              },
+            });
+          }
+        }
+      } else if (isPaid || paymentStatus === 'PAID' || (orderType === 'dineIn' && (dto.status === 'completed' || updated.status === 'completed'))) {
         const count = await tx.orderPayment.count({ where: { order_id: id } });
         if (count === 0) {
           await tx.orderPayment.create({
@@ -1101,6 +1138,15 @@ export class OrdersService {
               change_returned: 0,
               payment_status: 'COMPLETED',
               received_by: dto.waiter_name ?? 'Cashier',
+            },
+          });
+        }
+        if (!isPaid && orderType === 'dineIn' && (dto.status === 'completed' || updated.status === 'completed')) {
+          await tx.order.update({
+            where: { id },
+            data: {
+              is_paid: true,
+              payment_status: 'PAID',
             },
           });
         }
@@ -1199,12 +1245,33 @@ export class OrdersService {
         where: { id },
         data: {
           status: dto.status,
+          ...(dto.status === 'completed' && existing.order_type === 'dineIn' && !existing.is_paid ? {
+            is_paid: true,
+            payment_status: 'PAID',
+          } : {}),
           rejection_reason:
             dto.rejection_reason !== undefined ? dto.rejection_reason : existing.rejection_reason,
           version: { increment: 1 },
         },
         include: ORDER_INCLUDE,
       });
+
+      if (dto.status === 'completed' && existing.order_type === 'dineIn' && !existing.is_paid) {
+        const count = await tx.orderPayment.count({ where: { order_id: id } });
+        if (count === 0) {
+          await tx.orderPayment.create({
+            data: {
+              order_id: id,
+              payment_method: 'cash',
+              amount: Number(existing.grand_total),
+              tendered_amount: Number(existing.grand_total),
+              change_returned: 0,
+              payment_status: 'COMPLETED',
+              received_by: 'Cashier',
+            },
+          });
+        }
+      }
 
       if (dto.status === 'cancelled' || dto.status === 'void') {
         const dineInDetail = await tx.dineInOrderDetail.findUnique({ where: { order_id: id } });
@@ -1722,7 +1789,10 @@ export class OrdersService {
       let paymentStatus = order.payment_status;
       let isPaid = order.is_paid;
 
-      if (totalPaid >= grandTotal && grandTotal > 0) {
+      if (activeItems.length === 0 && totalPaid > 0) {
+        paymentStatus = 'REFUND_REQUIRED';
+        isPaid = false;
+      } else if (totalPaid >= grandTotal && grandTotal > 0) {
         paymentStatus = 'PAID';
         isPaid = true;
       } else if (totalPaid > 0) {

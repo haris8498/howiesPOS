@@ -170,7 +170,7 @@ class RealtimeSyncManager {
   void _refreshShift() {
     _debounce('shift', () {
       debugPrint('[RealtimeSyncManager] Invaliding and refreshing Shift & Daily Calculation live summary...');
-      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary();
+      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(silent: true);
     });
   }
 
@@ -209,7 +209,7 @@ class RealtimeSyncManager {
       // Kitchen KDS orders
       _ref.read(kitchenProvider.notifier).loadKitchenOrders();
       // Live daily calculation summary
-      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary();
+      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(silent: true);
       // Invalidate analytical reports
       _ref.invalidate(reportSummaryProvider);
       _ref.invalidate(reportProductsProvider);
@@ -225,7 +225,7 @@ class RealtimeSyncManager {
       _ref.read(deliveryProvider.notifier).loadDeliveryData(silent: true);
       _ref.read(onlineOrdersProvider.notifier).loadOnlineOrders();
       _ref.read(kitchenProvider.notifier).loadKitchenOrders();
-      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary();
+      _ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(silent: true);
       _ref.read(staffProvider.notifier).loadStaff();
     }, delayMs: 100);
   }

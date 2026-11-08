@@ -148,17 +148,18 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
 
   /// Check if active shift session exists or Starting Cash is needed
   Future<bool> checkActiveSession({String? cashierId}) async {
+    bool hasLocalActive = false;
     if (FeatureFlags.offlineFirstEnabled) {
       try {
         final shiftRepo = _ref.read(shiftRepositoryProvider);
         final localSession = await shiftRepo.getActiveShift(cashierId ?? '');
         if (localSession != null) {
+          hasLocalActive = true;
           state = state.copyWith(
             hasActiveSession: true,
             totalChangeCash: localSession.startingCash,
             startingCash: localSession.startingCash,
           );
-          return true;
         }
       } catch (_) {}
     }
@@ -218,15 +219,15 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
       }
 
       state = state.copyWith(
-        hasActiveSession: hasActive,
-        totalChangeCash: changeCash,
-        startingCash: startCash,
+        hasActiveSession: hasActive || hasLocalActive,
+        totalChangeCash: changeCash > 0 ? changeCash : state.totalChangeCash,
+        startingCash: startCash > 0 ? startCash : state.startingCash,
         activeShiftExpenses: loadedExpenses,
         selectedRecord: activeRecord ?? state.selectedRecord,
       );
-      return hasActive;
+      return hasActive || hasLocalActive;
     } catch (_) {
-      return true;
+      return hasLocalActive || state.hasActiveSession;
     }
   }
 
@@ -448,9 +449,11 @@ class DailyCalculationNotifier extends StateNotifier<DailyCalculationState> {
   }
 
   /// Fetch today's live POS metrics
-  Future<void> fetchLiveSummary({String? date, String? cashierId}) async {
+  Future<void> fetchLiveSummary({String? date, String? cashierId, bool silent = false}) async {
     if (!mounted) return;
-    state = state.copyWith(isLoading: true, clearMessages: true);
+    if (!silent) {
+      state = state.copyWith(isLoading: true, clearMessages: true);
+    }
     try {
       final json = await _apiService.getLiveSummary(date: date, cashierId: cashierId);
       final liveSummary = DailyLiveSummaryModel.fromJson(json);

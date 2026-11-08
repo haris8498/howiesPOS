@@ -237,7 +237,7 @@ class PosNotifier extends StateNotifier<PosState> {
             ref.invalidate(reportSummaryProvider);
             ref.invalidate(reportProductsProvider);
             ref.invalidate(cancelledOrdersProvider);
-            ref.read(dailyCalculationProvider.notifier).fetchLiveSummary();
+            ref.read(dailyCalculationProvider.notifier).fetchLiveSummary(silent: true);
           } catch (_) {}
         }
       });

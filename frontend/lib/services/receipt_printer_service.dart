@@ -492,7 +492,7 @@ class ReceiptData {
       customerName: order.customerName,
       customerPhone: order.customerPhone,
       customerAddress: order.deliveryAddress,
-      dateTime: order.createdAt,
+      dateTime: DateTime.now(),
       items: items,
       subtotal: items.where((i) => !i.isCancelled).fold<double>(0.0, (s, i) => s + i.totalPrice),
       taxAmount: order.taxAmount > 0 ? order.taxAmount : order.dineInTax,
@@ -595,7 +595,7 @@ class ReceiptData {
       orderType: 'TAKEAWAY',
       customerName: order.customerName,
       customerPhone: order.customerPhone,
-      dateTime: order.createdAt,
+      dateTime: DateTime.now(),
       items: items,
       subtotal: effSubtotal,
       discountAmount: order.discountAmount,
@@ -695,7 +695,7 @@ class ReceiptData {
       customerPhone: order.customerPhone,
       customerAddress: order.deliveryAddress,
       riderName: order.riderName,
-      dateTime: order.createdAt,
+      dateTime: DateTime.now(),
       items: items,
       subtotal: effSubtotal,
       deliveryFee: order.deliveryCharge,
@@ -749,7 +749,7 @@ class ReceiptData {
       customerPhone: order.customerPhone,
       customerAddress: order.customerAddress,
       riderName: order.riderName,
-      dateTime: order.createdAt,
+      dateTime: DateTime.now(),
       items: items,
       subtotal: effSubtotal,
       discountAmount: order.discountAmount,
@@ -2425,7 +2425,7 @@ class ReceiptPrinterService {
         ? PdfPageFormat(48 * PdfPageFormat.mm, calculatedHeightMm * PdfPageFormat.mm, marginAll: 1.0 * PdfPageFormat.mm)
         : PdfPageFormat(72 * PdfPageFormat.mm, calculatedHeightMm * PdfPageFormat.mm, marginAll: 2.0 * PdfPageFormat.mm);
 
-    final dateStr = DateFormat('dd-MMM-yyyy  hh:mm a').format(receipt.dateTime);
+    final dateStr = DateFormat('dd-MMM-yyyy  hh:mm a').format(receipt.dateTime.toLocal());
 
     pdf.addPage(
       pw.Page(
@@ -2460,8 +2460,8 @@ class ReceiptPrinterService {
               subHeader = 'Online - #$displayOrderNum';
             }
 
-            final dateFormatted = DateFormat('MMM d yyyy').format(receipt.dateTime);
-            final timeFormatted = DateFormat('HH:mm').format(receipt.dateTime);
+            final dateFormatted = DateFormat('MMM d yyyy').format(receipt.dateTime.toLocal());
+            final timeFormatted = DateFormat('hh:mm a').format(receipt.dateTime.toLocal());
             final totalQty = receipt.items.where((i) => !i.isCancelled).fold<double>(0.0, (sum, i) => sum + i.quantity);
 
             return pw.Container(

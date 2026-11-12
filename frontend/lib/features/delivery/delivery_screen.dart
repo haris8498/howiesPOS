@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 import '../../config/feature_flags.dart';
 import '../../core/sync/sync_providers.dart';
@@ -390,8 +392,15 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
     final bool isPaid = selectedDel?.paymentStatus == 'PAID';
     final bool isDelivered = selectedDel?.status == DeliveryStatus.delivered;
-    final bool canEdit = selectedDel != null && !isPaid && !isDelivered && !selectedDel.isBillPrinted && selectedDel.status == DeliveryStatus.pending;
-    final bool canReceivePayment = selectedDel != null && !isPaid;
+    final bool isFinalReceiptPrintedForSelected = selectedDel != null && (
+        isPaid ||
+        isDelivered ||
+        ReceiptPrinterService.isFinalReceiptPrinted(selectedDel.id) ||
+        ReceiptPrinterService.isFinalReceiptPrinted(selectedDel.orderNumber)
+    );
+
+    final bool canEdit = selectedDel != null && !isPaid && !isDelivered && !selectedDel.isBillPrinted && selectedDel.status == DeliveryStatus.pending && !isFinalReceiptPrintedForSelected;
+    final bool canReceivePayment = selectedDel != null && !isPaid && !isFinalReceiptPrintedForSelected;
     final bool hasAssignPerm = ref.watch(roleRightsProvider).isActionGranted(
       authState.currentUser.role,
       'del_assign',
@@ -457,7 +466,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                     color: const Color(0xFFD97706),
                     isFilled: false,
                     isDark: isDark,
-                    isEnabled: selectedDel != null,
+                    isEnabled: selectedDel != null && !isFinalReceiptPrintedForSelected,
                     onTap: () {
                       if (selectedDel == null) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -478,7 +487,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                     color: const Color(0xFF2563EB),
                     isFilled: false,
                     isDark: isDark,
-                    isEnabled: selectedDel != null,
+                    isEnabled: selectedDel != null && !isFinalReceiptPrintedForSelected,
                     onTap: () {
                       if (selectedDel == null) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -499,7 +508,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                     color: const Color(0xFFEF4444),
                     isFilled: false,
                     isDark: isDark,
-                    isEnabled: selectedDel != null && !isPaid && selectedDel.status != DeliveryStatus.cancelled,
+                    isEnabled: selectedDel != null && !isPaid && !isFinalReceiptPrintedForSelected && selectedDel.status != DeliveryStatus.cancelled,
                     onTap: () {
                       if (selectedDel == null) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -886,13 +895,16 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
   ) {
     final isDelivered = del.status == DeliveryStatus.delivered;
     final isPaid = del.paymentStatus == 'PAID';
-    final isLockedFromEdit = isPaid || isDelivered || del.isBillPrinted || del.status != DeliveryStatus.pending;
+    final isFinalReceiptPrintedForOrder = isPaid ||
+        ReceiptPrinterService.isFinalReceiptPrinted(del.id) ||
+        ReceiptPrinterService.isFinalReceiptPrinted(del.orderNumber);
+    final isLockedFromEdit = isPaid || isDelivered || del.isBillPrinted || del.status != DeliveryStatus.pending || isFinalReceiptPrintedForOrder;
     final timeStr = DateFormat('hh:mm a, dd MMM yyyy').format(del.createdAt);
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
 
-    final bool canEditSelected = !isLockedFromEdit;
-    final bool canSettleSelected = !isPaid;
+    final bool canEditSelected = !isLockedFromEdit && !isFinalReceiptPrintedForOrder;
+    final bool canSettleSelected = !isPaid && !isFinalReceiptPrintedForOrder;
     final bool hasAssignPerm = ref.watch(roleRightsProvider).isActionGranted(
       authState.currentUser.role,
       'del_assign',
@@ -946,7 +958,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                             color: const Color(0xFFD97706),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: true,
+                            isEnabled: !isFinalReceiptPrintedForOrder,
                             onTap: () => _showKitchenReceiptModal(context, del, isDark),
                           ),
 
@@ -959,7 +971,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                             color: const Color(0xFF2563EB),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: true,
+                            isEnabled: !isFinalReceiptPrintedForOrder,
                             onTap: () => _showDispatchBillModal(context, del, isDark),
                           ),
 
@@ -972,7 +984,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
                             color: const Color(0xFFEF4444),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: !isPaid && del.status != DeliveryStatus.cancelled,
+                            isEnabled: !isPaid && del.status != DeliveryStatus.cancelled && !isFinalReceiptPrintedForOrder,
                             onTap: () => _showCancelDeliveryItemDialog(context, ref, del, isDark),
                           ),
 
@@ -3011,7 +3023,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
 
   String _selectedCategory = 'All';
 
-  final List<Map<String, dynamic>> _menuItems = const [
+  final List<Map<String, dynamic>> _menuItems = [
     // Deals
     {'name': 'EXCLUSIVE DEALS (Pizza+Biryani+Panini+Shakes+Bottle)', 'price': 2499.0, 'cat': 'Deals', 'image': 'assets/images/image.jpg'},
     {'name': 'Family Feast Combo Deal (2 Family Pizzas + 4 Broast + Loaded Fries + 1.5L Coke)', 'price': 3299.0, 'cat': 'Deals', 'image': 'assets/images/Special.png'},
@@ -3083,6 +3095,227 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
     {'name': 'Chocolate Ice Shake', 'price': 590.0, 'cat': 'Dessert', 'image': 'assets/images/ChocolateI.png'},
   ];
 
+  List<String> _categories = [
+    'All',
+    'Deals',
+    'Pizza',
+    'Steak',
+    'Burger',
+    'Broast',
+    'Pasta',
+    'Panini',
+    'Appetizer',
+    'Fries',
+    'Drinks',
+    'Dessert'
+  ];
+  bool _isLoadingMenu = false;
+
+  Future<void> _loadMenuFromDatabase() async {
+    setState(() => _isLoadingMenu = true);
+    try {
+      List<dynamic> dbCategories = [];
+      List<dynamic> dbItems = [];
+      List<dynamic> dbDeals = [];
+
+      try {
+        final menuApi = widget.ref.read(menuApiServiceProvider);
+        final results = await Future.wait([
+          menuApi.listCategories(),
+          menuApi.listItems(),
+          menuApi.listDeals(),
+        ]);
+        dbCategories = results[0];
+        dbItems = results[1];
+        dbDeals = results[2];
+      } catch (err) {
+        if (FeatureFlags.offlineFirstEnabled) {
+          final db = widget.ref.read(appDatabaseProvider);
+          final localCats = await db.catalogDao.getAllCategories();
+          final localItems = await db.catalogDao.getAllMenuItems();
+          final localDeals = await db.catalogDao.getAllDeals();
+          dbCategories = localCats.map((c) => {'id': c.id, 'name': c.name}).toList();
+          dbItems = localItems.map((i) => {
+            'id': i.id,
+            'name': i.name,
+            'base_price': i.basePrice,
+            'image_url': 'assets/images/Pizza.png',
+            'category': {'name': i.categoryId},
+          }).toList();
+          dbDeals = localDeals.map((d) => {
+            'id': d.id,
+            'title': d.name,
+            'deal_price': d.dealPrice,
+            'image_path': 'assets/images/image.jpg',
+          }).toList();
+        } else {
+          rethrow;
+        }
+      }
+
+      final List<Map<String, dynamic>> loadedItems = [];
+      final Set<String> loadedCategories = {'All'};
+
+      // 1. Add Deals from Database
+      if (dbDeals.isNotEmpty) {
+        loadedCategories.add('Deals');
+        for (final deal in dbDeals) {
+          final title = deal['title']?.toString().trim() ?? '';
+          if (title.isEmpty) continue;
+          final p = double.tryParse(deal['deal_price']?.toString() ?? '0') ?? 0.0;
+          final img = deal['image_path']?.toString() ?? 'assets/images/image.jpg';
+
+          Uint8List? imgBytes;
+          if (img.startsWith('data:image') || img.contains(';base64,')) {
+            try {
+              imgBytes = base64Decode(img.split(',').last);
+            } catch (_) {}
+          }
+
+          final alreadyInList = loadedItems.any(
+            (it) => it['name'].toString().toLowerCase() == title.toLowerCase() || (deal['id'] != null && it['id'] == deal['id'].toString()),
+          );
+          if (!alreadyInList) {
+            loadedItems.add({
+              'id': deal['id']?.toString(),
+              'name': title,
+              'cat': 'Deals',
+              'price': p,
+              'image': img,
+              'bytes': imgBytes,
+            });
+          }
+        }
+      }
+
+      // 2. Add Categories from Database
+      for (final cat in dbCategories) {
+        final catName = cat['name']?.toString().trim() ?? '';
+        if (catName.isNotEmpty) {
+          loadedCategories.add(catName);
+        }
+      }
+
+      // 3. Add Items from Database
+      for (final item in dbItems) {
+        final itemId = item['id']?.toString();
+        final itemName = item['name']?.toString().trim() ?? '';
+        if (itemName.isEmpty) continue;
+
+        final catName = item['category'] is Map
+            ? (item['category']['name']?.toString().trim() ?? 'General')
+            : 'General';
+        final basePrice = double.tryParse(item['base_price']?.toString() ?? '0') ?? 0.0;
+        final imgUrl = item['image_url']?.toString() ?? 'assets/images/Pizza.png';
+
+        final alreadyInList = loadedItems.any(
+          (it) => it['name'].toString().toLowerCase() == itemName.toLowerCase() || (itemId != null && it['id'] == itemId),
+        );
+        if (alreadyInList) continue;
+
+        Uint8List? itemBytes;
+        if (imgUrl.startsWith('data:image') || imgUrl.contains(';base64,')) {
+          try {
+            itemBytes = base64Decode(imgUrl.split(',').last);
+          } catch (_) {}
+        }
+
+        loadedCategories.add(catName);
+
+        // Check if item has sizes
+        if (item['sizes'] is List && (item['sizes'] as List).isNotEmpty) {
+          for (final size in (item['sizes'] as List)) {
+            final sizeName = size['size_name']?.toString().trim() ?? '';
+            final sizePrice = double.tryParse(size['price']?.toString() ?? '$basePrice') ?? basePrice;
+            final fullName = '$itemName ($sizeName)';
+            if (!loadedItems.any((it) => it['name'].toString().toLowerCase() == fullName.toLowerCase())) {
+              loadedItems.add({
+                'id': itemId,
+                'name': fullName,
+                'cat': catName,
+                'price': sizePrice,
+                'image': imgUrl,
+                'bytes': itemBytes,
+              });
+            }
+          }
+        } else {
+          loadedItems.add({
+            'id': itemId,
+            'name': itemName,
+            'cat': catName,
+            'price': basePrice,
+            'image': imgUrl,
+            'bytes': itemBytes,
+          });
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          if (loadedItems.isNotEmpty) {
+            _menuItems.clear();
+            _menuItems.addAll(loadedItems);
+          }
+          if (loadedCategories.length > 1) {
+            _categories = loadedCategories.toList();
+          }
+          _isLoadingMenu = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoadingMenu = false);
+      }
+    }
+  }
+
+  Widget _buildItemThumbnail(String path, Uint8List? bytes) {
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(bytes, width: 44, height: 44, fit: BoxFit.cover);
+    }
+    if (path.startsWith('data:image') || path.contains(';base64,')) {
+      try {
+        final b = base64Decode(path.split(',').last);
+        return Image.memory(b, width: 44, height: 44, fit: BoxFit.cover);
+      } catch (_) {}
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return Image.network(
+        path,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => Container(
+          width: 44,
+          height: 44,
+          color: AppColors.primaryRed.withValues(alpha: 0.1),
+          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+        ),
+      );
+    }
+    if (path.isNotEmpty && !path.startsWith('http')) {
+      return Image.asset(
+        path,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => Container(
+          width: 44,
+          height: 44,
+          color: AppColors.primaryRed.withValues(alpha: 0.1),
+          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+        ),
+      );
+    }
+    return Container(
+      width: 44,
+      height: 44,
+      color: AppColors.primaryRed.withValues(alpha: 0.1),
+      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+    );
+  }
+
   final Map<String, int> _cart = {};
   final Map<String, double> _customItemPrices = {};
   final Map<String, OrderItem> _existingItemsByName = {};
@@ -3090,6 +3323,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
   @override
   void initState() {
     super.initState();
+    _loadMenuFromDatabase();
     if (widget.existingOrder != null) {
       final ord = widget.existingOrder!;
       _nameController.text = ord.customerName;
@@ -3164,11 +3398,11 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
   Widget build(BuildContext context) {
     final isDark = widget.isDark;
     final isEditing = widget.existingOrder != null;
-    final categories = ['All', 'Deals', 'Pizza', 'Steak', 'Burger', 'Broast', 'Pasta', 'Panini', 'Appetizer', 'Fries', 'Drinks', 'Dessert'];
+    final categories = _categories;
 
     final filteredMenu = _menuItems.where((item) {
       if (_selectedCategory == 'All') return true;
-      return item['cat'] == _selectedCategory;
+      return item['cat']?.toString().toLowerCase() == _selectedCategory.toLowerCase();
     }).toList();
 
     return Dialog(
@@ -3270,7 +3504,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                             scrollDirection: Axis.horizontal,
                             child: Row(
                               children: categories.map((cat) {
-                                final isSelected = _selectedCategory == cat;
+                                final isSelected = _selectedCategory.toLowerCase() == cat.toLowerCase();
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 6),
                                   child: ChoiceChip(
@@ -3325,18 +3559,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: Image.asset(
-                                          imagePath,
-                                          width: 44,
-                                          height: 44,
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, stackTrace) => Container(
-                                            width: 44,
-                                            height: 44,
-                                            color: AppColors.primaryRed.withValues(alpha: 0.1),
-                                            child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-                                          ),
-                                        ),
+                                        child: _buildItemThumbnail(imagePath, item['bytes'] as Uint8List?),
                                       ),
                                       const SizedBox(width: 10),
                                       Expanded(
@@ -3473,16 +3696,18 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
 
                                 final itemsList = _cart.entries.map((e) {
                                   final existing = _existingItemsByName[e.key];
-                                  final itemId = (existing?.id != null && existing!.id!.isNotEmpty) ? existing.id! : Uuid().v4();
-                                  final menuItemId = (existing?.item.id != null && existing!.item.id.isNotEmpty) ? existing.item.id : Uuid().v4();
+                                  final matchItem = _menuItems.firstWhere(
+                                    (m) => m['name'].toString().toLowerCase() == e.key.toLowerCase() ||
+                                           m['name'].toString().toLowerCase().contains(e.key.toLowerCase()) ||
+                                           e.key.toLowerCase().contains(m['name'].toString().toLowerCase()),
+                                    orElse: () => {'name': e.key, 'price': 0.0},
+                                  );
+                                  final itemId = (existing?.id != null && existing!.id!.isNotEmpty) ? existing.id! : const Uuid().v4();
+                                  final menuItemId = (existing?.item.id != null && existing!.item.id.isNotEmpty)
+                                      ? existing.item.id
+                                      : (matchItem['id']?.toString() ?? const Uuid().v4());
                                   double price = _customItemPrices[e.key] ?? (existing?.unitPrice ?? 0.0);
                                   if (price <= 0.0) {
-                                    final matchItem = _menuItems.firstWhere(
-                                      (m) => m['name'].toString().toLowerCase() == e.key.toLowerCase() ||
-                                             m['name'].toString().toLowerCase().contains(e.key.toLowerCase()) ||
-                                             e.key.toLowerCase().contains(m['name'].toString().toLowerCase()),
-                                      orElse: () => {'name': e.key, 'price': 0.0},
-                                    );
                                     price = ((matchItem['price'] as num?)?.toDouble() ?? 0.0);
                                   }
                                   return {
@@ -4144,6 +4369,10 @@ class _DeliveryFullBillCalculatorDialogState extends State<_DeliveryFullBillCalc
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () {
+                        ReceiptPrinterService.markOrderFinalReceiptPrinted(
+                          orderId: widget.delivery.id,
+                          orderNumber: widget.delivery.orderNumber,
+                        );
                         widget.notifier.updatePaymentStatus(widget.delivery.id, 'PAID', paymentMethod: 'Cash');
                         Navigator.pop(context);
 
@@ -4278,6 +4507,10 @@ class _DeliveryPaymentTenderDialogState extends State<_DeliveryPaymentTenderDial
   }
 
   void _completePayment({bool printReceipt = true}) {
+    ReceiptPrinterService.markOrderFinalReceiptPrinted(
+      orderId: widget.delivery.id,
+      orderNumber: widget.delivery.orderNumber,
+    );
     widget.notifier.updatePaymentStatus(widget.delivery.id, 'PAID', paymentMethod: 'Tender Settled');
     Navigator.pop(context);
 
@@ -4771,6 +5004,7 @@ void _showDeliveryFinalPaidReceiptDialog(
   double changeReturned,
   bool isDark,
 ) {
+  ReceiptPrinterService.markOrderFinalReceiptPrinted(orderId: del.id, orderNumber: del.orderNumber);
   showDialog(
     context: context,
     barrierColor: Colors.black.withValues(alpha: 0.75),
@@ -4967,6 +5201,7 @@ void _showDeliveryFinalPaidReceiptDialog(
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: () async {
+                    ReceiptPrinterService.markOrderFinalReceiptPrinted(orderId: del.id, orderNumber: del.orderNumber);
                     Navigator.pop(dialogContext);
 
                     // Physical Thermal Print to Attached Laptop Printer

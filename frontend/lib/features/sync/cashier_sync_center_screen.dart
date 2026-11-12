@@ -258,6 +258,7 @@ class _CashierSyncCenterScreenState extends ConsumerState<CashierSyncCenterScree
   ) {
     final shift = state.currentShift;
     final selectedShiftId = state.selectedShiftId;
+    final activeShifts = state.shifts.where((s) => s.isActive).toList();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -341,8 +342,8 @@ class _CashierSyncCenterScreenState extends ConsumerState<CashierSyncCenterScree
                 ),
               ),
 
-              // Shift Selector Dropdown ("My Shifts")
-              if (state.shifts.isNotEmpty) ...[
+              // Shift Selector Dropdown (Active Shifts Only)
+              if (activeShifts.isNotEmpty) ...[
                 const SizedBox(width: 12),
                 Container(
                   height: 38,
@@ -354,7 +355,9 @@ class _CashierSyncCenterScreenState extends ConsumerState<CashierSyncCenterScree
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
-                      value: selectedShiftId ?? shift?.id,
+                      value: activeShifts.any((s) => s.id == (selectedShiftId ?? shift?.id))
+                          ? (selectedShiftId ?? shift?.id)
+                          : activeShifts.first.id,
                       icon: const Icon(Icons.arrow_drop_down_rounded, size: 20),
                       style: TextStyle(
                         fontSize: 12,
@@ -362,7 +365,7 @@ class _CashierSyncCenterScreenState extends ConsumerState<CashierSyncCenterScree
                         color: isDark ? Colors.white : AppColors.textPrimary,
                       ),
                       dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-                      items: state.shifts.map((s) {
+                      items: activeShifts.map((s) {
                         final isAct = s.isActive;
                         final shiftDate = DateFormat('MM/dd HH:mm').format(s.createdAt);
                         return DropdownMenuItem<String>(

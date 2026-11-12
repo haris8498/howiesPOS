@@ -165,78 +165,92 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                  _buildTableActionPillButton(
-                    title: isOccupied ? 'Edit / Modify Order' : 'Add Order',
-                    icon: Icons.edit_note_rounded,
-                    color: const Color(0xFF9333EA),
-                    isFilled: false,
-                    isDark: isDark,
-                    onTap: () => _openTableOrderMenuDialog(context, ref, table, isDark),
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Kitchen (KOT)',
-                    icon: Icons.soup_kitchen_rounded,
-                    color: const Color(0xFFD97706),
-                    isFilled: false,
-                    isDark: isDark,
-                    isEnabled: isOccupied || orderItems.isNotEmpty,
-                    onTap: () {
-                      if (!isOccupied && orderItems.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${table.name}" has no active kitchen order ticket.')),
-                        );
-                        return;
-                      }
-                      _showKitchenReceiptDialog(context, table, isDark);
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Customer Bill',
-                    icon: Icons.description_rounded,
-                    color: const Color(0xFF2563EB),
-                    isFilled: false,
-                    isDark: isDark,
-                    isEnabled: isOccupied || orderItems.isNotEmpty,
-                    onTap: () {
-                      if (!isOccupied && orderItems.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${table.name}" has no active bill.')),
-                        );
-                        return;
-                      }
-                      _showCustomerBillDialog(context, table, isDark);
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Cancel Item',
-                    icon: Icons.cancel_outlined,
-                    color: const Color(0xFFEF4444),
-                    isFilled: false,
-                    isDark: isDark,
-                    isEnabled: isOccupied && orderItems.any((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1),
-                    onTap: () {
-                      _showCancelTableItemDialog(context, ref, table, isDark);
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Full Bill & Pay',
-                    icon: Icons.payments_rounded,
-                    color: const Color(0xFFDC2626),
-                    isFilled: true,
-                    isDark: isDark,
-                    isEnabled: isOccupied || orderItems.isNotEmpty,
-                    onTap: () {
-                      if (!isOccupied && orderItems.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${table.name}" has no active bill to settle.')),
-                        );
-                        return;
-                      }
-                      _showFullBillDialog(context, ref, table, isDark);
+                  Builder(
+                    builder: (context) {
+                      final bool isFinalReceiptPrintedForTable = (table.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderId)) ||
+                          (table.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderNumber)) ||
+                          (!isOccupied && table.liveBillAmount <= 0);
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildTableActionPillButton(
+                            title: isOccupied ? 'Edit / Modify Order' : 'Add Order',
+                            icon: Icons.edit_note_rounded,
+                            color: const Color(0xFF9333EA),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: !isFinalReceiptPrintedForTable,
+                            onTap: () => _openTableOrderMenuDialog(context, ref, table, isDark),
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Kitchen (KOT)',
+                            icon: Icons.soup_kitchen_rounded,
+                            color: const Color(0xFFD97706),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: isOccupied && orderItems.isNotEmpty && !isFinalReceiptPrintedForTable,
+                            onTap: () {
+                              if (!isOccupied && orderItems.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${table.name}" has no active kitchen order ticket.')),
+                                );
+                                return;
+                              }
+                              _showKitchenReceiptDialog(context, table, isDark);
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Customer Bill',
+                            icon: Icons.description_rounded,
+                            color: const Color(0xFF2563EB),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: isOccupied && orderItems.isNotEmpty && !isFinalReceiptPrintedForTable,
+                            onTap: () {
+                              if (!isOccupied && orderItems.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${table.name}" has no active bill.')),
+                                );
+                                return;
+                              }
+                              _showCustomerBillDialog(context, table, isDark);
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Cancel Item',
+                            icon: Icons.cancel_outlined,
+                            color: const Color(0xFFEF4444),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable && orderItems.any((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1),
+                            onTap: () {
+                              _showCancelTableItemDialog(context, ref, table, isDark);
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Full Bill & Pay',
+                            icon: Icons.payments_rounded,
+                            color: const Color(0xFFDC2626),
+                            isFilled: true,
+                            isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
+                            onTap: () {
+                              if (!isOccupied && orderItems.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${table.name}" has no active bill to settle.')),
+                                );
+                                return;
+                              }
+                              _showFullBillDialog(context, ref, table, isDark);
+                            },
+                          ),
+                        ],
+                      );
                     },
                   ),
                   const SizedBox(height: 16),
@@ -768,93 +782,110 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                  _buildTableActionPillButton(
-                    title: 'Edit / Add Order',
-                    icon: Icons.edit_note_rounded,
-                    color: const Color(0xFF9333EA),
-                    isFilled: false,
-                    isDark: isDark,
-                    onTap: () {
+                  Builder(
+                    builder: (context) {
                       final selected = _getSelectedTable(tableState.tables);
-                      if (selected != null) {
-                        _openTableOrderMenuDialog(context, ref, selected, isDark);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select or create a table first.')),
-                        );
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Kitchen (KOT)',
-                    icon: Icons.soup_kitchen_rounded,
-                    color: const Color(0xFFD97706),
-                    isFilled: false,
-                    isDark: isDark,
-                    onTap: () {
-                      final selected = _getSelectedTable(tableState.tables);
-                      if (selected == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select a table.')),
-                        );
-                        return;
-                      }
-                      if (selected.status != TableStatus.occupied && selected.currentOrderItems.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${selected.name}" has no active kitchen order ticket.')),
-                        );
-                        return;
-                      }
-                      _showKitchenReceiptDialog(context, selected, isDark);
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Customer Bill',
-                    icon: Icons.description_rounded,
-                    color: const Color(0xFF2563EB),
-                    isFilled: false,
-                    isDark: isDark,
-                    onTap: () {
-                      final selected = _getSelectedTable(tableState.tables);
-                      if (selected == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select a table.')),
-                        );
-                        return;
-                      }
-                      if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${selected.name}" has no active bill.')),
-                        );
-                        return;
-                      }
-                      _showCustomerBillDialog(context, selected, isDark);
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _buildTableActionPillButton(
-                    title: 'Full Bill & Pay',
-                    icon: Icons.payments_rounded,
-                    color: const Color(0xFFDC2626),
-                    isFilled: true,
-                    isDark: isDark,
-                    onTap: () {
-                      final selected = _getSelectedTable(tableState.tables);
-                      if (selected == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please select a table.')),
-                        );
-                        return;
-                      }
-                      if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Table "${selected.name}" has no active bill to settle.')),
-                        );
-                        return;
-                      }
-                      _showFullBillDialog(context, ref, selected, isDark);
+                      final isOccupiedSelected = selected != null && selected.status == TableStatus.occupied && selected.liveBillAmount > 0;
+                      final isFinalReceiptPrintedSelected = selected != null && (
+                          (selected.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(selected.activeOrderId)) ||
+                          (selected.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(selected.activeOrderNumber)) ||
+                          (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0)
+                      );
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildTableActionPillButton(
+                            title: 'Edit / Add Order',
+                            icon: Icons.edit_note_rounded,
+                            color: const Color(0xFF9333EA),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: selected != null && (!isOccupiedSelected || !isFinalReceiptPrintedSelected),
+                            onTap: () {
+                              if (selected != null) {
+                                _openTableOrderMenuDialog(context, ref, selected, isDark);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please select or create a table first.')),
+                                );
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Kitchen (KOT)',
+                            icon: Icons.soup_kitchen_rounded,
+                            color: const Color(0xFFD97706),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: isOccupiedSelected && selected.currentOrderItems.isNotEmpty && !isFinalReceiptPrintedSelected,
+                            onTap: () {
+                              if (selected == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please select a table.')),
+                                );
+                                return;
+                              }
+                              if (selected.status != TableStatus.occupied && selected.currentOrderItems.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${selected.name}" has no active kitchen order ticket.')),
+                                );
+                                return;
+                              }
+                              _showKitchenReceiptDialog(context, selected, isDark);
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Customer Bill',
+                            icon: Icons.description_rounded,
+                            color: const Color(0xFF2563EB),
+                            isFilled: false,
+                            isDark: isDark,
+                            isEnabled: isOccupiedSelected && !isFinalReceiptPrintedSelected,
+                            onTap: () {
+                              if (selected == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please select a table.')),
+                                );
+                                return;
+                              }
+                              if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${selected.name}" has no active bill.')),
+                                );
+                                return;
+                              }
+                              _showCustomerBillDialog(context, selected, isDark);
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          _buildTableActionPillButton(
+                            title: 'Full Bill & Pay',
+                            icon: Icons.payments_rounded,
+                            color: const Color(0xFFDC2626),
+                            isFilled: true,
+                            isDark: isDark,
+                            isEnabled: isOccupiedSelected && !isFinalReceiptPrintedSelected,
+                            onTap: () {
+                              if (selected == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please select a table.')),
+                                );
+                                return;
+                              }
+                              if (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Table "${selected.name}" has no active bill to settle.')),
+                                );
+                                return;
+                              }
+                              _showFullBillDialog(context, ref, selected, isDark);
+                            },
+                          ),
+                        ],
+                      );
                     },
                   ),
                   const SizedBox(height: 12),
@@ -1445,6 +1476,9 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
     final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
     final bool isOccupied = table.status == TableStatus.occupied;
     final orderItems = table.currentOrderItems;
+    final isFinalReceiptPrintedForTable = (table.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderId)) ||
+        (table.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderNumber)) ||
+        (!isOccupied && table.liveBillAmount <= 0);
 
     showDialog(
       context: context,
@@ -1797,6 +1831,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                           iconColor: AppColors.primaryRed,
                           bgColor: AppColors.primaryRed.withValues(alpha: 0.1),
                           isDark: isDark,
+                          isEnabled: !isFinalReceiptPrintedForTable,
                           onTap: () {
                             Navigator.pop(dialogContext);
                             _openTableOrderMenuDialog(context, ref, table, isDark);
@@ -1813,6 +1848,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFFD97706),
                             bgColor: const Color(0xFFFFFBEB),
                             isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showKitchenReceiptDialog(context, table, isDark);
@@ -1828,6 +1864,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFF2563EB),
                             bgColor: const Color(0xFFEFF6FF),
                             isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showCustomerBillDialog(context, table, isDark);
@@ -1843,6 +1880,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: AppColors.danger,
                             bgColor: AppColors.danger.withValues(alpha: 0.1),
                             isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showCancelTableItemDialog(context, ref, table, isDark);
@@ -1858,6 +1896,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFF16A34A),
                             bgColor: const Color(0xFFEBF7ED),
                             isDark: isDark,
+                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showFullBillDialog(context, ref, table, isDark);
@@ -1913,57 +1952,69 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
     required Color bgColor,
     required bool isDark,
     required VoidCallback onTap,
+    bool isEnabled = true,
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.02),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: bgColor,
-                borderRadius: BorderRadius.circular(12),
+    return Opacity(
+      opacity: isEnabled ? 1.0 : 0.45,
+      child: InkWell(
+        onTap: isEnabled ? onTap : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.02),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
               ),
-              child: Icon(icon, color: iconColor, size: 22),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  color: isDark ? Colors.white : AppColors.textPrimary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14.5,
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: isEnabled ? bgColor : (isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: isEnabled ? iconColor : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)), size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: isEnabled
+                        ? (isDark ? Colors.white : AppColors.textPrimary)
+                        : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14.5,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                ),
+                child: Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 12,
+                  color: isEnabled
+                      ? (isDark ? Colors.white : AppColors.textPrimary)
+                      : (isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1)),
+                ),
               ),
-              child: Icon(Icons.arrow_forward_ios_rounded, size: 12, color: isDark ? Colors.white : AppColors.textPrimary),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import '../../config/feature_flags.dart';
 import '../../core/sync/sync_providers.dart';
 import '../../domain/models/order_model.dart';
@@ -382,13 +384,22 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
       _selectedOrderId = selectedOrder.id;
     }
 
+    final bool isFinalReceiptPrintedForSelected = selectedOrder != null && (
+        selectedOrder.isPaid ||
+        selectedOrder.status.toLowerCase() == 'completed' ||
+        ReceiptPrinterService.isFinalReceiptPrinted(selectedOrder.id) ||
+        ReceiptPrinterService.isFinalReceiptPrinted(selectedOrder.tokenNumber)
+    );
+
     final bool canEditSelected = selectedOrder != null &&
         !selectedOrder.isPaid &&
-        selectedOrder.status.toLowerCase() != 'completed';
+        selectedOrder.status.toLowerCase() != 'completed' &&
+        !isFinalReceiptPrintedForSelected;
 
     final bool canSettleSelected = selectedOrder != null &&
         !selectedOrder.isPaid &&
-        selectedOrder.status.toLowerCase() != 'completed';
+        selectedOrder.status.toLowerCase() != 'completed' &&
+        !isFinalReceiptPrintedForSelected;
 
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
@@ -442,7 +453,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                     color: const Color(0xFFD97706),
                     isFilled: false,
                     isDark: isDark,
-                    isEnabled: selectedOrder != null,
+                    isEnabled: selectedOrder != null && !isFinalReceiptPrintedForSelected,
                     onTap: () {
                       final sel = _getSelectedOrder(takeawayState.orders);
                       if (sel == null) {
@@ -464,7 +475,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                     color: const Color(0xFF2563EB),
                     isFilled: false,
                     isDark: isDark,
-                    isEnabled: selectedOrder != null,
+                    isEnabled: selectedOrder != null && !isFinalReceiptPrintedForSelected,
                     onTap: () {
                       final sel = _getSelectedOrder(takeawayState.orders);
                       if (sel == null) {
@@ -1368,8 +1379,14 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
     final authState = ref.watch(authProvider);
     final isCashier = authState.currentUser.role == UserRole.cashier;
 
-    final bool canEditSelected = !isLockedFromEdit;
-    final bool canSettleSelected = !isCompletedOrPaid;
+    final bool isFinalPrintedForOrder = isCompletedOrPaid ||
+        order.isPaid ||
+        order.status.toLowerCase() == 'completed' ||
+        ReceiptPrinterService.isFinalReceiptPrinted(order.id) ||
+        ReceiptPrinterService.isFinalReceiptPrinted(order.tokenNumber);
+
+    final bool canEditSelected = !isLockedFromEdit && !isFinalPrintedForOrder;
+    final bool canSettleSelected = !isCompletedOrPaid && !isFinalPrintedForOrder;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(18.0, 18.0, 18.0, isCashier ? 0.0 : 18.0),
@@ -1398,7 +1415,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             isDark: isDark,
                             isEnabled: canEditSelected,
                             onTap: () {
-                              if (!order.isPaid && order.status.toLowerCase() != 'completed') {
+                              if (!order.isPaid && order.status.toLowerCase() != 'completed' && !isFinalPrintedForOrder) {
                                 _openEditTakeawayOrderDialog(context, ref, order, takeawayNotifier, isDark);
                               } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1417,7 +1434,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             color: const Color(0xFFD97706),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: true,
+                            isEnabled: !isFinalPrintedForOrder,
                             onTap: () => _showTakeawayKitchenReceiptDialog(context, order, isDark),
                           ),
 
@@ -1430,7 +1447,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             color: const Color(0xFF2563EB),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: true,
+                            isEnabled: !isFinalPrintedForOrder,
                             onTap: () => _showTakeawayCustomerBillDialog(context, ref, order, takeawayNotifier, isDark),
                           ),
 
@@ -1443,7 +1460,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             color: const Color(0xFFEF4444),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: !order.isPaid && order.status.toLowerCase() != 'cancelled',
+                            isEnabled: !isFinalPrintedForOrder && !order.isPaid && order.status.toLowerCase() != 'cancelled',
                             onTap: () => _showCancelTakeawayItemDialog(context, ref, order, takeawayNotifier, isDark),
                           ),
 
@@ -1458,7 +1475,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                             isDark: isDark,
                             isEnabled: canSettleSelected,
                             onTap: () {
-                              if (order.isPaid || order.status.toLowerCase() == 'completed') {
+                              if (order.isPaid || order.status.toLowerCase() == 'completed' || isFinalPrintedForOrder) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text('Token "${order.tokenNumber}" is already paid and completed.')),
                                 );
@@ -1782,11 +1799,11 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                   children: [
                                     Expanded(
                                       child: OutlinedButton.icon(
-                                        onPressed: () => _showTakeawayKitchenReceiptDialog(context, order, isDark),
-                                        icon: const Icon(Icons.soup_kitchen_rounded, size: 16, color: Color(0xFFD97706)),
-                                        label: const Text('Print KOT', style: TextStyle(color: Color(0xFFD97706), fontWeight: FontWeight.bold, fontSize: 12)),
+                                        onPressed: isFinalPrintedForOrder ? null : () => _showTakeawayKitchenReceiptDialog(context, order, isDark),
+                                        icon: Icon(Icons.soup_kitchen_rounded, size: 16, color: isFinalPrintedForOrder ? Colors.grey : const Color(0xFFD97706)),
+                                        label: Text('Print KOT', style: TextStyle(color: isFinalPrintedForOrder ? Colors.grey : const Color(0xFFD97706), fontWeight: FontWeight.bold, fontSize: 12)),
                                         style: OutlinedButton.styleFrom(
-                                          side: const BorderSide(color: Color(0xFFD97706)),
+                                          side: BorderSide(color: isFinalPrintedForOrder ? Colors.grey.withValues(alpha: 0.4) : const Color(0xFFD97706)),
                                           padding: const EdgeInsets.symmetric(vertical: 12),
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                         ),
@@ -1795,11 +1812,11 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                       child: OutlinedButton.icon(
-                                        onPressed: () => _showTakeawayCustomerBillDialog(context, ref, order, takeawayNotifier, isDark),
-                                        icon: const Icon(Icons.description_rounded, size: 16, color: Color(0xFF2563EB)),
-                                        label: const Text('Customer Bill', style: TextStyle(color: Color(0xFF2563EB), fontWeight: FontWeight.bold, fontSize: 12)),
+                                        onPressed: isFinalPrintedForOrder ? null : () => _showTakeawayCustomerBillDialog(context, ref, order, takeawayNotifier, isDark),
+                                        icon: Icon(Icons.description_rounded, size: 16, color: isFinalPrintedForOrder ? Colors.grey : const Color(0xFF2563EB)),
+                                        label: Text('Customer Bill', style: TextStyle(color: isFinalPrintedForOrder ? Colors.grey : const Color(0xFF2563EB), fontWeight: FontWeight.bold, fontSize: 12)),
                                         style: OutlinedButton.styleFrom(
-                                          side: const BorderSide(color: Color(0xFF2563EB)),
+                                          side: BorderSide(color: isFinalPrintedForOrder ? Colors.grey.withValues(alpha: 0.4) : const Color(0xFF2563EB)),
                                           padding: const EdgeInsets.symmetric(vertical: 12),
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                         ),
@@ -1807,7 +1824,7 @@ class _TakeawayScreenState extends ConsumerState<TakeawayScreen> {
                                     ),
                                   ],
                                 ),
-                                if (!isCompletedOrPaid) ...[
+                                if (!isCompletedOrPaid && !isFinalPrintedForOrder) ...[
                                   const SizedBox(height: 10),
                                   ElevatedButton.icon(
                                     onPressed: () => _showTakeawayFullBillDialog(context, ref, order, takeawayNotifier, isDark),
@@ -3504,6 +3521,10 @@ class _TakeawayPaymentTenderDialogState extends State<_TakeawayPaymentTenderDial
       paymentMethod: primaryMethod,
       payments: paymentsList,
     );
+    ReceiptPrinterService.markOrderFinalReceiptPrinted(
+      orderId: widget.order.id,
+      tokenNumber: widget.order.tokenNumber,
+    );
     Navigator.pop(context);
 
     ScaffoldMessenger.of(widget.parentContext).showSnackBar(
@@ -4242,6 +4263,11 @@ void _showTakeawayFinalPaidReceiptDialog(
                     onPressed: () async {
                       Navigator.pop(dialogContext);
 
+                      ReceiptPrinterService.markOrderFinalReceiptPrinted(
+                        orderId: order.id,
+                        tokenNumber: order.tokenNumber,
+                      );
+
                       // Ensure order is marked paid and completed in DB and state
                       if (takeawayNotifier != null) {
                         try {
@@ -4288,17 +4314,39 @@ void _showTakeawayFinalPaidReceiptDialog(
 }
 
 class _TakeawayMenuItem {
+  final String? id;
   final String name;
   final String category;
   final double price;
   final String imagePath;
+  final Uint8List? imageBytes;
 
   const _TakeawayMenuItem({
+    this.id,
     required this.name,
     required this.category,
     required this.price,
     required this.imagePath,
+    this.imageBytes,
   });
+
+  _TakeawayMenuItem copyWith({
+    String? id,
+    String? name,
+    String? category,
+    double? price,
+    String? imagePath,
+    Uint8List? imageBytes,
+  }) {
+    return _TakeawayMenuItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      category: category ?? this.category,
+      price: price ?? this.price,
+      imagePath: imagePath ?? this.imagePath,
+      imageBytes: imageBytes ?? this.imageBytes,
+    );
+  }
 }
 
 class _TakeawayOrderItem {
@@ -4370,7 +4418,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     _orderGuardNotifier.updateOrderOpen(_orderGuardId, _cartItems.isNotEmpty);
   }
 
-  final List<_TakeawayMenuItem> _menuDatabase = const [
+  final List<_TakeawayMenuItem> _menuDatabase = [
     // Exclusive Deals & Combos
     _TakeawayMenuItem(name: "EXCLUSIVE DEALS (Pizza+Biryani+Panini+Shakes+Bottle)", category: 'Deals', price: 2499, imagePath: 'assets/images/image.jpg'),
     _TakeawayMenuItem(name: "Family Feast Combo Deal (2 Family Pizzas + 4 Broast + Loaded Fries + 1.5L Coke)", category: 'Deals', price: 3299, imagePath: 'assets/images/Special.png'),
@@ -4461,12 +4509,237 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     _TakeawayMenuItem(name: "Banana Milkshake", category: 'Dessert', price: 400, imagePath: 'assets/images/BananaShake.png'),
   ];
 
+  List<String> _categories = [
+    'All',
+    'Deals',
+    'Pizza',
+    'Steak',
+    'Burger',
+    'Brost',
+    'Pasta',
+    'Panini',
+    'Appetizer',
+    'Fries',
+    'Drinks',
+    'Topping',
+    'Hot Coffee',
+    'Cold Coffee',
+    'Dessert'
+  ];
+  bool _isLoadingMenu = false;
+
+  Future<void> _loadMenuFromDatabase() async {
+    setState(() => _isLoadingMenu = true);
+    try {
+      List<dynamic> dbCategories = [];
+      List<dynamic> dbItems = [];
+      List<dynamic> dbDeals = [];
+
+      try {
+        final menuApi = widget.ref.read(menuApiServiceProvider);
+        final results = await Future.wait([
+          menuApi.listCategories(),
+          menuApi.listItems(),
+          menuApi.listDeals(),
+        ]);
+        dbCategories = results[0];
+        dbItems = results[1];
+        dbDeals = results[2];
+      } catch (err) {
+        if (FeatureFlags.offlineFirstEnabled) {
+          final db = widget.ref.read(appDatabaseProvider);
+          final localCats = await db.catalogDao.getAllCategories();
+          final localItems = await db.catalogDao.getAllMenuItems();
+          final localDeals = await db.catalogDao.getAllDeals();
+          dbCategories = localCats.map((c) => {'id': c.id, 'name': c.name}).toList();
+          dbItems = localItems.map((i) => {
+            'id': i.id,
+            'name': i.name,
+            'base_price': i.basePrice,
+            'image_url': 'assets/images/Pizza.png',
+            'category': {'name': i.categoryId},
+          }).toList();
+          dbDeals = localDeals.map((d) => {
+            'id': d.id,
+            'title': d.name,
+            'deal_price': d.dealPrice,
+            'image_path': 'assets/images/image.jpg',
+          }).toList();
+        } else {
+          rethrow;
+        }
+      }
+
+      final List<_TakeawayMenuItem> loadedItems = [];
+      final Set<String> loadedCategories = {'All'};
+
+      // 1. Add Deals from Database
+      if (dbDeals.isNotEmpty) {
+        loadedCategories.add('Deals');
+        for (final deal in dbDeals) {
+          final title = deal['title']?.toString().trim() ?? '';
+          if (title.isEmpty) continue;
+          final p = double.tryParse(deal['deal_price']?.toString() ?? '0') ?? 0.0;
+          final img = deal['image_path']?.toString() ?? 'assets/images/image.jpg';
+
+          Uint8List? imgBytes;
+          if (img.startsWith('data:image') || img.contains(';base64,')) {
+            try {
+              imgBytes = base64Decode(img.split(',').last);
+            } catch (_) {}
+          }
+
+          final alreadyInList = loadedItems.any(
+            (it) => it.name.toLowerCase() == title.toLowerCase() || (deal['id'] != null && it.id == deal['id'].toString()),
+          );
+          if (!alreadyInList) {
+            loadedItems.add(_TakeawayMenuItem(
+              id: deal['id']?.toString(),
+              name: title,
+              category: 'Deals',
+              price: p,
+              imagePath: img,
+              imageBytes: imgBytes,
+            ));
+          }
+        }
+      }
+
+      // 2. Add Categories from Database
+      for (final cat in dbCategories) {
+        final catName = cat['name']?.toString().trim() ?? '';
+        if (catName.isNotEmpty) {
+          loadedCategories.add(catName);
+        }
+      }
+
+      // 3. Add Items from Database
+      for (final item in dbItems) {
+        final itemId = item['id']?.toString();
+        final itemName = item['name']?.toString().trim() ?? '';
+        if (itemName.isEmpty) continue;
+
+        final catName = item['category'] is Map
+            ? (item['category']['name']?.toString().trim() ?? 'General')
+            : 'General';
+        final basePrice = double.tryParse(item['base_price']?.toString() ?? '0') ?? 0.0;
+        final imgUrl = item['image_url']?.toString() ?? 'assets/images/Pizza.png';
+
+        final alreadyInList = loadedItems.any(
+          (it) => it.name.toLowerCase() == itemName.toLowerCase() || (itemId != null && it.id == itemId),
+        );
+        if (alreadyInList) continue;
+
+        Uint8List? itemBytes;
+        if (imgUrl.startsWith('data:image') || imgUrl.contains(';base64,')) {
+          try {
+            itemBytes = base64Decode(imgUrl.split(',').last);
+          } catch (_) {}
+        }
+
+        loadedCategories.add(catName);
+
+        // Check if item has sizes
+        if (item['sizes'] is List && (item['sizes'] as List).isNotEmpty) {
+          for (final size in (item['sizes'] as List)) {
+            final sizeName = size['size_name']?.toString().trim() ?? '';
+            final sizePrice = double.tryParse(size['price']?.toString() ?? '$basePrice') ?? basePrice;
+            final fullName = '$itemName ($sizeName)';
+            if (!loadedItems.any((it) => it.name.toLowerCase() == fullName.toLowerCase())) {
+              loadedItems.add(_TakeawayMenuItem(
+                id: itemId,
+                name: fullName,
+                category: catName,
+                price: sizePrice,
+                imagePath: imgUrl,
+                imageBytes: itemBytes,
+              ));
+            }
+          }
+        } else {
+          loadedItems.add(_TakeawayMenuItem(
+            id: itemId,
+            name: itemName,
+            category: catName,
+            price: basePrice,
+            imagePath: imgUrl,
+            imageBytes: itemBytes,
+          ));
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          if (loadedItems.isNotEmpty) {
+            _menuDatabase.clear();
+            _menuDatabase.addAll(loadedItems);
+          }
+          if (loadedCategories.length > 1) {
+            _categories = loadedCategories.toList();
+          }
+          _isLoadingMenu = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoadingMenu = false);
+      }
+    }
+  }
+
+  Widget _buildItemThumbnail(String path, Uint8List? bytes) {
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(bytes, width: 38, height: 38, fit: BoxFit.cover);
+    }
+    if (path.startsWith('data:image') || path.contains(';base64,')) {
+      try {
+        final b = base64Decode(path.split(',').last);
+        return Image.memory(b, width: 38, height: 38, fit: BoxFit.cover);
+      } catch (_) {}
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return Image.network(
+        path,
+        width: 38,
+        height: 38,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => Container(
+          width: 38,
+          height: 38,
+          color: AppColors.primaryRed.withValues(alpha: 0.1),
+          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+        ),
+      );
+    }
+    if (path.isNotEmpty && !path.startsWith('http')) {
+      return Image.asset(
+        path,
+        width: 38,
+        height: 38,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => Container(
+          width: 38,
+          height: 38,
+          color: AppColors.primaryRed.withValues(alpha: 0.1),
+          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+        ),
+      );
+    }
+    return Container(
+      width: 38,
+      height: 38,
+      color: AppColors.primaryRed.withValues(alpha: 0.1),
+      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+    );
+  }
+
   double _discountPercentage = 0.0;
   ManagerApproval? _managerApproval;
 
   @override
   void initState() {
     super.initState();
+    _loadMenuFromDatabase();
     _orderGuardNotifier = widget.ref.read(openOrderGuardProvider.notifier);
     _orderGuardId = 'takeaway_${identityHashCode(this)}';
     final existing = widget.existingOrder;
@@ -4586,7 +4859,11 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
       if (existingIndex >= 0) {
         _cartItems[existingIndex].quantity += 1;
       } else {
-        _cartItems.add(_TakeawayOrderItem(item: item, quantity: 1));
+        _cartItems.add(_TakeawayOrderItem(
+          item: item,
+          quantity: 1,
+          menuItemId: item.id,
+        ));
       }
     });
     _updateOrderGuard();
@@ -4615,10 +4892,10 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     final isDark = widget.isDark;
     final takeawayState = widget.ref.watch(takeawayProvider);
     final nextToken = 'TK-${takeawayState.tokenCounter}';
-    final categories = ['All', 'Deals', 'Pizza', 'Steak', 'Burger', 'Brost', 'Pasta', 'Panini', 'Appetizer', 'Fries', 'Drinks', 'Topping', 'Hot Coffee', 'Cold Coffee', 'Dessert'];
+    final categories = _categories;
 
     final filteredMenu = _menuDatabase.where((item) {
-      final matchesCategory = _selectedCategory == 'All' || item.category == _selectedCategory;
+      final matchesCategory = _selectedCategory == 'All' || item.category.toLowerCase() == _selectedCategory.toLowerCase();
       final matchesSearch = _menuQuery.isEmpty || item.name.toLowerCase().contains(_menuQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     }).toList();
@@ -4709,7 +4986,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                             scrollDirection: Axis.horizontal,
                             child: Row(
                               children: categories.map((cat) {
-                                final isSelected = _selectedCategory == cat;
+                                final isSelected = _selectedCategory.toLowerCase() == cat.toLowerCase();
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 6),
                                   child: ChoiceChip(
@@ -4766,18 +5043,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                           children: [
                                             ClipRRect(
                                               borderRadius: BorderRadius.circular(6),
-                                              child: Image.asset(
-                                                item.imagePath,
-                                                width: 38,
-                                                height: 38,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (context, error, stackTrace) => Container(
-                                                  width: 38,
-                                                  height: 38,
-                                                  color: AppColors.primaryRed.withValues(alpha: 0.1),
-                                                  child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-                                                ),
-                                              ),
+                                              child: _buildItemThumbnail(item.imagePath, item.imageBytes),
                                             ),
                                             const SizedBox(width: 8),
                                             Expanded(

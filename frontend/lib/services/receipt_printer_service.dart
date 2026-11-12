@@ -1199,6 +1199,33 @@ class ReceiptPrinterService {
     await unmarkOrderKitchenReceiptPrinted(orderNumber: idOrOrderNumber);
   }
 
+  static final Set<String> _finalReceiptPrintedIdentifiers = <String>{};
+
+  /// Returns true if the final receipt (customer paid receipt) has been printed for this order.
+  static bool isFinalReceiptPrinted(String? identifier) {
+    if (identifier == null || identifier.trim().isEmpty) return false;
+    return _finalReceiptPrintedIdentifiers.contains(identifier.trim().toLowerCase());
+  }
+
+  /// Marks that the final receipt has been printed for this order.
+  static void markFinalReceiptPrinted(String? identifier) {
+    if (identifier == null || identifier.trim().isEmpty) return;
+    _finalReceiptPrintedIdentifiers.add(identifier.trim().toLowerCase());
+  }
+
+  /// Helper to mark all known identifiers (orderId, orderNumber, tokenNumber, tableNumber)
+  static void markOrderFinalReceiptPrinted({
+    String? orderId,
+    String? orderNumber,
+    String? tokenNumber,
+    String? tableNumber,
+  }) {
+    if (orderId != null && orderId.trim().isNotEmpty) markFinalReceiptPrinted(orderId);
+    if (orderNumber != null && orderNumber.trim().isNotEmpty) markFinalReceiptPrinted(orderNumber);
+    if (tokenNumber != null && tokenNumber.trim().isNotEmpty) markFinalReceiptPrinted(tokenNumber);
+    if (tableNumber != null && tableNumber.trim().isNotEmpty) markFinalReceiptPrinted(tableNumber);
+  }
+
   /// Clears printed kitchen receipts history (e.g., daily reset)
   static Future<void> clearPrintedKitchenHistory() async {
     _printedKitchenTickets.clear();
@@ -1220,6 +1247,7 @@ class ReceiptPrinterService {
     _printedKitchenTickets.clear();
     _printedKitchenSignatures.clear();
     _everPrintedKotTickets.clear();
+    _finalReceiptPrintedIdentifiers.clear();
     _hasLoadedPrintedKotSet = false;
     _hasLoadedPrintedKotSignatures = false;
     _hasLoadedEverPrintedKotSet = false;
@@ -1806,6 +1834,13 @@ class ReceiptPrinterService {
         );
 
         final success = printResult.success;
+        if (success) {
+          markOrderFinalReceiptPrinted(
+            orderNumber: receipt.orderNumber,
+            tokenNumber: receipt.tokenNumber,
+            tableNumber: receipt.tableNumber,
+          );
+        }
         if (success && context != null && context.mounted) {
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(

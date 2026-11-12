@@ -405,8 +405,9 @@ class EscPosBuilder {
       builder.keyValue('Discount:', '- ${receipt.discountAmount.round()}', isBold: false);
     }
 
+    final taxableAmt = (grossAmt - receipt.discountAmount).clamp(0.0, double.infinity);
     final double calcTax = receipt.taxRate > 0
-        ? (grossAmt * receipt.taxRate / 100)
+        ? (taxableAmt * receipt.taxRate / 100)
         : (receipt.items.any((i) => i.isCancelled) ? 0.0 : receipt.taxAmount);
 
     if (calcTax > 0) {
@@ -428,7 +429,7 @@ class EscPosBuilder {
     builder.divider();
 
     // Net Total (Strictly excludes cancelled items from the final bill total)
-    final double netTotal = (grossAmt - receipt.discountAmount + calcTax + receipt.serviceChargeAmount + receipt.deliveryFee).clamp(0.0, double.infinity);
+    final double netTotal = (taxableAmt + calcTax + receipt.serviceChargeAmount + receipt.deliveryFee).clamp(0.0, double.infinity);
 
     builder.row([
       EscPosColumn(text: 'Net Total:', width: width - totalWidth - 4, align: EscPosAlign.right, isBold: true),

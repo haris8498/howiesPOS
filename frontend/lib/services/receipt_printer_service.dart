@@ -281,8 +281,15 @@ class ReceiptData {
     final activeSubtotal = items.fold<double>(0.0, (s, i) => s + i.totalPrice);
     final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
     final effDiscount = discountAmount > 0 ? discountAmount : table.discountAmount;
-    final effTax = taxRate > 0 ? (effSubtotal * taxRate / 100) : (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1) ? (effSubtotal * 0.05) : taxAmount);
-    final effGrandTotal = (effSubtotal - effDiscount + effTax).clamp(0.0, double.infinity);
+    final taxableAmount = (effSubtotal - effDiscount).clamp(0.0, double.infinity);
+    final effTax = taxRate > 0
+        ? (taxableAmount * taxRate / 100)
+        : (taxAmount > 0
+            ? (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1)
+                ? (taxableAmount * 0.05)
+                : taxAmount)
+            : 0.0);
+    final effGrandTotal = (taxableAmount + effTax).clamp(0.0, double.infinity);
 
     return ReceiptData(
       type: ReceiptType.customerReceipt,
@@ -355,8 +362,15 @@ class ReceiptData {
     final activeSubtotal = items.fold<double>(0.0, (s, i) => s + i.totalPrice);
     final effSubtotal = activeSubtotal > 0 ? activeSubtotal : subtotal;
     final effDiscount = discountAmount > 0 ? discountAmount : table.discountAmount;
-    final effTax = taxRate > 0 ? (effSubtotal * taxRate / 100) : (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1) ? (effSubtotal * 0.05) : taxAmount);
-    final effGrandTotal = (effSubtotal - effDiscount + effTax).clamp(0.0, double.infinity);
+    final taxableAmount = (effSubtotal - effDiscount).clamp(0.0, double.infinity);
+    final effTax = taxRate > 0
+        ? (taxableAmount * taxRate / 100)
+        : (taxAmount > 0
+            ? (table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1)
+                ? (taxableAmount * 0.05)
+                : taxAmount)
+            : 0.0);
+    final effGrandTotal = (taxableAmount + effTax).clamp(0.0, double.infinity);
 
     return ReceiptData(
       type: ReceiptType.preBill,
@@ -2633,10 +2647,11 @@ class ReceiptPrinterService {
 
           final grossAmt = activeItems.fold<double>(0.0, (s, i) => s + i.totalPrice);
           final totalQty = activeItems.fold<double>(0.0, (s, i) => s + i.quantity);
+          final taxableAmt = (grossAmt - receipt.discountAmount).clamp(0.0, double.infinity);
           final double calcTax = receipt.taxRate > 0
-              ? (grossAmt * receipt.taxRate / 100)
+              ? (taxableAmt * receipt.taxRate / 100)
               : (activeItems.isEmpty ? 0.0 : receipt.taxAmount);
-          final double netTotal = (grossAmt - receipt.discountAmount + calcTax + receipt.serviceChargeAmount + receipt.deliveryFee).clamp(0.0, double.infinity);
+          final double netTotal = (taxableAmt + calcTax + receipt.serviceChargeAmount + receipt.deliveryFee).clamp(0.0, double.infinity);
 
           final address = receipt.branchName.isNotEmpty
               ? receipt.branchName

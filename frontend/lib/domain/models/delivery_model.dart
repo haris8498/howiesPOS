@@ -100,7 +100,7 @@ class DeliveryOrder {
     required this.customerPhone,
     required this.deliveryAddress,
     this.deliveryCharge = 150.0,
-    this.totalAmount = 1449.0,
+    this.totalAmount = 0.0,
     this.discountAmount = 0.0,
     this.discountPercentage = 0.0,
     this.taxAmount = 0.0,

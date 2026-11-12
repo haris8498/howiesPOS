@@ -4316,9 +4316,23 @@ class _TakeawayOrderItem {
     required this.item,
     this.quantity = 1,
     this.initialOrderedQty = 0,
-    this.selectedSize = 'Regular',
+    String? selectedSize,
     this.selectedCrust = 'Original',
-  });
+  }) : selectedSize = (selectedSize != null && selectedSize.isNotEmpty && selectedSize != 'Regular')
+            ? selectedSize
+            : _extractSizeFromName(item.name);
+
+  static String _extractSizeFromName(String name) {
+    final match = RegExp(r'\((Small|Medium|Large|Family|Personal|Regular|Single|Double|Triple|Slice|[0-9]+[ ]*(?:pcs|pc|slices|slice|inch|gm|ml|ltr)?)\)', caseSensitive: false).firstMatch(name);
+    if (match != null) {
+      return match.group(1)!.trim();
+    }
+    final words = RegExp(r'\b(Small|Medium|Large|Family|Personal|Regular)\b', caseSensitive: false).firstMatch(name);
+    if (words != null) {
+      return words.group(1)!.trim();
+    }
+    return 'Regular';
+  }
 
   bool get isExistingOrderedItem => initialOrderedQty > 0;
   double get totalPrice => item.price * quantity;

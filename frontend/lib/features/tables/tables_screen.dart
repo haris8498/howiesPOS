@@ -3198,6 +3198,18 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
   String? _activeOrderId;
   String? _pendingNewOrderId;
 
+  static String _extractSizeFromName(String name) {
+    final match = RegExp(r'\((Small|Medium|Large|Family|Personal|Regular|Single|Double|Triple|Slice|[0-9]+[ ]*(?:pcs|pc|slices|slice|inch|gm|ml|ltr)?)\)', caseSensitive: false).firstMatch(name);
+    if (match != null) {
+      return match.group(1)!.trim();
+    }
+    final words = RegExp(r'\b(Small|Medium|Large|Family|Personal|Regular)\b', caseSensitive: false).firstMatch(name);
+    if (words != null) {
+      return words.group(1)!.trim();
+    }
+    return 'Regular';
+  }
+
   List<String> _categories = [
     'All',
     'Deals',
@@ -4146,19 +4158,25 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                             ? widget.table.activeOrderId
                                             : null);
                                     String? effectiveOrderNumber = isCurrentlyOccupied ? widget.table.activeOrderNumber : null;
-                                    final itemsPayload = _cartItems.map((c) => {
-                                      if (c.id != null && c.id!.isNotEmpty) 'id': c.id,
-                                      if (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
-                                        'menu_item_id': c.item.id,
-                                      'item_name': c.item.name,
-                                      'quantity': c.quantity,
-                                      'unit_price': c.item.price,
+                                    final itemsPayload = _cartItems.map((c) {
+                                      final detectedSize = _extractSizeFromName(c.item.name);
+                                      return {
+                                        if (c.id != null && c.id!.isNotEmpty) 'id': c.id,
+                                        if (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
+                                          'menu_item_id': c.item.id,
+                                        'item_name': c.item.name,
+                                        'quantity': c.quantity,
+                                        'unit_price': c.item.price,
+                                        'selected_size': detectedSize,
+                                        'selected_crust': 'Original',
+                                      };
                                     }).toList();
 
                                     final orderItems = _cartItems.map((c) {
                                       final menuItemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
                                           ? c.item.id!
                                           : const Uuid().v7();
+                                      final detectedSize = _extractSizeFromName(c.item.name);
                                       return OrderItem(
                                         id: (c.id != null && c.id!.isNotEmpty) ? c.id : const Uuid().v7(),
                                         item: MenuItem(
@@ -4170,7 +4188,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                           imageUrl: c.item.imagePath,
                                         ),
                                         quantity: c.quantity,
-                                        selectedSize: 'Regular',
+                                        selectedSize: detectedSize,
                                         selectedCrust: 'Original',
                                         backendUnitPrice: c.item.price,
                                       );
@@ -4432,9 +4450,11 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
 
     final taxable = (subtotal - widget.table.discountAmount).clamp(0.0, double.infinity);
     if (widget.table.dineInTax > 0 && taxable > 0) {
-      _taxRate = (widget.table.dineInTax / taxable) * 100.0;
+      final computedRate = (widget.table.dineInTax / taxable) * 100.0;
+      _taxRate = computedRate > 30.0 ? 0.0 : computedRate;
     } else if (widget.table.dineInTax > 0 && subtotal > 0) {
-      _taxRate = (widget.table.dineInTax / subtotal) * 100.0;
+      final computedRate = (widget.table.dineInTax / subtotal) * 100.0;
+      _taxRate = computedRate > 30.0 ? 0.0 : computedRate;
     } else {
       _taxRate = 0.0;
     }
@@ -4497,7 +4517,7 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
       }
     }
     if (subtotal <= 0) {
-      subtotal = billAmount > 0 ? billAmount : 1449.0;
+      subtotal = billAmount > 0 ? billAmount : 0.0;
     }
 
     final double discountAmount = _isDiscountAmountMode
@@ -5145,7 +5165,11 @@ class _FullBillCalculatorDialog extends StatefulWidget {
 
 class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
   final TextEditingController _cashController = TextEditingController();
-  double _cashGiven = 5000.0;
+  double _cashGiven = 0.0;
+  late double _subtotal;
+  late double _discountAmount;
+  late double _discountPercentage;
+  late double _dineInTax;
 
   @override
   void initState() {
@@ -5161,16 +5185,28 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
       subtotal = (widget.table.currentBillAmount + widget.table.discountAmount - widget.table.dineInTax).clamp(0.0, double.infinity);
     }
     if (subtotal <= 0) {
-      subtotal = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 1449.0;
+      subtotal = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 0.0;
+    }
+    _subtotal = subtotal;
+
+    _discountAmount = widget.table.discountAmount.clamp(0.0, _subtotal);
+    _discountPercentage = widget.table.discountPercentage;
+
+    final taxable = (_subtotal - _discountAmount).clamp(0.0, double.infinity);
+    final rawTax = widget.table.dineInTax.clamp(0.0, double.infinity);
+    final rawTaxRate = taxable > 0 && rawTax > 0 ? (rawTax / taxable) * 100.0 : 0.0;
+
+    // If stored tax rate is >= 30% (e.g. 100% tax leftover from cancelled items), auto-reset to 0.0
+    if (rawTaxRate >= 30.0 && taxable > 0) {
+      _dineInTax = 0.0;
+    } else {
+      _dineInTax = rawTax;
     }
 
-    final discountAmount = widget.table.discountAmount;
-    final dineInTax = widget.table.dineInTax;
-    final netTotal = (subtotal - discountAmount + dineInTax).clamp(0.0, double.infinity);
-
-    final defaultAmount = netTotal > 0 ? netTotal : 5000.0;
+    final netTotal = (taxable + _dineInTax).clamp(0.0, double.infinity);
+    final defaultAmount = netTotal > 0 ? netTotal : 0.0;
     _cashGiven = defaultAmount;
-    _cashController.text = defaultAmount.toStringAsFixed(0);
+    _cashController.text = defaultAmount > 0 ? defaultAmount.toStringAsFixed(0) : '0';
   }
 
   @override
@@ -5184,6 +5220,80 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
       _cashGiven = amount;
       _cashController.text = amount.toStringAsFixed(0);
     });
+  }
+
+  void _setTaxRate(double pct, double taxableAmount) {
+    setState(() {
+      if (pct <= 0.0 || taxableAmount <= 0.0) {
+        _dineInTax = 0.0;
+      } else {
+        _dineInTax = (taxableAmount * (pct / 100.0));
+      }
+      final newNet = (taxableAmount + _dineInTax).clamp(0.0, double.infinity);
+      _setCash(newNet);
+    });
+    // Persist updated tax to table in memory
+    widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
+      widget.table.id,
+      (taxableAmount + _dineInTax).clamp(0.0, double.infinity),
+      TableStatus.occupied,
+      activeOrderId: widget.table.activeOrderId,
+      activeOrderNumber: widget.table.activeOrderNumber,
+      orderItems: widget.table.currentOrderItems,
+      discountAmount: _discountAmount,
+      discountPercentage: _discountPercentage,
+      dineInTax: _dineInTax,
+    );
+  }
+
+  void _clearDiscount(double taxableAmount) {
+    setState(() {
+      _discountAmount = 0.0;
+      _discountPercentage = 0.0;
+      final newTaxable = _subtotal;
+      final newNet = (newTaxable + _dineInTax).clamp(0.0, double.infinity);
+      _setCash(newNet);
+    });
+    widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
+      widget.table.id,
+      (_subtotal + _dineInTax).clamp(0.0, double.infinity),
+      TableStatus.occupied,
+      activeOrderId: widget.table.activeOrderId,
+      activeOrderNumber: widget.table.activeOrderNumber,
+      orderItems: widget.table.currentOrderItems,
+      discountAmount: 0.0,
+      discountPercentage: 0.0,
+      dineInTax: _dineInTax,
+    );
+  }
+
+  Widget _buildCalculatorTaxChip(String label, double pct, double taxableAmount) {
+    final currentPct = taxableAmount > 0 && _dineInTax > 0 ? (_dineInTax / taxableAmount) * 100.0 : 0.0;
+    final isSelected = (_dineInTax == 0.0 && pct == 0.0) || ((currentPct - pct).abs() < 0.2 && _dineInTax > 0);
+    return InkWell(
+      onTap: () => _setTaxRate(pct, taxableAmount),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF2563EB)
+              : (widget.isDark ? const Color(0xFF0F172A) : Colors.white),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF2563EB) : (widget.isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 9.5,
+            fontWeight: isSelected ? FontWeight.w900 : FontWeight.bold,
+            color: isSelected ? Colors.white : (widget.isDark ? Colors.white70 : AppColors.textPrimary),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -5202,17 +5312,16 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
       }
     }
     if (subtotal <= 0) {
-      subtotal = rawBill > 0 ? rawBill : 1449.0;
+      subtotal = rawBill > 0 ? rawBill : 0.0;
     }
 
-    // Retain exact discount and tax stored on table / database from Customer Bill
-    final double discountAmount = widget.table.discountAmount.clamp(0.0, subtotal);
-    final double effectiveDiscountPct = widget.table.discountPercentage > 0
-        ? widget.table.discountPercentage
+    final double discountAmount = _discountAmount.clamp(0.0, subtotal);
+    final double effectiveDiscountPct = _discountPercentage > 0
+        ? _discountPercentage
         : (subtotal > 0 && discountAmount > 0 ? (discountAmount / subtotal) * 100.0 : 0.0);
 
     final double taxableAmount = (subtotal - discountAmount).clamp(0.0, double.infinity);
-    final double taxAmount = widget.table.dineInTax.clamp(0.0, double.infinity);
+    final double taxAmount = _dineInTax.clamp(0.0, double.infinity);
     final double taxRate = taxableAmount > 0 && taxAmount > 0 ? (taxAmount / taxableAmount) * 100.0 : 0.0;
     final double netTotal = (taxableAmount + taxAmount).clamp(0.0, double.infinity);
     final double changeReturn = _cashGiven - netTotal;
@@ -5287,9 +5396,9 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                             color: const Color(0xFF16A34A).withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: const Text(
-                            'Pre-Bill Pricing Applied',
-                            style: TextStyle(
+                          child: Text(
+                            taxAmount > 0 || discountAmount > 0 ? 'Pre-Bill Pricing Applied' : 'Standard Pricing',
+                            style: const TextStyle(
                               color: Color(0xFF16A34A),
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
@@ -5316,31 +5425,52 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                                     : Colors.transparent,
                               ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            child: Row(
                               children: [
-                                Text(
-                                  'DISCOUNT',
-                                  style: TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: widget.isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'DISCOUNT',
+                                        style: TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: widget.isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        discountAmount > 0
+                                            ? '- PKR ${discountAmount.toStringAsFixed(0)} (${effectiveDiscountPct.toStringAsFixed(effectiveDiscountPct.truncateToDouble() == effectiveDiscountPct ? 0 : 1)}%)'
+                                            : 'No Discount',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w900,
+                                          color: discountAmount > 0
+                                              ? const Color(0xFF16A34A)
+                                              : (widget.isDark ? Colors.white70 : AppColors.textSecondary),
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  discountAmount > 0
-                                      ? '- PKR ${discountAmount.toStringAsFixed(0)} (${effectiveDiscountPct.toStringAsFixed(effectiveDiscountPct.truncateToDouble() == effectiveDiscountPct ? 0 : 1)}%)'
-                                      : 'No Discount',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w900,
-                                    color: discountAmount > 0
-                                        ? const Color(0xFF16A34A)
-                                        : (widget.isDark ? Colors.white70 : AppColors.textSecondary),
+                                if (discountAmount > 0)
+                                  Tooltip(
+                                    message: 'Remove Discount',
+                                    child: InkWell(
+                                      onTap: () => _clearDiscount(taxableAmount),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(3),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withValues(alpha: 0.15),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.close_rounded, size: 12, color: Colors.red),
+                                      ),
+                                    ),
                                   ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
                               ],
                             ),
                           ),
@@ -5361,35 +5491,77 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
                                     : Colors.transparent,
                               ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            child: Row(
                               children: [
-                                Text(
-                                  'DINE-IN TAX',
-                                  style: TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: widget.isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'DINE-IN TAX',
+                                        style: TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: widget.isDark ? const Color(0xFF94A3B8) : AppColors.textMuted,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        taxAmount > 0
+                                            ? '+ PKR ${taxAmount.toStringAsFixed(0)} (${taxRate.toStringAsFixed(taxRate.truncateToDouble() == taxRate ? 0 : 1)}%)'
+                                            : '0% (Exempt)',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w900,
+                                          color: taxAmount > 0
+                                              ? const Color(0xFF2563EB)
+                                              : (widget.isDark ? Colors.white70 : AppColors.textSecondary),
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  taxAmount > 0
-                                      ? '+ PKR ${taxAmount.toStringAsFixed(0)} (${taxRate.toStringAsFixed(taxRate.truncateToDouble() == taxRate ? 0 : 1)}%)'
-                                      : '0% (Exempt)',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w900,
-                                    color: taxAmount > 0
-                                        ? const Color(0xFF2563EB)
-                                        : (widget.isDark ? Colors.white70 : AppColors.textSecondary),
+                                if (taxAmount > 0)
+                                  Tooltip(
+                                    message: 'Remove Tax (0%)',
+                                    child: InkWell(
+                                      onTap: () => _setTaxRate(0.0, taxableAmount),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(3),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withValues(alpha: 0.15),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.close_rounded, size: 12, color: Colors.red),
+                                      ),
+                                    ),
                                   ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
                               ],
                             ),
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // Quick Tax Adjustment Chips Row
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          'Tax Rate:',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: widget.isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary,
+                          ),
+                        ),
+                        _buildCalculatorTaxChip('0% (Exempt)', 0.0, taxableAmount),
+                        _buildCalculatorTaxChip('5% (GST)', 5.0, taxableAmount),
+                        _buildCalculatorTaxChip('8.5%', 8.5, taxableAmount),
+                        _buildCalculatorTaxChip('16% (PRA)', 16.0, taxableAmount),
                       ],
                     ),
                   ],
@@ -7083,13 +7255,33 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
             newBill += (qty * price);
           }
         }
+
+        final oldSubtotal = widget.table.liveSubtotal;
+        double newDineInTax = 0.0;
+        double newDiscountAmount = 0.0;
+        if (newBill > 0 && oldSubtotal > 0) {
+          // Scale tax proportionally to remaining active items, capped at standard 30%
+          final taxRatio = (widget.table.dineInTax / oldSubtotal).clamp(0.0, 0.30);
+          newDineInTax = (newBill * taxRatio);
+          if (widget.table.discountPercentage > 0) {
+            newDiscountAmount = (newBill * (widget.table.discountPercentage / 100.0)).clamp(0.0, newBill);
+          } else if (widget.table.discountAmount > 0) {
+            final discRatio = (widget.table.discountAmount / oldSubtotal).clamp(0.0, 1.0);
+            newDiscountAmount = (newBill * discRatio).clamp(0.0, newBill);
+          }
+        }
+        final double finalGrandTotal = (newBill - newDiscountAmount + newDineInTax).clamp(0.0, double.infinity);
+
         await widget.ref.read(tableProvider.notifier).updateTableBillAndStatus(
           widget.table.id,
-          newBill,
+          finalGrandTotal,
           TableStatus.occupied,
           activeOrderId: orderId,
           activeOrderNumber: activeOrderNum,
           orderItems: updatedItems,
+          discountAmount: newDiscountAmount,
+          discountPercentage: widget.table.discountPercentage,
+          dineInTax: newDineInTax,
         );
       }
 

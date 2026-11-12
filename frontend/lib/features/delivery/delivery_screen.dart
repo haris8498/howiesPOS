@@ -1815,8 +1815,10 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
 
   // Final Customer Full Bill / Cash Payment Calculator Modal
   void _showFinalBillModal(BuildContext context, DeliveryOrder del, bool isDark) {
-    final taxAmount = del.totalAmount * 0.05;
-    final grandTotal = del.totalAmount + del.deliveryCharge + taxAmount;
+    const double taxAmount = 0.0;
+    final grandTotal = del.totalAmount > 0
+        ? del.totalAmount
+        : (del.subtotal - del.discountAmount + del.deliveryCharge).clamp(0.0, double.infinity);
 
     if (del.paymentStatus.toUpperCase() == 'PAID') {
       _showDeliveryFinalPaidReceiptDialog(context, del, grandTotal, 0.0, isDark);
@@ -1900,7 +1902,7 @@ class _DeliveryScreenState extends ConsumerState<DeliveryScreen> {
           if (currentDiscount < 0) currentDiscount = 0;
 
           final taxableAmount = (subtotal - currentDiscount).clamp(0.0, double.infinity);
-          final currentTax = taxableAmount * 0.05;
+          const double currentTax = 0.0;
           final currentGrandTotal = (taxableAmount + currentTax + del.deliveryCharge).clamp(0.0, double.infinity);
 
           return Dialog(
@@ -3925,8 +3927,10 @@ class _DeliveryFullBillCalculatorDialogState extends State<_DeliveryFullBillCalc
   @override
   void initState() {
     super.initState();
-    final taxAmount = widget.delivery.totalAmount * 0.05;
-    final grandTotal = widget.delivery.totalAmount + widget.delivery.deliveryCharge + taxAmount;
+    const taxAmount = 0.0;
+    final grandTotal = widget.delivery.totalAmount > 0
+        ? widget.delivery.totalAmount
+        : (widget.delivery.subtotal - widget.delivery.discountAmount + widget.delivery.deliveryCharge).clamp(0.0, double.infinity);
     final defaultAmount = grandTotal > 5000 ? grandTotal : 5000.0;
     _cashGiven = defaultAmount;
     _cashController.text = defaultAmount.toStringAsFixed(0);
@@ -3947,8 +3951,10 @@ class _DeliveryFullBillCalculatorDialogState extends State<_DeliveryFullBillCalc
 
   @override
   Widget build(BuildContext context) {
-    final taxAmount = widget.delivery.totalAmount * 0.05;
-    final netTotal = widget.delivery.totalAmount + widget.delivery.deliveryCharge + taxAmount;
+    const taxAmount = 0.0;
+    final netTotal = widget.delivery.totalAmount > 0
+        ? widget.delivery.totalAmount
+        : (widget.delivery.subtotal - widget.delivery.discountAmount + widget.delivery.deliveryCharge).clamp(0.0, double.infinity);
     final changeReturn = _cashGiven - netTotal;
 
     return Dialog(
@@ -4833,7 +4839,7 @@ void _showDeliveryFinalPaidReceiptDialog(
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          'DELIVERY TAX INVOICE • PAID (${del.orderSource})',
+                          'DELIVERY INVOICE • PAID (${del.orderSource})',
                           style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w900, fontSize: 10),
                         ),
                       ),

@@ -58,6 +58,19 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     loadDeliveryData();
   }
 
+  static String _extractSize(String? size, String name) {
+    if (size != null && size.isNotEmpty && size != 'Regular') return size;
+    final match = RegExp(r'\((Small|Medium|Large|Family|Personal|Regular|Single|Double|Triple|Slice|[0-9]+[ ]*(?:pcs|pc|slices|slice|inch|gm|ml|ltr)?)\)', caseSensitive: false).firstMatch(name);
+    if (match != null) {
+      return match.group(1)!.trim();
+    }
+    final words = RegExp(r'\b(Small|Medium|Large|Family|Personal|Regular)\b', caseSensitive: false).firstMatch(name);
+    if (words != null) {
+      return words.group(1)!.trim();
+    }
+    return 'Regular';
+  }
+
   Future<void> loadDeliveryData({bool silent = false}) async {
     if (!silent && state.deliveries.isEmpty) {
       state = state.copyWith(isLoading: true);
@@ -128,7 +141,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
                 imageUrl: '',
               ),
               quantity: i.quantity,
-              selectedSize: i.sizeName ?? 'Regular',
+              selectedSize: _extractSize(i.sizeName, i.itemName),
               backendUnitPrice: i.unitPrice,
               isCancelled: i.isCancelled,
               cancelReason: i.cancelReason,
@@ -303,7 +316,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
           imageUrl: '',
         ),
         quantity: qty,
-        selectedSize: it['selected_size']?.toString() ?? 'Regular',
+        selectedSize: _extractSize(it['selected_size']?.toString(), (it['item_name'] ?? it['name'] ?? '').toString()),
         selectedCrust: it['selected_crust']?.toString() ?? 'Original',
         backendUnitPrice: unitPrice,
       );
@@ -451,7 +464,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       final itemName = it['item_name']?.toString() ?? it['name']?.toString() ?? 'Item';
       final qty = (it['quantity'] as num?)?.toInt() ?? 1;
       final unitPrice = (it['unit_price'] as num?)?.toDouble() ?? (subtotal / (qty > 0 ? qty : 1));
-      final size = it['selected_size']?.toString() ?? 'Regular';
+      final size = _extractSize(it['selected_size']?.toString(), itemName);
       final crust = it['selected_crust']?.toString() ?? 'Original';
       return OrderItem(
         id: itemId,
@@ -606,7 +619,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     final pct = discountPercentage ?? target.discountPercentage;
     final amt = discountAmount ?? (baseSubtotal * (pct / 100));
     final taxable = (baseSubtotal - amt).clamp(0.0, double.infinity);
-    final effTax = taxAmount ?? (taxable * 0.05);
+    final effTax = taxAmount ?? 0.0;
     final effGrandTotal = grandTotal ?? (taxable + effTax + target.deliveryCharge).clamp(0.0, double.infinity);
 
     // 1. Update in Local SQLite & sync outbox atomically

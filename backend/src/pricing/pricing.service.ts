@@ -137,13 +137,42 @@ export class PricingService {
 
         if (menuItem) {
           // A. Size matching
-          const selectedSize = (item.selected_size || 'Regular').trim().toLowerCase();
-          const matchedSize = (menuItem.sizes || []).find(
+          let selectedSize = (item.selected_size || '').trim().toLowerCase();
+          let matchedSize = (menuItem.sizes || []).find(
             (s) => s.size_name.trim().toLowerCase() === selectedSize,
           );
 
+          // If not matched or generic 'regular', extract size from item_name if present: e.g. "Arabic Crispy (Large)"
+          if ((!matchedSize || selectedSize === 'regular' || selectedSize === '') && item.item_name) {
+            const sizeMatch =
+              item.item_name.match(/\((Small|Medium|Large|Family|Personal|Regular|Single|Double|Triple)\)/i) ||
+              item.item_name.match(/\b(Small|Medium|Large|Family|Personal|Regular)\b/i);
+            if (sizeMatch) {
+              const extractedSize = sizeMatch[1].trim().toLowerCase();
+              const sizeByRegex = (menuItem.sizes || []).find(
+                (s) => s.size_name.trim().toLowerCase() === extractedSize,
+              );
+              if (sizeByRegex) {
+                matchedSize = sizeByRegex;
+              }
+            }
+          }
+
+          // If still not matched, check if item.unit_price matches any size's price in this menuItem!
+          if (!matchedSize && (menuItem.sizes || []).length > 0 && item.unit_price) {
+            const clientPrice = Number(item.unit_price);
+            const sizeByPrice = (menuItem.sizes || []).find(
+              (s) => Math.abs(Number(s.price) - clientPrice) < 0.01,
+            );
+            if (sizeByPrice) {
+              matchedSize = sizeByPrice;
+            }
+          }
+
           if (matchedSize) {
             catalogUnitPrice = new Prisma.Decimal(matchedSize.price);
+          } else if (Number(item.unit_price) > 0 && (menuItem.sizes || []).length > 0) {
+            catalogUnitPrice = new Prisma.Decimal(item.unit_price);
           } else {
             catalogUnitPrice = new Prisma.Decimal(menuItem.base_price);
           }

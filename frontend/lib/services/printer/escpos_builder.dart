@@ -362,10 +362,14 @@ class EscPosBuilder {
       // Modifiers in parentheses e.g. (Medium)
       final modifiers = <String>[];
       if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
-        modifiers.add('(${item.size})');
+        if (!_nameContainsModifier(item.name, item.size)) {
+          modifiers.add('(${item.size})');
+        }
       }
       if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
-        modifiers.add('(${item.crust})');
+        if (!_nameContainsModifier(item.name, item.crust)) {
+          modifiers.add('(${item.crust})');
+        }
       }
       if (item.toppings.isNotEmpty) {
         modifiers.add('(${item.toppings.join(", ")})');
@@ -584,10 +588,14 @@ class EscPosBuilder {
         modifiers.add('(Reason: ${item.cancelReason})');
       }
       if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
-        modifiers.add('(${item.size})');
+        if (!_nameContainsModifier(item.name, item.size)) {
+          modifiers.add('(${item.size})');
+        }
       }
       if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
-        modifiers.add('(${item.crust})');
+        if (!_nameContainsModifier(item.name, item.crust)) {
+          modifiers.add('(${item.crust})');
+        }
       }
       if (item.toppings.isNotEmpty) {
         modifiers.add('(${item.toppings.join(', ')})');
@@ -769,6 +777,19 @@ class EscPosBuilder {
       lines.add(current);
     }
     return lines;
+  }
+
+  static bool _nameContainsModifier(String name, String? modifier) {
+    if (modifier == null || modifier.trim().isEmpty) return false;
+    final mod = modifier.trim().toLowerCase();
+    final n = name.toLowerCase();
+    if (n.contains('($mod)') || n.contains(' $mod ') || n.endsWith(' $mod') || n.startsWith('$mod ')) {
+      return true;
+    }
+    if (mod.length > 2 && n.contains(mod)) {
+      return true;
+    }
+    return false;
   }
 
   static String format3DigitOrderNumber(String orderNumber) {

@@ -3018,6 +3018,8 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
   final _phoneController = TextEditingController();
   final _addressController = TextEditingController();
   final _feeController = TextEditingController(text: '150');
+  final _menuSearchController = TextEditingController();
+  String _menuSearchQuery = '';
   double _deliveryFee = 150.0;
   String _paymentMethod = 'Cash on Delivery';
 
@@ -3366,6 +3368,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
     _phoneController.dispose();
     _addressController.dispose();
     _feeController.dispose();
+    _menuSearchController.dispose();
     super.dispose();
   }
 
@@ -3401,8 +3404,12 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
     final categories = _categories;
 
     final filteredMenu = _menuItems.where((item) {
-      if (_selectedCategory == 'All') return true;
-      return item['cat']?.toString().toLowerCase() == _selectedCategory.toLowerCase();
+      final matchesCategory = _selectedCategory == 'All' ||
+          item['cat']?.toString().toLowerCase() == _selectedCategory.toLowerCase();
+      final matchesSearch = _menuSearchQuery.isEmpty ||
+          item['name'].toString().toLowerCase().contains(_menuSearchQuery.toLowerCase()) ||
+          (item['cat']?.toString().toLowerCase().contains(_menuSearchQuery.toLowerCase()) ?? false);
+      return matchesCategory && matchesSearch;
     }).toList();
 
     return Dialog(
@@ -3496,7 +3503,69 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('SELECT MENU ITEMS TO ORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryRed)),
+                          // Header: Title & Menu Item Search Bar
+                          Row(
+                            children: [
+                              const Text(
+                                'SELECT MENU ITEMS TO ORDER',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: AppColors.primaryRed,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 38,
+                                  child: TextField(
+                                    controller: _menuSearchController,
+                                    onChanged: (val) => setState(() => _menuSearchQuery = val.trim()),
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white : AppColors.textPrimary,
+                                      fontSize: 12,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: 'Search items by name...',
+                                      hintStyle: TextStyle(
+                                        color: isDark ? const Color(0xFF64748B) : AppColors.textSecondary,
+                                        fontSize: 12,
+                                      ),
+                                      prefixIcon: const Icon(Icons.search_rounded, size: 18, color: AppColors.primaryRed),
+                                      suffixIcon: _menuSearchQuery.isNotEmpty
+                                          ? IconButton(
+                                              icon: const Icon(Icons.clear_rounded, size: 16),
+                                              onPressed: () {
+                                                _menuSearchController.clear();
+                                                setState(() => _menuSearchQuery = '');
+                                              },
+                                            )
+                                          : null,
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+                                      filled: true,
+                                      fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                        borderSide: BorderSide(
+                                          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                                        ),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                        borderSide: BorderSide(
+                                          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                        borderSide: const BorderSide(color: AppColors.primaryRed, width: 1.5),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                           const SizedBox(height: 10),
 
                           // Category Filter Chips
@@ -3524,9 +3593,50 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                           ),
                           const SizedBox(height: 10),
 
-                          // Menu Items Grid with Dish Images
+                          // Menu Items Grid with Dish Images or Empty Search State
                           Expanded(
-                            child: GridView.builder(
+                            child: filteredMenu.isEmpty
+                                ? Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.search_off_rounded,
+                                          size: 44,
+                                          color: isDark ? const Color(0xFF64748B) : AppColors.textSecondary,
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Text(
+                                          _menuSearchQuery.isNotEmpty
+                                              ? 'No items found matching "$_menuSearchQuery"'
+                                              : 'No items in this category',
+                                          style: TextStyle(
+                                            color: isDark ? Colors.white70 : AppColors.textSecondary,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        if (_menuSearchQuery.isNotEmpty || _selectedCategory != 'All') ...[
+                                          const SizedBox(height: 10),
+                                          TextButton.icon(
+                                            onPressed: () {
+                                              setState(() {
+                                                _selectedCategory = 'All';
+                                                _menuSearchQuery = '';
+                                                _menuSearchController.clear();
+                                              });
+                                            },
+                                            icon: const Icon(Icons.refresh_rounded, size: 16),
+                                            label: const Text('Reset filter & search'),
+                                            style: TextButton.styleFrom(
+                                              foregroundColor: AppColors.primaryRed,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  )
+                                : GridView.builder(
                               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: 2,
                                 crossAxisSpacing: 10,

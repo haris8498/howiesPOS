@@ -103,7 +103,7 @@ export class ReportsService {
     }
 
     // For Active Shift / Live Cashier reports: Calculate strictly from Opening Time until Closing Time
-    if (p === 'currentshift' || p === 'shift') {
+    if (p === 'currentshift' || p === 'shift' || p === 'today') {
       // 1. Check if there is an active session in dailyCalculation
       const activeSession = this.prisma.dailyCalculation
         ? await this.prisma.dailyCalculation.findFirst({
@@ -122,6 +122,16 @@ export class ReportsService {
           end,
           periodLabel: 'Today (Live Shift)',
           shiftId: activeSession.id,
+        };
+      }
+
+      if (p === 'today') {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        return {
+          start,
+          end,
+          periodLabel: 'Today (Shift Closed)',
         };
       }
 
@@ -170,11 +180,11 @@ export class ReportsService {
       conditions.push({
         OR: [
           {
+            shift_id: { not: null },
             daily_calculation: {
               OR: [
                 { date: { gte: utcStart, lte: utcEnd } },
                 { date: { gte: scope.start, lte: scope.end } },
-                { created_at: { gte: scope.start, lte: scope.end } },
               ],
             },
           } as any,
@@ -185,12 +195,6 @@ export class ReportsService {
               lte: scope.end,
             },
           } as any,
-          {
-            created_at: {
-              gte: scope.start,
-              lte: scope.end,
-            },
-          },
         ],
       });
     }

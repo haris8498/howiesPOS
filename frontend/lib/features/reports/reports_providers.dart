@@ -28,16 +28,16 @@ bool _orderMatchesReportFilter(
     }
   }
 
-  // If order explicitly belongs to another shift, do NOT match active shift
+  // If order explicitly belongs to another shift, do NOT match active shift or live today report
   if (activeShift != null && order.shiftId != null && order.shiftId != activeShift.id) {
-    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
+    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'today') {
       return false;
     }
   }
 
   // If unassigned shift, only match if created during active shift window and today
   if (order.shiftId == null) {
-    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift') {
+    if (cleanPeriod == 'currentshift' || cleanPeriod == 'shift' || cleanPeriod == 'today') {
       if (activeShift != null) {
         final shiftStart = activeShift.createdAt.toLocal().subtract(const Duration(minutes: 5));
         return oDate.isAfter(shiftStart) && oDate.year == now.year && oDate.month == now.month && oDate.day == now.day;

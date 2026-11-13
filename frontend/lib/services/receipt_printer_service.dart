@@ -2574,10 +2574,14 @@ class ReceiptPrinterService {
                         : '${item.quantity}';
                     final modifiers = <String>[];
                     if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
-                      modifiers.add('(${item.size})');
+                      if (!_nameContainsModifier(item.name, item.size)) {
+                        modifiers.add('(${item.size})');
+                      }
                     }
                     if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
-                      modifiers.add('(${item.crust})');
+                      if (!_nameContainsModifier(item.name, item.crust)) {
+                        modifiers.add('(${item.crust})');
+                      }
                     }
                     if (item.toppings.isNotEmpty) {
                       modifiers.add('(${item.toppings.join(", ")})');
@@ -2780,10 +2784,14 @@ class ReceiptPrinterService {
                   final displayName = item.name;
                   final modifiers = <String>[];
                   if (item.size != null && item.size!.isNotEmpty && item.size != 'Regular') {
-                    modifiers.add('(${item.size})');
+                    if (!_nameContainsModifier(displayName, item.size)) {
+                      modifiers.add('(${item.size})');
+                    }
                   }
                   if (item.crust != null && item.crust!.isNotEmpty && item.crust != 'Original') {
-                    modifiers.add('(${item.crust})');
+                    if (!_nameContainsModifier(displayName, item.crust)) {
+                      modifiers.add('(${item.crust})');
+                    }
                   }
                   if (item.toppings.isNotEmpty) {
                     modifiers.add('(${item.toppings.join(", ")})');
@@ -2971,6 +2979,19 @@ class ReceiptPrinterService {
     );
 
     return pdf;
+  }
+
+  static bool _nameContainsModifier(String name, String? modifier) {
+    if (modifier == null || modifier.trim().isEmpty) return false;
+    final mod = modifier.trim().toLowerCase();
+    final n = name.toLowerCase();
+    if (n.contains('($mod)') || n.contains(' $mod ') || n.endsWith(' $mod') || n.startsWith('$mod ')) {
+      return true;
+    }
+    if (mod.length > 2 && n.contains(mod)) {
+      return true;
+    }
+    return false;
   }
 
   static pw.Widget _divider({bool dashed = false, double thickness = 0.6}) {

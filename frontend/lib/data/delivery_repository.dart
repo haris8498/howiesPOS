@@ -567,7 +567,6 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
                 await (db.update(db.syncOutbox)..where((t) => t.operationId.equals(outbox.operationId))).write(
                   SyncOutboxCompanion(
                     payload: Value(jsonEncode(payload)),
-                    clientUpdatedAt: Value(DateTime.now()),
                   ),
                 );
               } catch (_) {}

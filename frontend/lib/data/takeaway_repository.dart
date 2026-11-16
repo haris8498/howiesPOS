@@ -342,11 +342,14 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
 
     // 1. OFFLINE_FIRST_ENABLED=true: route checkout only through orderRepositoryProvider (local write + outbox).
     // Remove the direct HTTP create and the fallback new-order path (§Wave 5a / #10).
+    final calcState = _ref?.read(dailyCalculationProvider);
+    final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+        ? calcState.liveSummary.shiftId
+        : calcState?.selectedRecord?.id;
+
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
-        final calcState = _ref!.read(dailyCalculationProvider);
-        final String? activeShiftId = calcState.selectedRecord?.id;
 
         final orderModel = OrderModel(
           id: orderId,
@@ -409,6 +412,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
         'payment_status': 'UNPAID',
         'kitchen_ticket_sent': true,
         'items': orderItemsPayload,
+        if (activeShiftId != null) 'shift_id': activeShiftId,
         if (approvedByManagerId != null || managerApproval != null)
           'approved_by_manager_id': approvedByManagerId ?? managerApproval?['manager_id'],
         if (managerApproval != null) 'manager_approval': managerApproval,
@@ -493,6 +497,11 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     state = state.copyWith(orders: updatedList);
 
     // Update local SQLite order atomically
+    final calcState = _ref?.read(dailyCalculationProvider);
+    final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+        ? calcState.liveSummary.shiftId
+        : calcState?.selectedRecord?.id;
+
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
@@ -506,6 +515,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
             approvedByManagerId: approvedByManagerId ?? managerApproval?['manager_id']?.toString(),
             managerApproval: managerApproval,
             items: updatedItems,
+            shiftId: existingLocal.shiftId ?? activeShiftId,
             takeawayDetail: TakeawayOrderDetail(
               id: existingLocal.takeawayDetail?.id ?? const Uuid().v7(),
               orderId: orderId,
@@ -527,6 +537,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     try {
       await _ordersApiService.updateOrder(orderId, {
         'order_type': 'takeaway',
+        if (activeShiftId != null) 'shift_id': activeShiftId,
         'customer_name': customerName.isNotEmpty ? customerName : 'Guest Customer',
         'customer_phone': customerPhone.isNotEmpty ? customerPhone : 'N/A',
         'subtotal': subtotal,
@@ -664,12 +675,15 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
     final grandTotal = (subtotal - amt + existing.taxAmount).clamp(0.0, double.infinity);
 
     // 1. Update in Local SQLite & sync outbox atomically
+    final calcState = _ref?.read(dailyCalculationProvider);
+    final String? activeShiftId = (calcState?.liveSummary.shiftId != null && calcState!.liveSummary.shiftId!.isNotEmpty)
+        ? calcState.liveSummary.shiftId
+        : calcState?.selectedRecord?.id;
+
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
         final existingLocal = await orderRepo.getOrderById(orderId);
-        final calcState = _ref!.read(dailyCalculationProvider);
-        final String? activeShiftId = calcState.selectedRecord?.id;
 
         final paymentList = <OrderPaymentModel>[];
         if (payments != null && payments.isNotEmpty) {
@@ -745,6 +759,7 @@ class TakeawayNotifier extends StateNotifier<TakeawayState> {
 
     try {
       await _ordersApiService.updateOrder(orderId, {
+        if (activeShiftId != null) 'shift_id': activeShiftId,
         'is_paid': true,
         'payment_status': 'PAID',
         'status': 'completed',

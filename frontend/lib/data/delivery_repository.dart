@@ -350,7 +350,9 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
         final calcState = _ref!.read(dailyCalculationProvider);
-        final String? activeShiftId = calcState.selectedRecord?.id;
+        final String? activeShiftId = (calcState.liveSummary.shiftId != null && calcState.liveSummary.shiftId!.isNotEmpty)
+            ? calcState.liveSummary.shiftId
+            : calcState.selectedRecord?.id;
         final bool isPaidNow = paymentStatus.toUpperCase() == 'PAID';
 
         final paymentList = <OrderPaymentModel>[];
@@ -804,7 +806,9 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
         }
 
         final calcState = _ref!.read(dailyCalculationProvider);
-        final String? activeShiftId = calcState.selectedRecord?.id;
+        final String? activeShiftId = (calcState.liveSummary.shiftId != null && calcState.liveSummary.shiftId!.isNotEmpty)
+            ? calcState.liveSummary.shiftId
+            : calcState.selectedRecord?.id;
 
         final paymentList = <OrderPaymentModel>[];
         if (isPaid) {

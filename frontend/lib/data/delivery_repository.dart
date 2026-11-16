@@ -111,11 +111,13 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
                 ..limit(1))
               .getSingleOrNull();
 
-          String custName = 'Customer';
-          String custPhone = 'N/A';
-          String delAddress = 'Direct Delivery';
-          double fee = 150.0;
-          String payMethod = 'Cash on Delivery';
+          final inMemOrder = state.deliveries.where((d) => d.orderId == lo.id || d.id == 'del-${lo.id}' || d.id == lo.id).firstOrNull;
+
+          String custName = inMemOrder?.customerName ?? 'Customer';
+          String custPhone = inMemOrder?.customerPhone ?? 'N/A';
+          String delAddress = inMemOrder?.deliveryAddress ?? 'Direct Delivery';
+          double fee = inMemOrder?.deliveryCharge ?? 150.0;
+          String payMethod = inMemOrder?.paymentMethod ?? 'Cash on Delivery';
 
           if (outbox != null && outbox.payload.isNotEmpty) {
             try {
@@ -123,7 +125,9 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
               custName = payload['customer_name']?.toString() ?? custName;
               custPhone = payload['customer_phone']?.toString() ?? custPhone;
               delAddress = payload['delivery_address']?.toString() ?? delAddress;
-              fee = double.tryParse(payload['delivery_fee']?.toString() ?? '150') ?? fee;
+              if (payload['delivery_fee'] != null) {
+                fee = double.tryParse(payload['delivery_fee'].toString()) ?? fee;
+              }
               payMethod = payload['payment_method']?.toString() ?? payMethod;
             } catch (_) {}
           }
@@ -459,7 +463,14 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
     required String itemsSummary,
     required List<Map<String, dynamic>> items,
   }) async {
-    final rawOrderId = orderId.startsWith('del-') || orderId.startsWith('del_') ? (orderId.contains('_') ? orderId.substring(4) : orderId) : orderId;
+    String rawOrderId = orderId;
+    if (rawOrderId.startsWith('del-') || rawOrderId.startsWith('del_')) {
+      rawOrderId = rawOrderId.substring(4);
+    }
+    final matchingDel = state.deliveries.where((d) => d.id == orderId || d.orderId == orderId || d.orderId == rawOrderId).firstOrNull;
+    if (matchingDel != null && matchingDel.orderId.isNotEmpty && !matchingDel.orderId.startsWith('del-') && !matchingDel.orderId.startsWith('del_')) {
+      rawOrderId = matchingDel.orderId;
+    }
 
     final domainItems = items.map((it) {
       final itemId = (it['id'] != null && it['id'].toString().isNotEmpty) ? it['id'].toString() : const Uuid().v7();
@@ -485,7 +496,25 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       );
     }).toList();
 
-    // Update local SQLite order atomically
+    // 1. Eagerly update in-memory state so UI updates instantly
+    final updatedList = state.deliveries.map((del) {
+      if (del.id == orderId || del.orderId == orderId || del.orderId == rawOrderId || del.id == 'del-$rawOrderId') {
+        return del.copyWith(
+          customerName: customerName,
+          customerPhone: customerPhone,
+          deliveryAddress: deliveryAddress,
+          deliveryCharge: deliveryFee,
+          totalAmount: grandTotal,
+          itemsSummary: itemsSummary,
+          paymentMethod: paymentMethod,
+          items: domainItems,
+        );
+      }
+      return del;
+    }).toList();
+    state = state.copyWith(deliveries: updatedList);
+
+    // 2. Update local SQLite order and SyncOutbox payload atomically
     if (FeatureFlags.offlineFirstEnabled && _ref != null) {
       try {
         final orderRepo = _ref!.read(orderRepositoryProvider);
@@ -509,6 +538,42 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
             ),
           );
           await orderRepo.updateOrder(updated);
+
+          // Update SyncOutbox payload with edited delivery fee and customer info
+          final db = _ref!.read(appDatabaseProvider);
+          final outboxes = await (db.select(db.syncOutbox)
+                ..where((t) => t.entityId.equals(rawOrderId))
+                ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+              .get();
+
+          for (final outbox in outboxes) {
+            if (outbox.payload.isNotEmpty) {
+              try {
+                final payload = jsonDecode(outbox.payload) as Map<String, dynamic>;
+                payload['delivery_fee'] = deliveryFee;
+                payload['delivery_address'] = deliveryAddress;
+                payload['customer_name'] = customerName;
+                payload['customer_phone'] = customerPhone;
+                payload['subtotal'] = subtotal;
+                payload['grand_total'] = grandTotal;
+                payload['payment_method'] = paymentMethod.toLowerCase();
+                if (payload['online_detail'] is Map) {
+                  final od = payload['online_detail'] as Map<String, dynamic>;
+                  od['delivery_fee'] = deliveryFee;
+                  od['delivery_address'] = deliveryAddress;
+                  od['customer_name'] = customerName;
+                  od['customer_phone'] = customerPhone;
+                }
+                await (db.update(db.syncOutbox)..where((t) => t.operationId.equals(outbox.operationId))).write(
+                  SyncOutboxCompanion(
+                    payload: Value(jsonEncode(payload)),
+                    clientUpdatedAt: Value(DateTime.now()),
+                  ),
+                );
+              } catch (_) {}
+            }
+          }
+
           try {
             _ref!.read(syncBackgroundWorkerProvider).triggerPush();
           } catch (_) {}
@@ -518,6 +583,7 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       }
     }
 
+    // 3. Persist to Backend API
     try {
       await _ordersApiService.updateOrder(rawOrderId, {
         'customer_name': customerName,
@@ -536,29 +602,12 @@ class DeliveryNotifier extends StateNotifier<DeliveryState> {
       // Invalidate KOT print lock so modified order can be printed to the kitchen
       await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(orderId: orderId);
       // Synchronize with database so dispatches, order items, and pricing match DB records
-      await loadDeliveryData();
+      await loadDeliveryData(silent: true);
       return;
     } catch (e) {
       print('⚠️ Error updating delivery order in DB: $e');
       await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(orderId: orderId);
     }
-
-    final updated = state.deliveries.map((del) {
-      if (del.id == orderId || del.orderId == orderId || del.orderId == rawOrderId) {
-        return del.copyWith(
-          customerName: customerName,
-          customerPhone: customerPhone,
-          deliveryAddress: deliveryAddress,
-          deliveryCharge: deliveryFee,
-          totalAmount: grandTotal,
-          itemsSummary: itemsSummary,
-          paymentMethod: paymentMethod,
-          items: domainItems,
-        );
-      }
-      return del;
-    }).toList();
-    state = state.copyWith(deliveries: updated);
   }
 
   void markBillPrinted(String deliveryId) {

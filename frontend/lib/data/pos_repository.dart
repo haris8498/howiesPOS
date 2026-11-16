@@ -16,7 +16,6 @@ import '../domain/services/pricing_engine.dart';
 import '../services/api/api_providers.dart';
 import '../services/api/menu_api_service.dart';
 import '../services/api/settings_api_service.dart';
-import '../services/mock_api_service.dart';
 import 'repositories/api_inventory_repository.dart';
 import 'repositories/api_kitchen_repository.dart';
 import 'repositories/api_table_repository.dart';
@@ -210,7 +209,7 @@ class PosNotifier extends StateNotifier<PosState> {
         _orderRepository = orderRepository,
         _ref = ref,
         super(PosState(
-          menuItems: MockApiService.getInitialMenuItems(),
+          menuItems: const [],
         )) {
     _loadMenuAndSettings();
     _initOrderStream();
@@ -288,8 +287,8 @@ class PosNotifier extends StateNotifier<PosState> {
         }
       }
 
-      if (items.isEmpty) {
-        items = MockApiService.getInitialMenuItems();
+      if (items.isEmpty && state.menuItems.isNotEmpty) {
+        items = state.menuItems;
       }
 
       // 3. Load Store Settings for Tax & Service Charge

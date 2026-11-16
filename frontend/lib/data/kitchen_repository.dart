@@ -4,7 +4,6 @@ import '../domain/models/order_model.dart';
 import '../services/api/api_providers.dart';
 import '../services/api/kitchen_api_service.dart';
 import '../core/network/kitchen_socket_service.dart';
-import '../services/mock_api_service.dart';
 
 class KitchenState {
   final List<OrderModel> kitchenOrders;
@@ -59,45 +58,8 @@ class KitchenNotifier extends StateNotifier<KitchenState> {
     Ref? ref,
   })  : _kitchenApiService = kitchenApiService ?? KitchenApiService(),
         _ref = ref,
-        super(KitchenState(
-          kitchenOrders: [
-            OrderModel(
-              id: 'k-101',
-              orderNumber: 'HH-7412',
-              tableId: 't1',
-              tableName: 'Table 01',
-              type: OrderType.dineIn,
-              status: OrderStatus.accepted,
-              items: [
-                OrderItem(item: MockApiService.getInitialMenuItems()[0], quantity: 2, selectedCrust: 'Butter Cheese', selectedSize: 'Large'),
-                OrderItem(item: MockApiService.getInitialMenuItems()[5], quantity: 1, selectedCrust: 'Cajun', selectedSize: 'Regular'),
-              ],
-              createdAt: DateTime.now().subtract(const Duration(minutes: 8)),
-            ),
-            OrderModel(
-              id: 'k-102',
-              orderNumber: 'HH-7413',
-              tableId: 't5',
-              tableName: 'VIP Booth 01',
-              type: OrderType.dineIn,
-              status: OrderStatus.preparing,
-              items: [
-                OrderItem(item: MockApiService.getInitialMenuItems()[1], quantity: 1, selectedCrust: 'Cajun', selectedSize: 'Extra Large'),
-                OrderItem(item: MockApiService.getInitialMenuItems()[7], quantity: 2),
-              ],
-              createdAt: DateTime.now().subtract(const Duration(minutes: 14)),
-            ),
-            OrderModel(
-              id: 'k-103',
-              orderNumber: 'HH-7414',
-              type: OrderType.takeaway,
-              status: OrderStatus.ready,
-              items: [
-                OrderItem(item: MockApiService.getInitialMenuItems()[2], quantity: 1, selectedCrust: 'Ranch', selectedSize: 'Medium'),
-              ],
-              createdAt: DateTime.now().subtract(const Duration(minutes: 22)),
-            ),
-          ],
+        super(const KitchenState(
+          kitchenOrders: [],
         )) {
     _init();
   }

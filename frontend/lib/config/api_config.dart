@@ -6,6 +6,10 @@ class ApiConfig {
   static const String _definedBaseUrl = String.fromEnvironment('API_BASE_URL');
   static const String _definedSocketUrl = String.fromEnvironment('SOCKET_BASE_URL');
 
+  // Local Backend:
+  static const String localBaseUrl = 'http://localhost:3000/api';
+  static const String localSocketUrl = 'http://localhost:3000';
+
   // Real Online Backend (Contabo VPS):
   static const String onlineBaseUrl = 'http://213.199.57.65/api';
   static const String onlineSocketUrl = 'http://213.199.57.65';

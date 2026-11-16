@@ -3832,15 +3832,18 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                   };
                                 }).toList();
 
+                                final effectiveFee = double.tryParse(_feeController.text.trim()) ?? _deliveryFee;
+                                final effectiveTotal = _itemsSubtotal + effectiveFee;
+
                                 if (isEditing) {
                                   await widget.ref.read(deliveryProvider.notifier).updateDeliveryOrder(
                                     orderId: widget.existingOrder!.orderId.isNotEmpty ? widget.existingOrder!.orderId : widget.existingOrder!.id,
                                     customerName: name,
                                     customerPhone: phone,
                                     deliveryAddress: address,
-                                    deliveryFee: _deliveryFee,
+                                    deliveryFee: effectiveFee,
                                     subtotal: _itemsSubtotal,
-                                    grandTotal: _totalBill,
+                                    grandTotal: effectiveTotal,
                                     paymentMethod: _paymentMethod,
                                     itemsSummary: _itemsSummaryText,
                                     items: itemsList,
@@ -3860,9 +3863,9 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                     customerName: name,
                                     customerPhone: phone,
                                     deliveryAddress: address,
-                                    deliveryFee: _deliveryFee,
+                                    deliveryFee: effectiveFee,
                                     subtotal: _itemsSubtotal,
-                                    grandTotal: _totalBill,
+                                    grandTotal: effectiveTotal,
                                     paymentMethod: _paymentMethod,
                                     paymentStatus: _paymentMethod == 'Paid Online' ? 'PAID' : 'UNPAID',
                                     itemsSummary: _itemsSummaryText,

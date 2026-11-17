@@ -12,6 +12,7 @@ import '../../data/role_rights_repository.dart';
 import '../../domain/models/menu_item.dart';
 import '../../domain/models/user_role.dart';
 import '../../services/api/api_providers.dart';
+import '../../core/sync/sync_providers.dart';
 import '../../shared/widgets/confirm_delete_dialog.dart';
 
 class MenuCategoryItem {
@@ -529,7 +530,17 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
           final priceStr = 'PKR ${pVal.toInt()}';
           final imgPath = item['image_url']?.toString() ?? '';
 
-          if (catIdLower.contains('steak')) {
+          if (catIdLower.contains('pizza')) {
+            // Populate pizza flavors from database into pizza sub-categories
+            for (final subCat in _pizzaSubCategories) {
+              final flavors = (subCat['flavors'] as List<dynamic>?)?.cast<String>() ?? [];
+              if (!flavors.any((f) => f.toLowerCase() == itemName.toLowerCase())) {
+                if (subCat['id'] == 'p1' || _pizzaSubCategories.indexOf(subCat) == 0) {
+                  subCat['flavors'] = [...flavors, itemName];
+                }
+              }
+            }
+          } else if (catIdLower.contains('steak')) {
             dbSteaks.add({'name': itemName, 'price': priceStr});
           } else if (catIdLower.contains('burger')) {
             if (itemName.toLowerCase().contains('beef') || itemName.toLowerCase().contains('smash') || itemName.toLowerCase().contains('stacker')) {
@@ -644,7 +655,86 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
         if (dbMilkShakes.isNotEmpty) _milkShakesItems = dbMilkShakes;
         if (dbSoftDrinks.isNotEmpty) _softDrinksItems = dbSoftDrinks;
       });
-    } catch (_) {}
+    } catch (err) {
+      debugPrint('ℹ️ [MenuScreen] Backend unavailable, loading from local SQLite: $err');
+      try {
+        final db = ref.read(appDatabaseProvider);
+        final localCats = await db.catalogDao.getAllCategories();
+        final localItems = await db.catalogDao.getAllMenuItems();
+        final localDeals = await db.catalogDao.getAllDeals();
+
+        if (!mounted) return;
+
+        setState(() {
+          for (final cat in localCats) {
+            final catId = cat.id;
+            final catName = cat.name;
+            if (catName.isEmpty) continue;
+
+            final existingIndex = _allCategories.indexWhere(
+              (c) => c.id == catId || c.name.toLowerCase() == catName.toLowerCase(),
+            );
+            if (existingIndex == -1) {
+              _allCategories.add(MenuCategoryItem(
+                id: catId,
+                name: catName,
+                categoryKey: catId,
+                badgeText: 'Category',
+                imagePath: 'assets/images/Pizza.png',
+                description: 'Delicious collection of $catName.',
+                icon: Icons.category_rounded,
+              ));
+            }
+          }
+
+          if (localDeals.isNotEmpty) {
+            final List<DealItem> loadedDeals = [];
+            for (final d in localDeals) {
+              loadedDeals.add(DealItem(
+                id: d.id,
+                title: d.name,
+                subtitle: '',
+                dealPrice: d.dealPrice,
+                badgeText: 'EXCLUSIVE DEAL',
+                imagePath: 'assets/images/image.jpg',
+                description: '',
+                items: const [],
+                isAvailable: d.isAvailable,
+              ));
+            }
+            if (loadedDeals.isNotEmpty) {
+              _dealsList.clear();
+              _dealsList.addAll(loadedDeals);
+            }
+          }
+
+          for (final item in localItems) {
+            final itemName = item.name;
+            final categoryName = item.categoryId;
+            if (itemName.isEmpty) continue;
+
+            final pVal = item.basePrice;
+            final exists = _customMenuItems.any((c) => c['name'] == itemName || c['id'] == item.id);
+            if (!exists) {
+              _customMenuItems.add({
+                'id': item.id,
+                'name': itemName,
+                'category': categoryName,
+                'price': pVal,
+                'description': '',
+                'badge': item.isVeg ? 'Veg' : (item.isSpicy ? 'Hot & Spicy' : 'Chef Special'),
+                'imagePath': 'assets/images/Pizza.png',
+                'imageBytes': null,
+                'hasCustomDeviceImage': false,
+                'pricesMap': <String, String>{},
+                'flavorsList': <String>[],
+                'extras': '',
+              });
+            }
+          }
+        });
+      } catch (_) {}
+    }
   }
 
   void _initSubItems() {
@@ -4189,6 +4279,10 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                     setState(() {
                       _pizzaSubCategories.removeAt(index);
                     });
+                    ref.read(posProvider.notifier).deleteCategory(
+                      cat['id']?.toString() ?? cat['title'].toString(),
+                      cat['title'].toString(),
+                    );
                   },
                 );
               },
@@ -4200,6 +4294,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                     setState(() {
                       (cat['flavors'] as List).remove(flavor);
                     });
+                    ref.read(posProvider.notifier).deleteMenuItem(flavor);
                   },
                 );
               },
@@ -5269,6 +5364,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                           (item['flavorsList'] as List).remove(flavor);
                         }
                       });
+                      ref.read(posProvider.notifier).deleteMenuItem(flavor);
                     },
                   );
                 },

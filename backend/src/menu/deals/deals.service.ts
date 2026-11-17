@@ -2,6 +2,7 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ChangeLogService } from '../../sync/change-log.service';
 import { CreateDealDto, UpdateDealDto } from '../dto/deal.dto';
 import { QueryDealDto } from '../dto/query-menu.dto';
 
@@ -12,6 +13,7 @@ export class DealsService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
+    @Optional() private readonly changeLogService?: ChangeLogService,
   ) {}
 
   async listDeals(query: QueryDealDto = {}) {
@@ -95,6 +97,22 @@ export class DealsService {
         action: 'CREATED',
         payload: created,
       });
+
+      if (this.changeLogService) {
+        try {
+          await this.changeLogService.record(
+            this.prisma,
+            'deal',
+            created.id,
+            'INSERT',
+            1,
+            created,
+            false,
+          );
+        } catch (err) {
+          this.logger.warn(`Failed to record change log for deal ${created.id}: ${err}`);
+        }
+      }
     }
     return created;
   }
@@ -158,6 +176,22 @@ export class DealsService {
         action: 'UPDATED',
         payload: updated,
       });
+
+      if (this.changeLogService) {
+        try {
+          await this.changeLogService.record(
+            this.prisma,
+            'deal',
+            id,
+            'UPDATE',
+            1,
+            updated,
+            false,
+          );
+        } catch (err) {
+          this.logger.warn(`Failed to record change log for updated deal ${id}: ${err}`);
+        }
+      }
     }
     return updated;
   }
@@ -194,6 +228,23 @@ export class DealsService {
       action: 'DELETED',
       payload: { id: existing.id, title: existing.title },
     });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'deal',
+          existing.id,
+          'DELETE',
+          1,
+          { id: existing.id },
+          true,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for deleted deal ${existing.id}: ${err}`);
+      }
+    }
+
     return { message: `Deal '${existing.title}' deleted successfully` };
   }
 }

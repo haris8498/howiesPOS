@@ -2186,6 +2186,22 @@ class SyncBackgroundWorker {
         }
         return PullApplyResult.applied;
 
+      case 'deal':
+      case 'deals':
+        if (isDeleted) {
+          await (db.delete(db.localDeals)..where((t) => t.id.equals(entityId))).go();
+        } else {
+          await db.catalogDao.upsertDeals([
+            LocalDealsCompanion(
+              id: Value(entityId),
+              name: Value(payload['title']?.toString() ?? payload['name']?.toString() ?? ''),
+              dealPrice: Value((payload['deal_price'] as num?)?.toDouble() ?? 0.0),
+              isAvailable: Value(payload['is_available'] != false),
+            ),
+          ]);
+        }
+        return PullApplyResult.applied;
+
       case 'floor_zone':
         if (isDeleted) {
           await (db.delete(db.localFloorZones)..where((t) => t.id.equals(entityId))).go();

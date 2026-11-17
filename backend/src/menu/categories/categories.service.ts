@@ -2,6 +2,7 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { MenuCategory } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ChangeLogService } from '../../sync/change-log.service';
 import { CreateCategoryDto, UpdateCategoryDto } from '../dto/category.dto';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class CategoriesService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
+    @Optional() private readonly changeLogService?: ChangeLogService,
   ) {}
 
   async listCategories(): Promise<MenuCategory[]> {
@@ -61,6 +63,32 @@ export class CategoriesService {
     });
 
     this.logger.log(`Created/Updated menu category '${created.name}' (${created.id})`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'category:created',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_categories',
+      entityId: created.id,
+      action: 'CREATED',
+      payload: created,
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_category',
+          created.id,
+          'INSERT',
+          1,
+          created,
+          false,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for category ${created.id}: ${err}`);
+      }
+    }
+
     return created;
   }
 
@@ -85,6 +113,32 @@ export class CategoriesService {
     });
 
     this.logger.log(`Updated menu category '${updated.name}'`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'category:updated',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_categories',
+      entityId: updated.id,
+      action: 'UPDATED',
+      payload: updated,
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_category',
+          updated.id,
+          'UPDATE',
+          1,
+          updated,
+          false,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for category ${updated.id}: ${err}`);
+      }
+    }
+
     return updated;
   }
 
@@ -111,6 +165,32 @@ export class CategoriesService {
     });
 
     this.logger.log(`Deleted menu category '${existing.name}' (${id})`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'category:deleted',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_categories',
+      entityId: existing.id,
+      action: 'DELETED',
+      payload: { id: existing.id, name: existing.name },
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_category',
+          existing.id,
+          'DELETE',
+          1,
+          { id: existing.id },
+          true,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for deleted category ${existing.id}: ${err}`);
+      }
+    }
+
     return { message: `Category '${existing.name}' deleted successfully` };
   }
 }

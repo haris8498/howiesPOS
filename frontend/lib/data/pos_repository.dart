@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../application/orders/complete_order_usecase.dart';
 import '../config/feature_flags.dart';
+import '../core/database/app_database.dart';
 import '../core/sync/sync_providers.dart';
 import '../domain/models/menu_item.dart';
 import '../domain/models/order_model.dart';
@@ -291,7 +294,33 @@ class PosNotifier extends StateNotifier<PosState> {
         items = state.menuItems;
       }
 
-      // 3. Load Store Settings for Tax & Service Charge
+      // 3. Asynchronously update local Drift database cache (§8.1)
+      try {
+        final db = _ref?.read(appDatabaseProvider);
+        if (db != null) {
+          if (cats.isNotEmpty) {
+            await db.catalogDao.upsertMenuCategories(cats.map((c) => LocalMenuCategoriesCompanion(
+              id: Value(c['id']?.toString() ?? ''),
+              name: Value(c['name']?.toString() ?? ''),
+              displayOrder: Value((c['display_order'] as num?)?.toInt() ?? 0),
+              isActive: Value(c['is_active'] != false),
+            )).toList());
+          }
+          if (items.isNotEmpty) {
+            await db.catalogDao.upsertMenuItems(items.map((i) => LocalMenuItemsCompanion(
+              id: Value(i.id),
+              categoryId: Value(i.category),
+              name: Value(i.name),
+              basePrice: Value(i.basePrice),
+              isAvailable: Value(i.isAvailable),
+              isVeg: Value(i.isVeg),
+              isSpicy: Value(i.isSpicy),
+            )).toList());
+          }
+        }
+      } catch (_) {}
+
+      // 4. Load Store Settings for Tax & Service Charge
       try {
         final settings = await _settingsApiService.getSettings();
         final tax = double.tryParse(settings['sales_tax_rate']?.toString() ?? '8.5') ?? 8.5;
@@ -312,7 +341,56 @@ class PosNotifier extends StateNotifier<PosState> {
         categories: catNames.length > 1 ? catNames : state.categories,
         isLoading: false,
       );
-    } catch (_) {
+    } catch (apiErr) {
+      debugPrint('ℹ️ [PosNotifier] Backend unreachable, loading from local SQLite: $apiErr');
+      // Offline fallback: load from local Drift SQLite database
+      try {
+        final db = _ref?.read(appDatabaseProvider);
+        if (db != null) {
+          final localCats = await db.catalogDao.getAllCategories();
+          final localItems = await db.catalogDao.getAllMenuItems();
+          final localDeals = await db.catalogDao.getAllDeals();
+
+          final catNames = <String>['All'];
+          for (final c in localCats) {
+            if (!catNames.contains(c.name)) catNames.add(c.name);
+          }
+
+          final List<MenuItem> items = localItems.map((i) => MenuItem(
+            id: i.id,
+            name: i.name,
+            category: i.categoryId,
+            description: '',
+            basePrice: i.basePrice,
+            imageUrl: 'assets/images/Pizza.png',
+            isVeg: i.isVeg,
+            isSpicy: i.isSpicy,
+            isAvailable: i.isAvailable,
+          )).toList();
+
+          for (final d in localDeals) {
+            items.add(MenuItem(
+              id: d.id,
+              name: d.name,
+              category: 'Exclusive Deals',
+              description: '',
+              basePrice: d.dealPrice,
+              imageUrl: 'assets/images/image.jpg',
+              isAvailable: d.isAvailable,
+            ));
+          }
+
+          if (items.isNotEmpty) {
+            state = state.copyWith(
+              menuItems: items,
+              categories: catNames.length > 1 ? catNames : state.categories,
+              isLoading: false,
+            );
+            return;
+          }
+        }
+      } catch (_) {}
+
       state = state.copyWith(isLoading: false);
     }
   }
@@ -469,6 +547,27 @@ class PosNotifier extends StateNotifier<PosState> {
     String? description,
     String? iconName,
   }) async {
+    final updatedCats = List<String>.from(state.categories);
+    if (!updatedCats.contains(name)) {
+      updatedCats.add(name);
+    }
+    state = state.copyWith(categories: updatedCats);
+
+    // Persist to local Drift SQLite database
+    try {
+      final db = _ref?.read(appDatabaseProvider);
+      if (db != null) {
+        await db.catalogDao.upsertMenuCategories([
+          LocalMenuCategoriesCompanion(
+            id: Value(id),
+            name: Value(name),
+            displayOrder: const Value(0),
+            isActive: const Value(true),
+          ),
+        ]);
+      }
+    } catch (_) {}
+
     try {
       await _menuApiService.createCategory({
         'id': id,
@@ -478,26 +577,35 @@ class PosNotifier extends StateNotifier<PosState> {
         'description': description ?? '',
         'icon_name': iconName ?? 'fastfood',
       });
-    } catch (_) {}
-
-    final updatedCats = List<String>.from(state.categories);
-    if (!updatedCats.contains(name)) {
-      updatedCats.add(name);
+    } catch (e) {
+      debugPrint('⚠️ [PosNotifier] createCategory error: $e');
     }
-    state = state.copyWith(categories: updatedCats);
   }
 
   Future<void> deleteCategory(String categoryId, String categoryName) async {
-    try {
-      await _menuApiService.deleteCategory(categoryId);
-    } catch (_) {}
-
     final updatedCats = state.categories.where((c) => c != categoryName).toList();
     final updatedItems = state.menuItems.where((item) => item.category.toLowerCase() != categoryName.toLowerCase()).toList();
     state = state.copyWith(
       categories: updatedCats,
       menuItems: updatedItems,
     );
+
+    // Delete from local Drift SQLite database
+    try {
+      final db = _ref?.read(appDatabaseProvider);
+      if (db != null) {
+        await (db.delete(db.localMenuCategories)..where((t) => t.id.equals(categoryId))).go();
+        await (db.delete(db.localMenuCategories)..where((t) => t.name.equals(categoryName))).go();
+        await (db.delete(db.localMenuItems)..where((t) => t.categoryId.equals(categoryId))).go();
+        await (db.delete(db.localMenuItems)..where((t) => t.categoryId.equals(categoryName))).go();
+      }
+    } catch (_) {}
+
+    try {
+      await _menuApiService.deleteCategory(categoryId);
+    } catch (e) {
+      debugPrint('⚠️ [PosNotifier] deleteCategory error: $e');
+    }
   }
 
   Future<void> addMenuItem(
@@ -507,9 +615,27 @@ class PosNotifier extends StateNotifier<PosState> {
     List<Map<String, dynamic>>? options,
   }) async {
     state = state.copyWith(menuItems: [newItem, ...state.menuItems]);
+    final catId = categoryId ?? newItem.category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '-');
+
+    // Persist to local Drift SQLite database
+    try {
+      final db = _ref?.read(appDatabaseProvider);
+      if (db != null) {
+        await db.catalogDao.upsertMenuItems([
+          LocalMenuItemsCompanion(
+            id: Value(newItem.id),
+            categoryId: Value(catId),
+            name: Value(newItem.name),
+            basePrice: Value(newItem.basePrice),
+            isAvailable: Value(newItem.isAvailable),
+            isVeg: Value(newItem.isVeg),
+            isSpicy: Value(newItem.isSpicy),
+          ),
+        ]);
+      }
+    } catch (_) {}
 
     try {
-      final catId = categoryId ?? newItem.category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '-');
       await _menuApiService.createItem({
         'category_id': catId,
         'name': newItem.name,
@@ -522,7 +648,9 @@ class PosNotifier extends StateNotifier<PosState> {
         if (sizes != null && sizes.isNotEmpty) 'sizes': sizes,
         if (options != null && options.isNotEmpty) 'options': options,
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('⚠️ [PosNotifier] createItem error: $e');
+    }
   }
 
   Future<void> deleteMenuItem(String itemId) async {
@@ -530,9 +658,20 @@ class PosNotifier extends StateNotifier<PosState> {
       menuItems: state.menuItems.where((item) => item.id != itemId && item.name.toLowerCase() != itemId.toLowerCase()).toList(),
     );
 
+    // Delete from local Drift SQLite database
+    try {
+      final db = _ref?.read(appDatabaseProvider);
+      if (db != null) {
+        await (db.delete(db.localMenuItems)..where((t) => t.id.equals(itemId))).go();
+        await (db.delete(db.localMenuItems)..where((t) => t.name.equals(itemId))).go();
+      }
+    } catch (_) {}
+
     try {
       await _menuApiService.deleteItem(itemId);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('⚠️ [PosNotifier] deleteItem error: $e');
+    }
   }
 
   void deleteMenuItemsByCategory(String category) {

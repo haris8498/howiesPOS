@@ -9,6 +9,7 @@ import { OptionsController } from './options/options.controller';
 import { OptionsService } from './options/options.service';
 import { DealsController } from './deals/deals.controller';
 import { DealsService } from './deals/deals.service';
+import { ChangeLogService } from '../sync/change-log.service';
 
 @Module({
   controllers: [
@@ -18,7 +19,14 @@ import { DealsService } from './deals/deals.service';
     OptionsController,
     DealsController,
   ],
-  providers: [CategoriesService, ItemsService, SizesService, OptionsService, DealsService],
+  providers: [
+    CategoriesService,
+    ItemsService,
+    SizesService,
+    OptionsService,
+    DealsService,
+    ChangeLogService,
+  ],
   exports: [CategoriesService, ItemsService, SizesService, OptionsService, DealsService],
 })
 export class MenuModule {}

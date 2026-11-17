@@ -2,6 +2,7 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { MenuItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ChangeLogService } from '../../sync/change-log.service';
 import { CreateMenuItemDto, UpdateAvailabilityDto, UpdateMenuItemDto } from '../dto/menu-item.dto';
 import { QueryMenuItemDto } from '../dto/query-menu.dto';
 
@@ -31,6 +32,7 @@ export class ItemsService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly realtimeGateway?: RealtimeGateway,
+    @Optional() private readonly changeLogService?: ChangeLogService,
   ) {}
 
   async listItems(query?: QueryMenuItemDto): Promise<FullMenuItem[]> {
@@ -137,10 +139,11 @@ export class ItemsService {
     }
 
     const resolvedCategoryId = category.id;
+    let created: FullMenuItem;
 
     // Use transaction if sizes or options are provided
     if ((dto.sizes && dto.sizes.length > 0) || (dto.options && dto.options.length > 0)) {
-      return this.prisma.$transaction(async (tx) => {
+      created = await this.prisma.$transaction(async (tx) => {
         const createdItem = await tx.menuItem.create({
           data: {
             category_id: resolvedCategoryId,
@@ -184,27 +187,53 @@ export class ItemsService {
           },
         });
       });
+    } else {
+      created = await this.prisma.menuItem.create({
+        data: {
+          category_id: resolvedCategoryId,
+          name: dto.name,
+          description: dto.description ?? '',
+          base_price: dto.base_price,
+          image_url: dto.image_url ?? '',
+          is_veg: dto.is_veg ?? false,
+          is_spicy: dto.is_spicy ?? false,
+          is_available: dto.is_available ?? true,
+        },
+        include: {
+          category: { select: { id: true, name: true, badge_text: true } },
+          sizes: true,
+          options: true,
+        },
+      });
     }
 
-    const created = await this.prisma.menuItem.create({
-      data: {
-        category_id: dto.category_id,
-        name: dto.name,
-        description: dto.description ?? '',
-        base_price: dto.base_price,
-        image_url: dto.image_url ?? '',
-        is_veg: dto.is_veg ?? false,
-        is_spicy: dto.is_spicy ?? false,
-        is_available: dto.is_available ?? true,
-      },
-      include: {
-        category: { select: { id: true, name: true, badge_text: true } },
-        sizes: true,
-        options: true,
-      },
+    this.logger.log(`Created menu item '${created.name}' (${created.id})`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'item:created',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_items',
+      entityId: created.id,
+      action: 'CREATED',
+      payload: created,
     });
 
-    this.logger.log(`Created menu item '${created.name}' (${created.id})`);
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_item',
+          created.id,
+          'INSERT',
+          1,
+          created,
+          false,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for item ${created.id}: ${err}`);
+      }
+    }
+
     return created;
   }
 
@@ -246,6 +275,32 @@ export class ItemsService {
     });
 
     this.logger.log(`Updated menu item '${updated.name}'`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'item:updated',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_items',
+      entityId: updated.id,
+      action: 'UPDATED',
+      payload: updated,
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_item',
+          updated.id,
+          'UPDATE',
+          1,
+          updated,
+          false,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for item ${updated.id}: ${err}`);
+      }
+    }
+
     return updated;
   }
 
@@ -258,7 +313,7 @@ export class ItemsService {
       throw new NotFoundException(`Menu item with ID '${id}' not found`);
     }
 
-    return this.prisma.menuItem.update({
+    const updated = await this.prisma.menuItem.update({
       where: { id },
       data: {
         is_available: dto.is_available,
@@ -269,6 +324,35 @@ export class ItemsService {
         options: true,
       },
     });
+
+    this.logger.log(`Updated availability for menu item '${updated.name}'`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'item:updated',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_items',
+      entityId: updated.id,
+      action: 'UPDATED',
+      payload: updated,
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_item',
+          updated.id,
+          'UPDATE',
+          1,
+          updated,
+          false,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for item ${updated.id}: ${err}`);
+      }
+    }
+
+    return updated;
   }
 
   async deleteItem(idOrName: string): Promise<{ message: string }> {
@@ -305,6 +389,32 @@ export class ItemsService {
     });
 
     this.logger.log(`Deleted menu item '${existing.name}' (${existing.id})`);
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'item:deleted',
+      alternateEventName: 'menu:updated',
+      entity: 'menu_items',
+      entityId: existing.id,
+      action: 'DELETED',
+      payload: { id: existing.id, name: existing.name },
+    });
+
+    if (this.changeLogService) {
+      try {
+        await this.changeLogService.record(
+          this.prisma,
+          'menu_item',
+          existing.id,
+          'DELETE',
+          1,
+          { id: existing.id },
+          true,
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to record change log for deleted item ${existing.id}: ${err}`);
+      }
+    }
+
     return { message: `Menu item '${existing.name}' deleted successfully` };
   }
 }

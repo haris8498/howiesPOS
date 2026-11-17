@@ -553,13 +553,15 @@ class PosNotifier extends StateNotifier<PosState> {
     }
     state = state.copyWith(categories: updatedCats);
 
+    final safeId = id.length > 36 ? id.substring(0, 36) : id;
+
     // Persist to local Drift SQLite database
     try {
       final db = _ref?.read(appDatabaseProvider);
       if (db != null) {
         await db.catalogDao.upsertMenuCategories([
           LocalMenuCategoriesCompanion(
-            id: Value(id),
+            id: Value(safeId),
             name: Value(name),
             displayOrder: const Value(0),
             isActive: const Value(true),
@@ -570,7 +572,7 @@ class PosNotifier extends StateNotifier<PosState> {
 
     try {
       await _menuApiService.createCategory({
-        'id': id,
+        'id': safeId,
         'name': name,
         'badge_text': badgeText ?? 'Category',
         'image_path': imagePath ?? '',
@@ -615,7 +617,10 @@ class PosNotifier extends StateNotifier<PosState> {
     List<Map<String, dynamic>>? options,
   }) async {
     state = state.copyWith(menuItems: [newItem, ...state.menuItems]);
-    final catId = categoryId ?? newItem.category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '-');
+    final rawCatId = (categoryId != null && categoryId.isNotEmpty)
+        ? categoryId
+        : newItem.category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '-');
+    final catId = rawCatId.length > 36 ? rawCatId.substring(0, 36) : rawCatId;
 
     // Persist to local Drift SQLite database
     try {

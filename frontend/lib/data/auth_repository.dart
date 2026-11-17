@@ -15,6 +15,7 @@ import '../services/api/auth_api_service.dart';
 import '../services/api/staff_api_service.dart';
 import '../services/api/users_api_service.dart';
 import 'repositories/in_memory_auth_repository.dart';
+import 'pos_repository.dart';
 
 /// Legacy compatible UI Model for displaying user credential metadata safely
 class UserCredential {
@@ -349,6 +350,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
             selectedRole: verifiedRole,
             isAuthenticated: true,
           );
+          _ref?.read(posProvider.notifier).refreshMenu(silent: true);
           return;
         } catch (_) {
           // Token still locally valid during temporary network disconnect
@@ -366,6 +368,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
             selectedRole: role,
             isAuthenticated: true,
           );
+          _ref?.read(posProvider.notifier).refreshMenu(silent: true);
         }
       }
     } catch (_) {}
@@ -448,6 +451,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final token = loginData['token']?.toString() ?? loginData['accessToken']?.toString();
       RealtimeSocketService.instance.connect(explicitToken: token);
+
+      // Refresh menu from backend now that valid JWT token is stored
+      _ref?.read(posProvider.notifier).refreshMenu(silent: true);
 
       // SYNC-017: Resume sync outbox from AUTH_PAUSED immediately upon successful authentication
       if (_ref != null && FeatureFlags.offlineFirstEnabled) {
@@ -544,6 +550,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         isLoading: false,
         clearError: true,
       );
+      _ref?.read(posProvider.notifier).refreshMenu(silent: true);
       return true;
     } catch (e) {
       if (mounted) {

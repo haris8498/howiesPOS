@@ -710,7 +710,11 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
           for (final item in localItems) {
             final itemName = item.name;
-            final categoryName = item.categoryId;
+            final matchedCat = localCats.cast<dynamic>().firstWhere(
+              (c) => c.id == item.categoryId,
+              orElse: () => null,
+            );
+            final categoryName = matchedCat != null ? matchedCat.name : item.categoryId;
             if (itemName.isEmpty) continue;
 
             final pVal = item.basePrice;
@@ -1670,9 +1674,22 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
   Widget _buildCategoryDetailContent(MenuCategoryItem category, bool isDark, bool isOwnerOrManager) {
     final customForCategory = _customMenuItems.where((item) {
-      final itemCat = (item['category'] as String).toLowerCase();
-      final targetCat = category.name.toLowerCase();
-      return itemCat == targetCat || itemCat.contains(targetCat) || targetCat.contains(itemCat);
+      final itemCat = (item['category']?.toString() ?? '').toLowerCase().trim();
+      final targetCat = category.name.toLowerCase().trim();
+      final targetKey = category.categoryKey.toLowerCase().trim();
+      final targetId = category.id.toLowerCase().trim();
+
+      final cleanItem = itemCat.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final cleanTargetName = targetCat.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final cleanTargetKey = targetKey.replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+      return itemCat == targetCat ||
+             itemCat == targetKey ||
+             itemCat == targetId ||
+             (cleanItem.isNotEmpty && cleanItem == cleanTargetName) ||
+             (cleanItem.isNotEmpty && cleanItem == cleanTargetKey) ||
+             (cleanTargetName.isNotEmpty && cleanItem.contains(cleanTargetName)) ||
+             (cleanItem.isNotEmpty && cleanTargetName.contains(cleanItem));
     }).toList();
 
     Widget builtInContent;
@@ -6854,7 +6871,19 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                   saveImagePath = 'data:image/jpeg;base64,${base64Encode(deviceImageBytes)}';
                 }
 
+                final posMenuItem = MenuItem(
+                  id: 'menu_${DateTime.now().millisecondsSinceEpoch}',
+                  name: name,
+                  category: selectedCategory,
+                  description: desc,
+                  basePrice: priceVal,
+                  imageUrl: saveImagePath,
+                  isVeg: badgeText == 'Veg',
+                  isSpicy: badgeText == 'Hot & Spicy',
+                );
+
                 final newItemMap = {
+                  'id': posMenuItem.id,
                   'name': name,
                   'category': selectedCategory,
                   'price': priceVal,
@@ -6867,17 +6896,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                   'flavorsList': flavorsList,
                   'extras': extras,
                 };
-
-                final posMenuItem = MenuItem(
-                  id: 'menu_${DateTime.now().millisecondsSinceEpoch}',
-                  name: name,
-                  category: selectedCategory,
-                  description: desc,
-                  basePrice: priceVal,
-                  imageUrl: saveImagePath,
-                  isVeg: badgeText == 'Veg',
-                  isSpicy: badgeText == 'Hot & Spicy',
-                );
 
                 final List<Map<String, dynamic>> sizesList = pricesMap.entries.map((e) {
                   final numericStr = e.value.replaceAll(RegExp(r'[^0-9.]'), '');

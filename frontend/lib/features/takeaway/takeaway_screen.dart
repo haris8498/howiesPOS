@@ -5121,41 +5121,6 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                         ),
                         const SizedBox(height: 10),
 
-                        // Customer Details Inputs
-                        TextField(
-                          controller: _customerNameController,
-                          style: TextStyle(fontSize: 12, color: isDark ? Colors.white : AppColors.textPrimary),
-                          decoration: InputDecoration(
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            labelText: 'Customer Name',
-                            labelStyle: TextStyle(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide: const BorderSide(color: AppColors.primaryRed, width: 1.5),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        TextField(
-                          controller: _customerPhoneController,
-                          keyboardType: TextInputType.phone,
-                          style: TextStyle(fontSize: 12, color: isDark ? Colors.white : AppColors.textPrimary),
-                          decoration: InputDecoration(
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            labelText: 'Phone Number (Optional)',
-                            labelStyle: TextStyle(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide: const BorderSide(color: AppColors.primaryRed, width: 1.5),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-
                         // Cart Items List
                         Expanded(
                           child: _cartItems.isEmpty
@@ -5262,77 +5227,6 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                         ),
 
                         const Divider(height: 16),
-
-                        // Discount in % selector
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: AppColors.borderGray.withValues(alpha: 0.5)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: const [
-                                      Icon(Icons.percent_rounded, size: 13, color: Color(0xFF16A34A)),
-                                      SizedBox(width: 4),
-                                      Text('Discount (%):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                                    ],
-                                  ),
-                                  if (_discountPercentage > 0)
-                                    Text(
-                                      '${_discountPercentage.toStringAsFixed(0)}% OFF (-PKR ${_discountAmount.toStringAsFixed(0)})',
-                                      style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold, fontSize: 11),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 4,
-                                children: [0.0, 5.0, 10.0, 15.0, 20.0, 25.0].map((pct) {
-                                  final isSel = (_discountPercentage - pct).abs() < 0.01;
-                                  return InkWell(
-                                    onTap: () async {
-                                      if (pct == 0.0) {
-                                        setState(() {
-                                          _discountPercentage = 0.0;
-                                          _managerApproval = null;
-                                        });
-                                        return;
-                                      }
-                                      setState(() {
-                                        _discountPercentage = pct;
-                                      });
-                                    },
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: isSel ? const Color(0xFF16A34A) : (isDark ? const Color(0xFF334155) : Colors.white),
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(color: isSel ? const Color(0xFF16A34A) : AppColors.borderGray),
-                                      ),
-                                      child: Text(
-                                        '${pct.toStringAsFixed(0)}%',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: isSel ? Colors.white : (isDark ? Colors.white : AppColors.textPrimary),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
 
                         // Total Price Card
                         Container(

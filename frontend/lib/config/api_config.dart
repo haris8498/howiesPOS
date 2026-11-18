@@ -15,22 +15,27 @@ class ApiConfig {
   static const String onlineSocketUrl = 'http://213.199.57.65';
 
   /// The base URL for REST API endpoints.
-  /// Automatically resolves VPS http://213.199.57.65/api or custom --dart-define.
+  /// Connected to Real Online Backend (Contabo VPS: http://213.199.57.65/api)
   static String get baseUrl {
     if (_definedBaseUrl.isNotEmpty) {
       return _definedBaseUrl;
     }
     // Real online VPS backend:
     return onlineBaseUrl;
+    // Local offline backend (Commented):
+    // return localBaseUrl;
   }
 
   /// The base URL for WebSocket / Socket.IO connections.
+  /// Connected to Real Online Backend (Contabo VPS: http://213.199.57.65)
   static String get socketUrl {
     if (_definedSocketUrl.isNotEmpty) {
       return _definedSocketUrl;
     }
     // Real online VPS backend:
     return onlineSocketUrl;
+    // Local offline backend (Commented):
+    // return localSocketUrl;
   }
 
   /// Default network timeout duration

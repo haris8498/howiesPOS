@@ -18,6 +18,8 @@ import '../../domain/models/user_role.dart';
 import '../../services/receipt_printer_service.dart';
 import '../../shared/widgets/cashier_sidebar_footer.dart';
 import '../updater/open_order_guard_provider.dart';
+import '../../services/menu_flavor_registry.dart';
+import '../../shared/widgets/quick_flavor_selection_dialog.dart';
 
 class TakeawayScreen extends ConsumerStatefulWidget {
   const TakeawayScreen({super.key});
@@ -4427,14 +4429,17 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     _TakeawayMenuItem(name: "Student Saver Deal (1 Zinger Burger + Plain Fries + 1 Drink)", category: 'Deals', price: 749, imagePath: 'assets/images/chicken_burger_hero.jpg'),
 
     // Pizzas
-    _TakeawayMenuItem(name: "Classic Fajita Pizza (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Fajita.png'),
-    _TakeawayMenuItem(name: "Classic Fajita Pizza (Medium)", category: 'Pizza', price: 1449, imagePath: 'assets/images/Fajita.png'),
-    _TakeawayMenuItem(name: "Classic Fajita Pizza (Large)", category: 'Pizza', price: 1749, imagePath: 'assets/images/Fajita.png'),
-    _TakeawayMenuItem(name: "Classic Fajita Pizza (Family)", category: 'Pizza', price: 2349, imagePath: 'assets/images/Fajita.png'),
-    _TakeawayMenuItem(name: "Modern Crown Crust (Medium)", category: 'Pizza', price: 1549, imagePath: 'assets/images/Modern.png'),
-    _TakeawayMenuItem(name: "Modern Crown Crust (Large)", category: 'Pizza', price: 1999, imagePath: 'assets/images/Modern.png'),
-    _TakeawayMenuItem(name: "Special Arabic Crispy (Medium)", category: 'Pizza', price: 1699, imagePath: 'assets/images/Special.png'),
-    _TakeawayMenuItem(name: "Special Hungry Cheese Gold (Large)", category: 'Pizza', price: 2199, imagePath: 'assets/images/Special.png'),
+    _TakeawayMenuItem(name: "Classic Pizza's (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Fajita.png'),
+    _TakeawayMenuItem(name: "Classic Pizza's (Medium)", category: 'Pizza', price: 1449, imagePath: 'assets/images/Fajita.png'),
+    _TakeawayMenuItem(name: "Classic Pizza's (Large)", category: 'Pizza', price: 1749, imagePath: 'assets/images/Fajita.png'),
+    _TakeawayMenuItem(name: "Classic Pizza's (Family)", category: 'Pizza', price: 2349, imagePath: 'assets/images/Fajita.png'),
+    _TakeawayMenuItem(name: "Modren Pizza's (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Modern.png'),
+    _TakeawayMenuItem(name: "Modren Pizza's (Medium)", category: 'Pizza', price: 1549, imagePath: 'assets/images/Modern.png'),
+    _TakeawayMenuItem(name: "Modren Pizza's (Large)", category: 'Pizza', price: 1999, imagePath: 'assets/images/Modern.png'),
+    _TakeawayMenuItem(name: "Modren Pizza's (Family)", category: 'Pizza', price: 2499, imagePath: 'assets/images/Modern.png'),
+    _TakeawayMenuItem(name: "Special Pizza's (Medium)", category: 'Pizza', price: 1699, imagePath: 'assets/images/Special.png'),
+    _TakeawayMenuItem(name: "Special Pizza's (Large)", category: 'Pizza', price: 2199, imagePath: 'assets/images/Special.png'),
+    _TakeawayMenuItem(name: "Special Pizza's (Family)", category: 'Pizza', price: 2999, imagePath: 'assets/images/Special.png'),
 
     // Steaks
     _TakeawayMenuItem(name: "Tarragon Chicken Steak", category: 'Steak', price: 1499, imagePath: 'assets/images/chicken_steak.png'),
@@ -4556,7 +4561,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
             'id': i.id,
             'name': i.name,
             'base_price': i.basePrice,
-            'image_url': 'assets/images/Pizza.png',
+            'image_url': '',
             'category': {'name': i.categoryId},
           }).toList();
           dbDeals = localDeals.map((d) => {
@@ -4623,7 +4628,27 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
             ? (item['category']['name']?.toString().trim() ?? 'General')
             : 'General';
         final basePrice = double.tryParse(item['base_price']?.toString() ?? '0') ?? 0.0;
-        final imgUrl = item['image_url']?.toString() ?? 'assets/images/Pizza.png';
+        final String rawImg = (item['image_url'] ?? '').toString().trim();
+        String imgUrl = (rawImg.isNotEmpty && rawImg.toLowerCase() != 'null') ? rawImg : '';
+
+        // If Pizza.png was erroneously assigned to a non-pizza item, discard it
+        final isPizza = itemName.toLowerCase().contains('pizza') ||
+            itemName.toLowerCase().contains('calzone') ||
+            catName.toLowerCase().contains('pizza');
+        if (imgUrl == 'assets/images/Pizza.png' && !isPizza) {
+          imgUrl = '';
+        }
+
+        // If no image from DB, lookup known static assets by name
+        if (imgUrl.isEmpty) {
+          final matched = _menuDatabase.firstWhere(
+            (m) => m.name.toLowerCase().trim() == itemName.toLowerCase().trim(),
+            orElse: () => _TakeawayMenuItem(name: '', category: '', price: 0, imagePath: ''),
+          );
+          if (matched.imagePath.isNotEmpty) {
+            imgUrl = matched.imagePath;
+          }
+        }
 
         final alreadyInList = loadedItems.any(
           (it) => it.name.toLowerCase() == itemName.toLowerCase() || (itemId != null && it.id == itemId),
@@ -4687,7 +4712,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     }
   }
 
-  Widget _buildItemThumbnail(String path, Uint8List? bytes) {
+  Widget _buildItemThumbnail(String path, Uint8List? bytes, {String? category, String? itemName}) {
     if (bytes != null && bytes.isNotEmpty) {
       return Image.memory(bytes, width: 38, height: 38, fit: BoxFit.cover);
     }
@@ -4703,12 +4728,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
         width: 38,
         height: 38,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 38,
-          height: 38,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
     if (path.isNotEmpty && !path.startsWith('http')) {
@@ -4717,19 +4737,45 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
         width: 38,
         height: 38,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 38,
-          height: 38,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
+    return _buildPlaceholderIcon(category: category, itemName: itemName);
+  }
+
+  Widget _buildPlaceholderIcon({String? category, String? itemName}) {
+    final cat = (category ?? '').toLowerCase();
+    final name = (itemName ?? '').toLowerCase();
+
+    IconData iconData = Icons.fastfood_rounded;
+    if (cat.contains('beverage') || cat.contains('drink') || name.contains('coke') || name.contains('sprite') || name.contains('juice') || name.contains('water') || name.contains('margarita') || name.contains('colada') || name.contains('lagon') || name.contains('blast')) {
+      iconData = Icons.local_drink_rounded;
+    } else if (cat.contains('coffee') || name.contains('coffee') || name.contains('latte') || name.contains('espresso') || name.contains('cappuccino') || name.contains('americano')) {
+      iconData = Icons.coffee_rounded;
+    } else if (cat.contains('burger') || name.contains('burger')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('pizza') || name.contains('pizza')) {
+      iconData = Icons.local_pizza_rounded;
+    } else if (cat.contains('biryani') || name.contains('biryani') || name.contains('rice')) {
+      iconData = Icons.rice_bowl_rounded;
+    } else if (cat.contains('dessert') || cat.contains('shake') || name.contains('ice cream') || name.contains('shake') || name.contains('smoothie') || name.contains('apple') || name.contains('banana') || name.contains('berry')) {
+      iconData = Icons.icecream_rounded;
+    } else if (cat.contains('fries') || name.contains('fries')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('steak') || name.contains('steak')) {
+      iconData = Icons.dinner_dining_rounded;
+    }
+
     return Container(
       width: 38,
       height: 38,
-      color: AppColors.primaryRed.withValues(alpha: 0.1),
-      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+      decoration: BoxDecoration(
+        color: AppColors.primaryRed.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Center(
+        child: Icon(iconData, color: AppColors.primaryRed, size: 20),
+      ),
     );
   }
 
@@ -4770,7 +4816,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
               price: oi.unitPrice > 0
                   ? oi.unitPrice
                   : (oi.quantity > 0 ? existing.subtotal / oi.quantity : 0.0),
-              imagePath: 'assets/images/Pizza.png',
+              imagePath: '',
             ),
           );
           final effectivePrice = oi.unitPrice > 0 ? oi.unitPrice : found.price;
@@ -4809,7 +4855,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
               price: rawParts.length == 1 && existing.subtotal > 0
                   ? (existing.subtotal / qty)
                   : (existing.subtotal > 0 ? existing.subtotal / (rawParts.length * qty) : 0.0),
-              imagePath: 'assets/images/Pizza.png',
+              imagePath: '',
             ),
           );
           _cartItems.add(_TakeawayOrderItem(
@@ -4853,16 +4899,40 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
     return (_subtotal - _discountAmount).clamp(0.0, double.infinity);
   }
 
-  void _addItemToCart(_TakeawayMenuItem item) {
+  Future<void> _addItemToCart(_TakeawayMenuItem item) async {
+    final flavors = MenuFlavorRegistry.getFlavorsForItem(item.name, category: item.category);
+    _TakeawayMenuItem effectiveItem = item;
+
+    if (flavors.isNotEmpty) {
+      final selectedFlavor = await QuickFlavorSelectionDialog.show(
+        context,
+        itemName: item.name,
+        price: item.price,
+        flavors: flavors,
+      );
+      if (selectedFlavor == null) return; // User cancelled
+
+      final formattedName = MenuFlavorRegistry.formatItemWithFlavor(item.name, selectedFlavor);
+      effectiveItem = _TakeawayMenuItem(
+        id: item.id,
+        name: formattedName,
+        category: item.category,
+        price: item.price,
+        imagePath: item.imagePath,
+        imageBytes: item.imageBytes,
+      );
+    }
+
+    if (!mounted) return;
     setState(() {
-      final existingIndex = _cartItems.indexWhere((c) => c.item.name == item.name);
+      final existingIndex = _cartItems.indexWhere((c) => c.item.name == effectiveItem.name);
       if (existingIndex >= 0) {
         _cartItems[existingIndex].quantity += 1;
       } else {
         _cartItems.add(_TakeawayOrderItem(
-          item: item,
+          item: effectiveItem,
           quantity: 1,
-          menuItemId: item.id,
+          menuItemId: effectiveItem.id,
         ));
       }
     });
@@ -5043,7 +5113,7 @@ class _TakeawayOrderMenuDialogState extends State<_TakeawayOrderMenuDialog> {
                                           children: [
                                             ClipRRect(
                                               borderRadius: BorderRadius.circular(6),
-                                              child: _buildItemThumbnail(item.imagePath, item.imageBytes),
+                                              child: _buildItemThumbnail(item.imagePath, item.imageBytes, category: item.category, itemName: item.name),
                                             ),
                                             const SizedBox(width: 8),
                                             Expanded(

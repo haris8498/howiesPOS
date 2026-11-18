@@ -125,28 +125,65 @@ export class TablesService {
       const effectiveOccupied = status === 'occupied';
       const activeOrder = effectiveOccupied && linkedOrder && !isTerminal && !isPaid ? linkedOrder : null;
 
-      const activeItems =
-        effectiveOccupied
-          ? activeOrder?.order_items?.map((item: any) => ({
-              id: item.id,
-              name: item.item_name,
-              quantity: item.quantity,
-              price: Number(item.unit_price),
-              selected_size: item.selected_size,
-              selected_crust: item.selected_crust,
-              extra_toppings: item.extra_toppings,
-              notes: item.notes,
-              is_cancelled: item.is_cancelled === true,
-              cancel_reason: item.cancel_reason,
-              cancelled_at: item.cancelled_at,
-              cancelled_by: item.cancelled_by,
-            })) || []
+      const mappedItems =
+        effectiveOccupied && activeOrder?.order_items
+          ? activeOrder.order_items
+              .filter((item: any) => {
+                const reason = (item.cancel_reason || '').toLowerCase();
+                return !(
+                  item.is_cancelled &&
+                  (reason.includes('superseded') ||
+                    reason.includes('full-replace') ||
+                    reason === 'modified')
+                );
+              })
+              .map((item: any) => ({
+                id: item.id,
+                name: item.item_name,
+                quantity: item.quantity,
+                price: Number(item.unit_price),
+                selected_size: item.selected_size,
+                selected_crust: item.selected_crust,
+                extra_toppings: item.extra_toppings,
+                notes: item.notes,
+                is_cancelled: item.is_cancelled === true,
+                cancel_reason: item.cancel_reason,
+                cancelled_at: item.cancelled_at,
+                cancelled_by: item.cancelled_by,
+              }))
           : [];
+
+      const activeByKey = new Map<string, any>();
+      const seenCancelKeys = new Set<string>();
+      const activeItems: any[] = [];
+      for (const item of mappedItems) {
+        if (item.is_cancelled) {
+          const cancelKey = `${(item.name || '').toLowerCase().trim()}|${(item.selected_size || 'regular').toLowerCase().trim()}|${(item.selected_crust || 'original').toLowerCase().trim()}|${(item.cancel_reason || '').toLowerCase().trim()}`;
+          if (!seenCancelKeys.has(cancelKey)) {
+            seenCancelKeys.add(cancelKey);
+            activeItems.push(item);
+          }
+        } else {
+          const key = `${(item.name || '').toLowerCase().trim()}|${(item.selected_size || 'regular').toLowerCase().trim()}|${(item.selected_crust || 'original').toLowerCase().trim()}`;
+          activeByKey.set(key, item);
+        }
+      }
+      for (const item of activeByKey.values()) {
+        activeItems.push(item);
+      }
 
       const dineInTax =
         effectiveOccupied && activeOrder?.dine_in_detail?.dine_in_tax !== undefined
           ? Number(activeOrder.dine_in_detail.dine_in_tax)
           : Number(activeOrder?.tax_amount ?? 0);
+
+      const liveSubtotal = activeItems
+        .filter((i) => !i.is_cancelled)
+        .reduce((sum, i) => sum + i.price * i.quantity, 0);
+      const activeDiscount = Number(activeOrder?.discount_amount ?? 0);
+      const liveBillAmount = liveSubtotal > 0
+        ? Math.max(0, liveSubtotal - activeDiscount + dineInTax)
+        : Number(activeOrder?.grand_total ?? t.current_bill_amount ?? 0);
 
       return {
         id: t.id,
@@ -157,11 +194,11 @@ export class TablesService {
         zone_id: t.zone_id,
         status,
         current_customer_count: effectiveOccupied ? (t.current_customer_count || 1) : 0,
-        current_bill_amount: effectiveOccupied ? Number(activeOrder?.grand_total ?? t.current_bill_amount ?? 0) : 0,
+        current_bill_amount: effectiveOccupied ? liveBillAmount : 0,
         active_order_id: effectiveOccupied ? (t.active_order_id || activeOrder?.id || null) : null,
         active_order_number: effectiveOccupied ? (activeOrder?.order_number || null) : null,
         dine_in_tax: effectiveOccupied ? dineInTax : 0,
-        discount_amount: effectiveOccupied ? Number(activeOrder?.discount_amount ?? 0) : 0,
+        discount_amount: effectiveOccupied ? activeDiscount : 0,
         discount_percentage: effectiveOccupied ? Number(activeOrder?.discount_percentage ?? 0) : 0,
         occupied_since: effectiveOccupied ? t.occupied_since : null,
         reserved_customer_name: reservedCustomerName,
@@ -245,28 +282,65 @@ export class TablesService {
     const effectiveOccupied = status === 'occupied';
     const activeOrder = effectiveOccupied && linkedOrder && !isTerminal && !isPaid ? linkedOrder : null;
 
-    const activeItems =
-      effectiveOccupied
-        ? activeOrder?.order_items?.map((item: any) => ({
-            id: item.id,
-            name: item.item_name,
-            quantity: item.quantity,
-            price: Number(item.unit_price),
-            selected_size: item.selected_size,
-            selected_crust: item.selected_crust,
-            extra_toppings: item.extra_toppings,
-            notes: item.notes,
-            is_cancelled: item.is_cancelled === true,
-            cancel_reason: item.cancel_reason,
-            cancelled_at: item.cancelled_at,
-            cancelled_by: item.cancelled_by,
-          })) || []
+    const mappedItems =
+      effectiveOccupied && activeOrder?.order_items
+        ? activeOrder.order_items
+            .filter((item: any) => {
+              const reason = (item.cancel_reason || '').toLowerCase();
+              return !(
+                item.is_cancelled &&
+                (reason.includes('superseded') ||
+                  reason.includes('full-replace') ||
+                  reason === 'modified')
+              );
+            })
+            .map((item: any) => ({
+              id: item.id,
+              name: item.item_name,
+              quantity: item.quantity,
+              price: Number(item.unit_price),
+              selected_size: item.selected_size,
+              selected_crust: item.selected_crust,
+              extra_toppings: item.extra_toppings,
+              notes: item.notes,
+              is_cancelled: item.is_cancelled === true,
+              cancel_reason: item.cancel_reason,
+              cancelled_at: item.cancelled_at,
+              cancelled_by: item.cancelled_by,
+            }))
         : [];
+
+    const activeByKey = new Map<string, any>();
+    const seenCancelKeys = new Set<string>();
+    const activeItems: any[] = [];
+    for (const item of mappedItems) {
+      if (item.is_cancelled) {
+        const cancelKey = `${(item.name || '').toLowerCase().trim()}|${(item.selected_size || 'regular').toLowerCase().trim()}|${(item.selected_crust || 'original').toLowerCase().trim()}|${(item.cancel_reason || '').toLowerCase().trim()}`;
+        if (!seenCancelKeys.has(cancelKey)) {
+          seenCancelKeys.add(cancelKey);
+          activeItems.push(item);
+        }
+      } else {
+        const key = `${(item.name || '').toLowerCase().trim()}|${(item.selected_size || 'regular').toLowerCase().trim()}|${(item.selected_crust || 'original').toLowerCase().trim()}`;
+        activeByKey.set(key, item);
+      }
+    }
+    for (const item of activeByKey.values()) {
+      activeItems.push(item);
+    }
 
     const dineInTax =
       effectiveOccupied && activeOrder?.dine_in_detail?.dine_in_tax !== undefined
         ? Number(activeOrder.dine_in_detail.dine_in_tax)
         : Number(activeOrder?.tax_amount ?? 0);
+
+    const liveSubtotal = activeItems
+      .filter((i) => !i.is_cancelled)
+      .reduce((sum, i) => sum + i.price * i.quantity, 0);
+    const activeDiscount = Number(activeOrder?.discount_amount ?? 0);
+    const liveBillAmount = liveSubtotal > 0
+      ? Math.max(0, liveSubtotal - activeDiscount + dineInTax)
+      : Number(activeOrder?.grand_total ?? table.current_bill_amount ?? 0);
 
     return {
       id: table.id,
@@ -277,11 +351,11 @@ export class TablesService {
       zone_id: table.zone_id,
       status,
       current_customer_count: effectiveOccupied ? (table.current_customer_count || 1) : 0,
-      current_bill_amount: effectiveOccupied ? Number(activeOrder?.grand_total ?? table.current_bill_amount ?? 0) : 0,
+      current_bill_amount: effectiveOccupied ? liveBillAmount : 0,
       active_order_id: effectiveOccupied ? (table.active_order_id || activeOrder?.id || null) : null,
       active_order_number: effectiveOccupied ? (activeOrder?.order_number || null) : null,
       dine_in_tax: effectiveOccupied ? dineInTax : 0,
-      discount_amount: effectiveOccupied ? Number(activeOrder?.discount_amount ?? 0) : 0,
+      discount_amount: effectiveOccupied ? activeDiscount : 0,
       discount_percentage: effectiveOccupied ? Number(activeOrder?.discount_percentage ?? 0) : 0,
       occupied_since: effectiveOccupied ? table.occupied_since : null,
       reserved_customer_name: reservedCustomerName,

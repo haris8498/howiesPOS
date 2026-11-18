@@ -53,13 +53,59 @@ class RestaurantTable {
     return DateTime.now().difference(occupiedSince!).inMinutes;
   }
 
+  /// Returns cleaned and deduplicated order items for display and billing:
+  /// - Excludes internal replacement / superseded void lines
+  /// - Deduplicates multiple active copies of the same item (keeping the latest active quantity)
+  List<Map<String, dynamic>> get deduplicatedOrderItems {
+    if (currentOrderItems.isEmpty) return const [];
+
+    final cancellations = <Map<String, dynamic>>[];
+    final seenCancelKeys = <String>{};
+    final activeByKey = <String, Map<String, dynamic>>{};
+
+    for (final item in currentOrderItems) {
+      final isCancelled = item['is_cancelled'] == true ||
+          item['is_cancelled'] == 1 ||
+          item['is_cancelled'] == 'true' ||
+          item['isCancelled'] == true;
+
+      final reason = (item['cancel_reason']?.toString() ?? '').toLowerCase();
+      final isInternalSuperseded = isCancelled &&
+          (reason.contains('superseded') ||
+           reason.contains('full-replace') ||
+           reason == 'modified');
+
+      // Exclude internal replacement / superseded void lines from customer/cashier bill
+      if (isInternalSuperseded) continue;
+
+      final name = (item['name'] ?? item['item_name'] ?? '').toString().toLowerCase().trim();
+      final size = (item['selected_size'] ?? 'regular').toString().toLowerCase().trim();
+      final crust = (item['selected_crust'] ?? 'original').toString().toLowerCase().trim();
+
+      if (isCancelled) {
+        final cancelKey = '$name|$size|$crust|${reason.trim()}';
+        if (!seenCancelKeys.contains(cancelKey)) {
+          seenCancelKeys.add(cancelKey);
+          cancellations.add(item);
+        }
+      } else {
+        final key = '$name|$size|$crust';
+        // Keep the latest active entry
+        activeByKey[key] = item;
+      }
+    }
+
+    return [...cancellations, ...activeByKey.values];
+  }
+
   /// Live computed subtotal from non-cancelled active order items.
   /// Falls back to currentBillAmount if order items are empty.
   double get liveSubtotal {
-    if (currentOrderItems.isEmpty) return currentBillAmount;
+    final items = deduplicatedOrderItems;
+    if (items.isEmpty) return currentBillAmount;
     double sub = 0.0;
     bool hasItems = false;
-    for (final item in currentOrderItems) {
+    for (final item in items) {
       final isCancelled = item['is_cancelled'] == true ||
           item['is_cancelled'] == 1 ||
           item['is_cancelled'] == 'true' ||
@@ -79,7 +125,8 @@ class RestaurantTable {
 
   /// Live payable bill amount: (liveSubtotal - discountAmount + dineInTax).
   double get liveBillAmount {
-    if (currentOrderItems.isEmpty) return currentBillAmount;
+    final items = deduplicatedOrderItems;
+    if (items.isEmpty) return currentBillAmount;
     final sub = liveSubtotal;
     if (sub <= 0) return currentBillAmount;
     final discounted = (sub - discountAmount).clamp(0.0, double.infinity);

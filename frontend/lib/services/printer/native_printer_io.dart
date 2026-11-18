@@ -154,12 +154,76 @@ if (\$res) { "OK" } else { "FAIL" }
   }
 
   /// Discovers all Windows printer queue names via PowerShell without triggering UI.
+  /// Also checks physical USB connection presence for generic USB spooler printers.
   static Future<List<String>> getInstalledWindowsPrinters() async {
     if (!Platform.isWindows) return [];
     try {
+      const script = r'''
+Add-Type -AssemblyName System.Drawing;
+$printers = [System.Drawing.Printing.PrinterSettings]::InstalledPrinters;
+$hasUsb = $false;
+try {
+  $code = @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class UsbDevCheck {
+    private const int DIGCF_ALLCLASSES = 4;
+    private const int DIGCF_PRESENT = 2;
+    private const int SPDRP_SERVICE = 4;
+    private const int SPDRP_DEVICEDESC = 0;
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SP_DEVINFO_DATA { public int cbSize; public Guid ClassGuid; public int DevInst; public IntPtr Reserved; }
+    [DllImport("setupapi.dll", SetLastError = true)]
+    public static extern IntPtr SetupDiGetClassDevs(IntPtr ClassGuid, IntPtr Enumerator, IntPtr hwndParent, int Flags);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    public static extern bool SetupDiEnumDeviceInfo(IntPtr DeviceInfoSet, int MemberIndex, ref SP_DEVINFO_DATA DeviceInfoData);
+    [DllImport("setupapi.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern bool SetupDiGetDeviceRegistryProperty(IntPtr DeviceInfoSet, ref SP_DEVINFO_DATA DeviceInfoData, int Property, out int PropertyRegDataType, StringBuilder PropertyBuffer, int PropertyBufferSize, out int RequiredSize);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    public static extern bool SetupDiDestroyDeviceInfoList(IntPtr DeviceInfoSet);
+    public static bool HasUsbPrinter() {
+        IntPtr h = SetupDiGetClassDevs(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+        if (h == IntPtr.Zero || h.ToInt64() == -1) return false;
+        try {
+            SP_DEVINFO_DATA d = new SP_DEVINFO_DATA();
+            d.cbSize = Marshal.SizeOf(d);
+            int i = 0;
+            while (SetupDiEnumDeviceInfo(h, i, ref d)) {
+                StringBuilder sb = new StringBuilder(256);
+                int t, s;
+                if (SetupDiGetDeviceRegistryProperty(h, ref d, SPDRP_SERVICE, out t, sb, sb.Capacity, out s)) {
+                    if (sb.ToString().ToLower() == "usbprint") return true;
+                }
+                if (SetupDiGetDeviceRegistryProperty(h, ref d, SPDRP_DEVICEDESC, out t, sb, sb.Capacity, out s)) {
+                    string desc = sb.ToString().ToLower();
+                    if (desc.Contains("usb printing support") || desc.Contains("receipt printer") || desc.Contains("thermal printer")) return true;
+                }
+                i++;
+            }
+        } finally {
+            SetupDiDestroyDeviceInfoList(h);
+        }
+        return false;
+    }
+}
+'@
+  Add-Type -TypeDefinition $code -Language CSharp
+  $hasUsb = [UsbDevCheck]::HasUsbPrinter()
+} catch {
+  $hasUsb = $true;
+}
+
+foreach ($p in $printers) {
+  $lower = $p.ToLower();
+  if ($lower -match 'pdf|onenote|fax|xps|root print queue') { continue; }
+  if ($lower -eq 'pos receipt printer' -and -not $hasUsb) { continue; }
+  Write-Output $p;
+}
+''';
       final result = await Process.run(
         'powershell',
-        ['-NoProfile', '-Command', "Get-Printer | Select-Object -ExpandProperty Name"],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
         runInShell: true,
       );
       if (result.exitCode == 0) {

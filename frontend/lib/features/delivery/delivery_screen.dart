@@ -17,6 +17,8 @@ import '../../domain/models/delivery_model.dart';
 import '../../domain/models/user_role.dart';
 import '../../services/receipt_printer_service.dart';
 import '../../shared/widgets/cashier_sidebar_footer.dart';
+import '../../services/menu_flavor_registry.dart';
+import '../../shared/widgets/quick_flavor_selection_dialog.dart';
 
 class DeliveryScreen extends ConsumerStatefulWidget {
   const DeliveryScreen({super.key});
@@ -3034,14 +3036,17 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
     {'name': 'Student Saver Deal (1 Zinger Burger + Plain Fries + 1 Drink)', 'price': 749.0, 'cat': 'Deals', 'image': 'assets/images/chicken_burger_hero.jpg'},
 
     // Pizzas
-    {'name': 'Classic Fajita Pizza (Small)', 'price': 849.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
-    {'name': 'Classic Fajita Pizza (Medium)', 'price': 1449.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
-    {'name': 'Classic Fajita Pizza (Large)', 'price': 1749.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
-    {'name': 'Classic Fajita Pizza (Family)', 'price': 2349.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
-    {'name': 'Modern Crown Crust (Medium)', 'price': 1549.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
-    {'name': 'Modern Crown Crust (Large)', 'price': 1999.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
-    {'name': 'Special Arabic Crispy (Medium)', 'price': 1699.0, 'cat': 'Pizza', 'image': 'assets/images/Special.png'},
-    {'name': 'Special Hungry Cheese Gold (Large)', 'price': 2199.0, 'cat': 'Pizza', 'image': 'assets/images/Special.png'},
+    {'name': "Classic Pizza's (Small)", 'price': 849.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
+    {'name': "Classic Pizza's (Medium)", 'price': 1449.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
+    {'name': "Classic Pizza's (Large)", 'price': 1749.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
+    {'name': "Classic Pizza's (Family)", 'price': 2349.0, 'cat': 'Pizza', 'image': 'assets/images/Fajita.png'},
+    {'name': "Modren Pizza's (Small)", 'price': 849.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
+    {'name': "Modren Pizza's (Medium)", 'price': 1549.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
+    {'name': "Modren Pizza's (Large)", 'price': 1999.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
+    {'name': "Modren Pizza's (Family)", 'price': 2499.0, 'cat': 'Pizza', 'image': 'assets/images/Modern.png'},
+    {'name': "Special Pizza's (Medium)", 'price': 1699.0, 'cat': 'Pizza', 'image': 'assets/images/Special.png'},
+    {'name': "Special Pizza's (Large)", 'price': 2199.0, 'cat': 'Pizza', 'image': 'assets/images/Special.png'},
+    {'name': "Special Pizza's (Family)", 'price': 2999.0, 'cat': 'Pizza', 'image': 'assets/images/Special.png'},
 
     // Steaks
     {'name': 'Tarragon Chicken Steak', 'price': 1499.0, 'cat': 'Steak', 'image': 'assets/images/chicken_steak.png'},
@@ -3141,7 +3146,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
             'id': i.id,
             'name': i.name,
             'base_price': i.basePrice,
-            'image_url': 'assets/images/Pizza.png',
+            'image_url': '',
             'category': {'name': i.categoryId},
           }).toList();
           dbDeals = localDeals.map((d) => {
@@ -3208,7 +3213,27 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
             ? (item['category']['name']?.toString().trim() ?? 'General')
             : 'General';
         final basePrice = double.tryParse(item['base_price']?.toString() ?? '0') ?? 0.0;
-        final imgUrl = item['image_url']?.toString() ?? 'assets/images/Pizza.png';
+        final String rawImg = (item['image_url'] ?? '').toString().trim();
+        String imgUrl = (rawImg.isNotEmpty && rawImg.toLowerCase() != 'null') ? rawImg : '';
+
+        // If Pizza.png was erroneously assigned to a non-pizza item, discard it
+        final isPizza = itemName.toLowerCase().contains('pizza') ||
+            itemName.toLowerCase().contains('calzone') ||
+            catName.toLowerCase().contains('pizza');
+        if (imgUrl == 'assets/images/Pizza.png' && !isPizza) {
+          imgUrl = '';
+        }
+
+        // If no image from DB, lookup known static assets by name
+        if (imgUrl.isEmpty) {
+          final matched = _menuItems.firstWhere(
+            (m) => (m['name'] ?? '').toString().toLowerCase().trim() == itemName.toLowerCase().trim(),
+            orElse: () => <String, dynamic>{},
+          );
+          if (matched.isNotEmpty && (matched['image'] ?? '').toString().isNotEmpty) {
+            imgUrl = matched['image'].toString();
+          }
+        }
 
         final alreadyInList = loadedItems.any(
           (it) => it['name'].toString().toLowerCase() == itemName.toLowerCase() || (itemId != null && it['id'] == itemId),
@@ -3272,7 +3297,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
     }
   }
 
-  Widget _buildItemThumbnail(String path, Uint8List? bytes) {
+  Widget _buildItemThumbnail(String path, Uint8List? bytes, {String? category, String? itemName}) {
     if (bytes != null && bytes.isNotEmpty) {
       return Image.memory(bytes, width: 44, height: 44, fit: BoxFit.cover);
     }
@@ -3288,12 +3313,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
         width: 44,
         height: 44,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 44,
-          height: 44,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
     if (path.isNotEmpty && !path.startsWith('http')) {
@@ -3302,19 +3322,45 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
         width: 44,
         height: 44,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 44,
-          height: 44,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
+    return _buildPlaceholderIcon(category: category, itemName: itemName);
+  }
+
+  Widget _buildPlaceholderIcon({String? category, String? itemName}) {
+    final cat = (category ?? '').toLowerCase();
+    final name = (itemName ?? '').toLowerCase();
+
+    IconData iconData = Icons.fastfood_rounded;
+    if (cat.contains('beverage') || cat.contains('drink') || name.contains('coke') || name.contains('sprite') || name.contains('juice') || name.contains('water') || name.contains('margarita') || name.contains('colada') || name.contains('lagon') || name.contains('blast')) {
+      iconData = Icons.local_drink_rounded;
+    } else if (cat.contains('coffee') || name.contains('coffee') || name.contains('latte') || name.contains('espresso') || name.contains('cappuccino') || name.contains('americano')) {
+      iconData = Icons.coffee_rounded;
+    } else if (cat.contains('burger') || name.contains('burger')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('pizza') || name.contains('pizza')) {
+      iconData = Icons.local_pizza_rounded;
+    } else if (cat.contains('biryani') || name.contains('biryani') || name.contains('rice')) {
+      iconData = Icons.rice_bowl_rounded;
+    } else if (cat.contains('dessert') || cat.contains('shake') || name.contains('ice cream') || name.contains('shake') || name.contains('smoothie') || name.contains('apple') || name.contains('banana') || name.contains('berry')) {
+      iconData = Icons.icecream_rounded;
+    } else if (cat.contains('fries') || name.contains('fries')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('steak') || name.contains('steak')) {
+      iconData = Icons.dinner_dining_rounded;
+    }
+
     return Container(
       width: 44,
       height: 44,
-      color: AppColors.primaryRed.withValues(alpha: 0.1),
-      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+      decoration: BoxDecoration(
+        color: AppColors.primaryRed.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Center(
+        child: Icon(iconData, color: AppColors.primaryRed, size: 22),
+      ),
     );
   }
 
@@ -3649,7 +3695,9 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                 final name = item['name'] as String;
                                 final price = item['price'] as double;
                                 final imagePath = item['image'] as String;
-                                final qty = _cart[name] ?? 0;
+                                final qty = _cart.entries
+                                    .where((e) => e.key == name || e.key.startsWith(name.replaceAll(RegExp(r'\)$'), '')))
+                                    .fold(0, (sum, e) => sum + e.value);
 
                                 return Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -3669,7 +3717,7 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: _buildItemThumbnail(imagePath, item['bytes'] as Uint8List?),
+                                        child: _buildItemThumbnail(imagePath, item['bytes'] as Uint8List?, category: item['cat']?.toString(), itemName: item['name']?.toString()),
                                       ),
                                       const SizedBox(width: 10),
                                       Expanded(
@@ -3704,10 +3752,16 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                           InkWell(
                                             onTap: () {
                                               setState(() {
-                                                if (_cart[name]! > 1) {
-                                                  _cart[name] = _cart[name]! - 1;
-                                                } else {
-                                                  _cart.remove(name);
+                                                final matchKey = _cart.keys.lastWhere(
+                                                  (k) => k == name || k.startsWith(name.replaceAll(RegExp(r'\)$'), '')),
+                                                  orElse: () => '',
+                                                );
+                                                if (matchKey.isNotEmpty) {
+                                                  if (_cart[matchKey]! > 1) {
+                                                    _cart[matchKey] = _cart[matchKey]! - 1;
+                                                  } else {
+                                                    _cart.remove(matchKey);
+                                                  }
                                                 }
                                               });
                                             },
@@ -3734,9 +3788,25 @@ class _CreateDeliveryOrderDialogState extends State<_CreateDeliveryOrderDialog> 
                                         ),
                                       ],
                                       InkWell(
-                                        onTap: () {
+                                        onTap: () async {
+                                          final flavors = MenuFlavorRegistry.getFlavorsForItem(name, category: item['cat']?.toString());
+                                          String effectiveName = name;
+
+                                          if (flavors.isNotEmpty) {
+                                            final selectedFlavor = await QuickFlavorSelectionDialog.show(
+                                              context,
+                                              itemName: name,
+                                              price: price,
+                                              flavors: flavors,
+                                            );
+                                            if (selectedFlavor == null) return;
+                                            effectiveName = MenuFlavorRegistry.formatItemWithFlavor(name, selectedFlavor);
+                                          }
+
+                                          if (!mounted) return;
                                           setState(() {
-                                            _cart[name] = (qty + 1);
+                                            _customItemPrices[effectiveName] = price;
+                                            _cart[effectiveName] = (_cart[effectiveName] ?? 0) + 1;
                                           });
                                         },
                                         borderRadius: BorderRadius.circular(6),

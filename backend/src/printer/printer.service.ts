@@ -94,7 +94,7 @@ public class RawSpoolerHelper {
   async getAvailablePrinters(): Promise<{ printers: string[]; defaultPrinter: string; ports: string[] }> {
     const isWindows = os.platform() === 'win32';
     if (!isWindows) {
-      return { printers: ['POS Receipt Printer'], defaultPrinter: 'POS Receipt Printer', ports: [] };
+      return { printers: [], defaultPrinter: '', ports: [] };
     }
 
     const now = Date.now();
@@ -111,7 +111,7 @@ public class RawSpoolerHelper {
     // Query Printers via PowerShell
     try {
       const { stdout } = await execAsync(
-        'powershell -NoProfile -Command "Get-Printer | Select-Object -ExpandProperty Name"',
+        'powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; [System.Drawing.Printing.PrinterSettings]::InstalledPrinters"',
       );
       const lines = stdout
         .split(/[\r\n]+/)

@@ -399,6 +399,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
     _initSubItems();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadCategoriesAndItemsFromBackend();
+      ref.read(roleRightsProvider.notifier).loadPermissions(force: true);
     });
   }
 
@@ -531,13 +532,44 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
           final imgPath = item['image_url']?.toString() ?? '';
 
           if (catIdLower.contains('pizza')) {
-            // Populate pizza flavors from database into pizza sub-categories
-            for (final subCat in _pizzaSubCategories) {
-              final flavors = (subCat['flavors'] as List<dynamic>?)?.cast<String>() ?? [];
-              if (!flavors.any((f) => f.toLowerCase() == itemName.toLowerCase())) {
-                if (subCat['id'] == 'p1' || _pizzaSubCategories.indexOf(subCat) == 0) {
-                  subCat['flavors'] = [...flavors, itemName];
+            final lowerName = itemName.toLowerCase();
+            final Map<String, String> dbPrices = {};
+            if (item['sizes'] is List) {
+              for (final s in (item['sizes'] as List)) {
+                final sName = s['size_name']?.toString() ?? '';
+                final sPrice = s['price']?.toString() ?? '';
+                if (sName.isNotEmpty && sPrice.isNotEmpty) {
+                  dbPrices[sName] = 'PKR $sPrice';
                 }
+              }
+            }
+
+            final List<String> dbFlavors = [];
+            if (item['options'] is List) {
+              for (final o in (item['options'] as List)) {
+                final oType = o['option_type']?.toString().toLowerCase();
+                final oName = o['option_name']?.toString() ?? '';
+                if (oType == 'flavor' && oName.isNotEmpty) {
+                  dbFlavors.add(oName);
+                }
+              }
+            }
+
+            for (final subCat in _pizzaSubCategories) {
+              bool matches = false;
+              if (subCat['id'] == 'p1' && lowerName.contains('classic')) {
+                matches = true;
+              } else if (subCat['id'] == 'p2' && (lowerName.contains('modren') || lowerName.contains('modern'))) {
+                matches = true;
+              } else if (subCat['id'] == 'p3' && lowerName.contains('special')) {
+                matches = true;
+              }
+
+              if (matches) {
+                if (dbPrices.isNotEmpty) subCat['prices'] = dbPrices;
+                if (dbFlavors.isNotEmpty) subCat['flavors'] = dbFlavors;
+                if (imgPath.isNotEmpty) subCat['imagePath'] = imgPath;
+                subCat['dbId'] = item['id'];
               }
             }
           } else if (catIdLower.contains('steak')) {
@@ -752,7 +784,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
       },
       {
         'id': 'p2',
-        'title': "Modern Pizza's",
+        'title': "Modren Pizza's",
         'imagePath': 'assets/images/Modern.png',
         'prices': {'Small': 'PKR 849', 'Medium': 'PKR 1549', 'Large': 'PKR 1999', 'Family': 'PKR 2499'},
         'flavors': ['Ring Pizza', 'Crown Crust', 'Pepperoni Passion', 'Doner Kebab', 'Kebab Stuffer', 'Cheese Stick', 'Chicken Stuffer'],
@@ -998,33 +1030,37 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
   bool get canAddMenu {
     final role = ref.read(authProvider).currentUser.role;
+    if (role == UserRole.owner || role == UserRole.manager) return true;
     return ref.read(roleRightsProvider).isActionGranted(
       role,
       'menu_add',
-      defaultIfMissing: role == UserRole.owner || role == UserRole.manager,
+      defaultIfMissing: false,
     );
   }
 
   bool get canEditMenu {
     final role = ref.read(authProvider).currentUser.role;
+    if (role == UserRole.owner || role == UserRole.manager) return true;
     return ref.read(roleRightsProvider).isActionGranted(
       role,
       'menu_edit',
-      defaultIfMissing: role == UserRole.owner || role == UserRole.manager,
+      defaultIfMissing: false,
     );
   }
 
   bool get canDeleteMenu {
     final role = ref.read(authProvider).currentUser.role;
+    if (role == UserRole.owner || role == UserRole.manager) return true;
     return ref.read(roleRightsProvider).isActionGranted(
       role,
       'menu_delete',
-      defaultIfMissing: role == UserRole.owner || role == UserRole.manager,
+      defaultIfMissing: false,
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(authProvider);
     ref.watch(roleRightsProvider);
     final themeMode = ref.watch(themeProvider);
     final isDark = themeMode == ThemeMode.dark;
@@ -1683,13 +1719,30 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
       final cleanTargetName = targetCat.replaceAll(RegExp(r'[^a-z0-9]'), '');
       final cleanTargetKey = targetKey.replaceAll(RegExp(r'[^a-z0-9]'), '');
 
-      return itemCat == targetCat ||
+      final matches = itemCat == targetCat ||
              itemCat == targetKey ||
              itemCat == targetId ||
              (cleanItem.isNotEmpty && cleanItem == cleanTargetName) ||
              (cleanItem.isNotEmpty && cleanItem == cleanTargetKey) ||
              (cleanTargetName.isNotEmpty && cleanItem.contains(cleanTargetName)) ||
              (cleanItem.isNotEmpty && cleanTargetName.contains(cleanItem));
+      if (!matches) return false;
+
+      // Do not duplicate pizza subcategories that are already rendered in _buildPizzaDetails
+      if (targetKey == 'pizza' || targetCat.contains('pizza')) {
+        final itemName = (item['name']?.toString() ?? '').toLowerCase();
+        final isKnownPizzaSubCat = _pizzaSubCategories.any((p) {
+          final pTitle = (p['title']?.toString() ?? '').toLowerCase();
+          return itemName.contains('classic') ||
+                 itemName.contains('modren') ||
+                 itemName.contains('modern') ||
+                 itemName.contains('special') ||
+                 pTitle == itemName;
+        });
+        if (isKnownPizzaSubCat) return false;
+      }
+
+      return true;
     }).toList();
 
     Widget builtInContent;
@@ -3117,13 +3170,17 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
     // 3. Fallback catalogue of core Hungry Howie's dishes if database is still initializing
     if (allDishes.isEmpty) {
       final defaultCatalogue = [
-        {'name': 'Classic Fajita Pizza (Small)', 'category': 'Pizza', 'price': 849.0, 'imagePath': 'assets/images/Fajita.png'},
-        {'name': 'Classic Fajita Pizza (Medium)', 'category': 'Pizza', 'price': 1449.0, 'imagePath': 'assets/images/Fajita.png'},
-        {'name': 'Classic Fajita Pizza (Large)', 'category': 'Pizza', 'price': 1749.0, 'imagePath': 'assets/images/Fajita.png'},
-        {'name': 'Classic Fajita Pizza (Family)', 'category': 'Pizza', 'price': 2349.0, 'imagePath': 'assets/images/Fajita.png'},
-        {'name': 'Modern Crown Crust (Medium)', 'category': 'Pizza', 'price': 1549.0, 'imagePath': 'assets/images/Modern.png'},
-        {'name': 'Modern Crown Crust (Large)', 'category': 'Pizza', 'price': 1999.0, 'imagePath': 'assets/images/Modern.png'},
-        {'name': 'Special Arabic Crispy (Medium)', 'category': 'Pizza', 'price': 1699.0, 'imagePath': 'assets/images/Special.png'},
+        {'name': "Classic Pizza's (Small)", 'category': 'Pizza', 'price': 849.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': "Classic Pizza's (Medium)", 'category': 'Pizza', 'price': 1449.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': "Classic Pizza's (Large)", 'category': 'Pizza', 'price': 1749.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': "Classic Pizza's (Family)", 'category': 'Pizza', 'price': 2349.0, 'imagePath': 'assets/images/Fajita.png'},
+        {'name': "Modren Pizza's (Small)", 'category': 'Pizza', 'price': 849.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': "Modren Pizza's (Medium)", 'category': 'Pizza', 'price': 1549.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': "Modren Pizza's (Large)", 'category': 'Pizza', 'price': 1999.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': "Modren Pizza's (Family)", 'category': 'Pizza', 'price': 2499.0, 'imagePath': 'assets/images/Modern.png'},
+        {'name': "Special Pizza's (Medium)", 'category': 'Pizza', 'price': 1699.0, 'imagePath': 'assets/images/Special.png'},
+        {'name': "Special Pizza's (Large)", 'category': 'Pizza', 'price': 2199.0, 'imagePath': 'assets/images/Special.png'},
+        {'name': "Special Pizza's (Family)", 'category': 'Pizza', 'price': 2999.0, 'imagePath': 'assets/images/Special.png'},
         {'name': 'Tarragon Chicken Steak', 'category': 'Steak', 'price': 1499.0, 'imagePath': 'assets/images/chicken_steak.png'},
         {'name': 'Mushroom Chicken Steak', 'category': 'Steak', 'price': 1499.0, 'imagePath': 'assets/images/chicken_steak.png'},
         {'name': 'Beef Cheese Stuff Burger', 'category': 'Burger', 'price': 1349.0, 'imagePath': 'assets/images/beef_burger_hero.jpg'},
@@ -3153,7 +3210,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
           allDishes.add({
             'name': d['name'] as String,
             'category': d['category'] as String,
-            'price': d['price'] as double,
+            'price': (d['price'] as num).toDouble(),
             'imagePath': d['imagePath'] as String,
             'imageBytes': null,
           });
@@ -3332,7 +3389,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
                               final dish = filtered[idx];
                               final dishName = dish['name'] as String;
                               final dishCat = dish['category'] as String;
-                              final dishPrice = dish['price'] as double;
+                              final dishPrice = (dish['price'] as num?)?.toDouble() ?? 0.0;
                               final dishImg = dish['imagePath'] as String;
                               final dishBytes = dish['imageBytes'] as Uint8List?;
 
@@ -5315,7 +5372,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
       final hasMultipleSizes = prices.length > 1;
       final hasFlavors = flavors.isNotEmpty;
-      final pVal = item['price'] != null ? (item['price'] as double).toStringAsFixed(0) : '1499';
+      final pVal = item['price'] != null ? (item['price'] is num ? (item['price'] as num).toDouble().toStringAsFixed(0) : double.tryParse(item['price'].toString())?.toStringAsFixed(0) ?? '1499') : '1499';
       final pText = prices.isNotEmpty ? prices.values.first : 'PKR $pVal';
       final imageStr = (item['imagePath'] as String?);
       final imageBytes = item['imageBytes'] as Uint8List?;
@@ -6936,6 +6993,112 @@ class _MenuScreenState extends ConsumerState<MenuScreen> {
 
                 setState(() {
                   _customMenuItems.add(newItemMap);
+
+                  final catKey = matchedCat.categoryKey.toLowerCase();
+                  final catNameLower = matchedCat.name.toLowerCase();
+                  final priceStr = 'PKR ${priceVal.toInt()}';
+
+                  if (catKey.contains('steak') || catNameLower.contains('steak')) {
+                    if (!_steakItems.any((s) => s['name']?.toLowerCase() == name.toLowerCase())) {
+                      _steakItems.add({'name': name, 'price': priceStr});
+                    }
+                  } else if (catKey.contains('burger') || catNameLower.contains('burger')) {
+                    if (name.toLowerCase().contains('beef') || name.toLowerCase().contains('smash') || name.toLowerCase().contains('stacker')) {
+                      if (!_beefBurgers.any((b) => b['name']?.toLowerCase() == name.toLowerCase())) {
+                        _beefBurgers.add({'name': name, 'price': priceStr});
+                      }
+                    } else {
+                      if (!_chickenBurgers.any((b) => b['name']?.toLowerCase() == name.toLowerCase())) {
+                        _chickenBurgers.add({'name': name, 'price': priceStr});
+                      }
+                    }
+                  } else if (catKey.contains('brost') || catNameLower.contains('broast')) {
+                    if (!_brostItems.any((b) => b['name']?.toLowerCase() == name.toLowerCase())) {
+                      _brostItems.add({'name': name, 'price': priceStr});
+                    }
+                  } else if (catKey.contains('pasta') || catNameLower.contains('pasta')) {
+                    if (!_pastaItems.any((p) => p['name']?.toLowerCase() == name.toLowerCase())) {
+                      _pastaItems.add({'name': name, 'desc': desc, 'price': priceStr, 'badge': badgeText});
+                    }
+                  } else if (catKey.contains('panini') || catNameLower.contains('panini')) {
+                    if (!_paniniItems.any((p) => p['name']?.toLowerCase() == name.toLowerCase())) {
+                      _paniniItems.add({'name': name, 'price': priceStr});
+                    }
+                  } else if (catKey.contains('appetizer') || catNameLower.contains('appetizer')) {
+                    if (!_appetizerItems.any((a) => a['name']?.toLowerCase() == name.toLowerCase())) {
+                      _appetizerItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('fries') || catNameLower.contains('fries')) {
+                    if (!_friesItems.any((f) => f['name']?.toLowerCase() == name.toLowerCase())) {
+                      _friesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey == 'beverages' || catNameLower.contains('beverage')) {
+                    if (!_beveragesItems.any((b) => b['name']?.toLowerCase() == name.toLowerCase())) {
+                      _beveragesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('topping') || catNameLower.contains('topping')) {
+                    if (!_extraToppingItems.any((t) => t['name']?.toLowerCase() == name.toLowerCase())) {
+                      _extraToppingItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('hot-bev') || catNameLower.contains('hot beverage')) {
+                    if (!_hotBeveragesItems.any((h) => h['name']?.toLowerCase() == name.toLowerCase())) {
+                      _hotBeveragesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('cold-coffee') || catNameLower.contains('cold coffee')) {
+                    if (!_coldCoffeeItems.any((c) => c['name']?.toLowerCase() == name.toLowerCase())) {
+                      _coldCoffeeItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('ice-cream') || catNameLower.contains('ice cream')) {
+                    if (!_iceCreamFlavors.any((i) => i.toLowerCase() == name.toLowerCase())) {
+                      _iceCreamFlavors.add(name);
+                    }
+                  } else if (catKey.contains('mocktail') || catNameLower.contains('mocktail')) {
+                    if (!_mocktailsItems.any((m) => m['name']?.toLowerCase() == name.toLowerCase())) {
+                      _mocktailsItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('mojito') || catNameLower.contains('mojito')) {
+                    if (!_mojitoItems.any((m) => m['name']?.toLowerCase() == name.toLowerCase())) {
+                      _mojitoItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('smoothie') || catNameLower.contains('smoothie')) {
+                    if (!_smoothiesItems.any((s) => s['name']?.toLowerCase() == name.toLowerCase())) {
+                      _smoothiesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('ice-shake') || catNameLower.contains('ice shake')) {
+                    if (!_iceShakesItems.any((s) => s['name']?.toLowerCase() == name.toLowerCase())) {
+                      _iceShakesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('milk-shake') || catNameLower.contains('milk shake')) {
+                    if (!_milkShakesItems.any((s) => s['name']?.toLowerCase() == name.toLowerCase())) {
+                      _milkShakesItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('soft-drink') || catNameLower.contains('soft drink')) {
+                    if (!_softDrinksItems.any((s) => s['name']?.toLowerCase() == name.toLowerCase())) {
+                      _softDrinksItems.add({'name': name, 'price': priceStr, 'image': saveImagePath});
+                    }
+                  } else if (catKey.contains('pizza')) {
+                    final classicFlavors = ['fajita', 'tikka', 'malai boti', 'sausage', 'hot & spicy', 'tandoori'];
+                    final modernFlavors = ['ring', 'crown', 'peperoni', 'pepperoni', 'doner', 'kebab', 'cheese stick', 'stuffer'];
+                    final specialFlavors = ['arabic', 'gold'];
+
+                    final lowerName = name.toLowerCase();
+                    for (final subCat in _pizzaSubCategories) {
+                      final flavors = (subCat['flavors'] as List<dynamic>?)?.cast<String>() ?? [];
+                      final subId = subCat['id'];
+                      bool matches = false;
+                      if (subId == 'p1' && classicFlavors.any((f) => lowerName.contains(f))) {
+                        matches = true;
+                      } else if (subId == 'p2' && modernFlavors.any((f) => lowerName.contains(f))) {
+                        matches = true;
+                      } else if (subId == 'p3' && specialFlavors.any((f) => lowerName.contains(f))) {
+                        matches = true;
+                      }
+
+                      if (matches && !flavors.any((f) => f.toLowerCase() == lowerName)) {
+                        subCat['flavors'] = [...flavors, name];
+                      }
+                    }
+                  }
                 });
 
                 Navigator.pop(dialogContext);

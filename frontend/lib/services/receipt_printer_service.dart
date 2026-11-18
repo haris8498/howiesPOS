@@ -964,12 +964,15 @@ class ReceiptPrinterService {
         result.add(fmt3);
         result.add(fmt3.toLowerCase());
       }
-      for (final m in RegExp(r'\d+').allMatches(c)) {
-        final s = m.group(0)!;
-        final n = int.tryParse(s);
-        if (n != null) {
-          result.add(n.toString());
-          result.add(n.toString().padLeft(3, '0'));
+      // Only extract sub-digits if it is a short ticket/order string (not a 36-character UUID)
+      if (!c.contains('-') || c.length < 20) {
+        for (final m in RegExp(r'\d+').allMatches(c)) {
+          final s = m.group(0)!;
+          final n = int.tryParse(s);
+          if (n != null) {
+            result.add(n.toString());
+            result.add(n.toString().padLeft(3, '0'));
+          }
         }
       }
     }
@@ -1038,19 +1041,11 @@ class ReceiptPrinterService {
       for (final raw in candidateIds) {
         final clean = raw.toLowerCase();
         recordedSig = sigMap[clean] ??
-            sigMap[clean.replaceAll('_cancel', '')] ??
-            sigMap[clean.replaceAll(RegExp(r'[^0-9]'), '')];
+            sigMap[clean.replaceAll('_cancel', '')];
         if (recordedSig != null) break;
       }
 
-      // If recordedSig is null (signature was cleared/un-marked when order was modified),
-      // order is unlocked and updated KOT can print!
-      if (recordedSig == null) {
-        debugPrint('🔔 KOT No signature found for [$matchedKey]: Order was unlocked/modified. Updated print unlocked.');
-        return false;
-      }
-
-      if (recordedSig != currentItemsSignature) {
+      if (recordedSig != null && recordedSig != currentItemsSignature) {
         debugPrint('🔔 KOT Signature mismatch for [$matchedKey]: Order was modified ($recordedSig != $currentItemsSignature). Updated print unlocked.');
         return false;
       }
@@ -1213,7 +1208,7 @@ class ReceiptPrinterService {
     _finalReceiptPrintedIdentifiers.add(identifier.trim().toLowerCase());
   }
 
-  /// Helper to mark all known identifiers (orderId, orderNumber, tokenNumber, tableNumber)
+  /// Helper to mark all known identifiers (orderId, orderNumber, tokenNumber)
   static void markOrderFinalReceiptPrinted({
     String? orderId,
     String? orderNumber,
@@ -1223,7 +1218,6 @@ class ReceiptPrinterService {
     if (orderId != null && orderId.trim().isNotEmpty) markFinalReceiptPrinted(orderId);
     if (orderNumber != null && orderNumber.trim().isNotEmpty) markFinalReceiptPrinted(orderNumber);
     if (tokenNumber != null && tokenNumber.trim().isNotEmpty) markFinalReceiptPrinted(tokenNumber);
-    if (tableNumber != null && tableNumber.trim().isNotEmpty) markFinalReceiptPrinted(tableNumber);
   }
 
   /// Clears printed kitchen receipts history (e.g., daily reset)
@@ -1449,7 +1443,14 @@ class ReceiptPrinterService {
     if (kIsWeb) return [];
     try {
       final spoolerPrinters = await Printing.listPrinters();
-      return spoolerPrinters;
+      return spoolerPrinters.where((p) {
+        final lower = p.name.toLowerCase();
+        return !lower.contains('pdf') &&
+            !lower.contains('onenote') &&
+            !lower.contains('fax') &&
+            !lower.contains('xps') &&
+            !lower.contains('root print queue');
+      }).toList();
     } catch (e) {
       debugPrint('Printer discovery notice: $e');
       return [];
@@ -1571,9 +1572,9 @@ class ReceiptPrinterService {
       // -----------------------------------------------------------------------
       // STRICT ONE-TIME KITCHEN PRINT ENFORCEMENT (Tier 5 of §15.2)
       // If an unmodified kitchen ticket has already been printed once, reject duplicate prints.
-      // If the order has been modified, or if forcePrint/isReprint is set, allow printing!
+      // If the order has been modified (items added/deleted/updated), allow printing!
       // -----------------------------------------------------------------------
-      if (isKot && !forcePrint && !receipt.isReprint) {
+      if (isKot && !forcePrint) {
         final isTestTicket = (receipt.cashierOrServer?.toUpperCase() == 'KITCHEN TEST') ||
             receipt.orderNumber == 'KOT-101' ||
             receipt.orderNumber == 'KOT-TEST';
@@ -1834,11 +1835,9 @@ class ReceiptPrinterService {
         );
 
         final success = printResult.success;
-        if (success) {
+        if (success && receipt.type == ReceiptType.customerReceipt) {
           markOrderFinalReceiptPrinted(
             orderNumber: receipt.orderNumber,
-            tokenNumber: receipt.tokenNumber,
-            tableNumber: receipt.tableNumber,
           );
         }
         if (success && context != null && context.mounted) {
@@ -2047,17 +2046,6 @@ class ReceiptPrinterService {
       if (targetPrinter.startsWith('Port: ')) {
         final port = targetPrinter.replaceFirst('Port: ', '').trim();
         printSuccess = await NativeWin32Printer.printRawBytesToPort(port, escposBytes);
-        if (!printSuccess) {
-          await NativeWin32Printer.ensurePosPrinterInstalled(
-            printerName: 'POS Receipt Printer',
-            portName: port,
-          );
-          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
-            'POS Receipt Printer',
-            escposBytes,
-            docName: docName,
-          );
-        }
       } else if (targetPrinter.contains(':') && RegExp(r'^\d+\.\d+\.\d+\.\d+:\d+$').hasMatch(targetPrinter)) {
         final parts = targetPrinter.split(':');
         final host = parts[0];
@@ -2069,14 +2057,6 @@ class ReceiptPrinterService {
           escposBytes,
           docName: docName,
         );
-
-        if (!printSuccess && targetPrinter != 'POS Receipt Printer') {
-          printSuccess = await NativeWin32Printer.printRawBytesToSpooler(
-            'POS Receipt Printer',
-            escposBytes,
-            docName: docName,
-          );
-        }
       }
     }
 
@@ -2110,13 +2090,8 @@ class ReceiptPrinterService {
       try {
         final printers = await Printing.listPrinters();
         final matchingPrinter = printers.cast<Printer?>().firstWhere(
-              (p) => p?.name == targetPrinter || p?.name == 'POS Receipt Printer',
-              orElse: () => printers.isNotEmpty
-                  ? printers.firstWhere(
-                      (p) => !p.name.toLowerCase().contains('pdf') && !p.name.toLowerCase().contains('onenote'),
-                      orElse: () => printers.first,
-                    )
-                  : null,
+              (p) => p?.name == targetPrinter,
+              orElse: () => null,
             );
 
         if (matchingPrinter != null) {
@@ -2250,9 +2225,11 @@ class ReceiptPrinterService {
   }) async {
     final targetDb = db ?? _database;
     final rawPos = printerName ?? await getSavedPrinterName();
-    final targetPrinter = (rawPos != null && isPrinterConfigured(rawPos))
-        ? rawPos
-        : 'POS Receipt Printer';
+    if (!isPrinterConfigured(rawPos)) {
+      debugPrint('No POS printer configured for Shift Z-Report. Skipping print.');
+      return false;
+    }
+    final targetPrinter = rawPos!;
     final paperWidth = await getSavedPaperWidth();
     final autoCut = await isAutoCutEnabled();
 
@@ -2393,14 +2370,18 @@ class ReceiptPrinterService {
 
     final winPrinters = await NativeWin32Printer.getInstalledWindowsPrinters();
     const thermalKeywords = [
-      'pos', 'thermal', 'receipt', 'xp-', 'xp', 'tm-', 'rp-', 'zj-', 'zj',
-      '80', '58', 'xprinter', 'epson', 'rongta', 'gprinter', 'bixolon', 'sunmi', 'star', 'printer'
+      'thermal', 'xp-', 'xp ', 'tm-', 'rp-', 'zj-', 'zj ',
+      '80', '58', 'xprinter', 'epson', 'rongta', 'gprinter', 'bixolon', 'sunmi', 'star',
+      'pos receipt', 'pos'
     ];
 
-    // 1. Look for POS / Thermal in Windows printers
+    // Look for real physical thermal printer in Windows spooler
     for (final p in winPrinters) {
       final lower = p.toLowerCase();
-      if (lower.contains('pdf') || lower.contains('onenote') || lower.contains('fax') || lower.contains('xps')) {
+      if (lower.contains('pdf') ||
+          lower.contains('onenote') ||
+          lower.contains('fax') ||
+          lower.contains('xps')) {
         continue;
       }
       if (thermalKeywords.any((kw) => lower.contains(kw))) {
@@ -2409,23 +2390,7 @@ class ReceiptPrinterService {
       }
     }
 
-    // 2. Check if POS Receipt Printer is installed
-    if (winPrinters.contains('POS Receipt Printer')) {
-      await savePrinterSettings(printerName: 'POS Receipt Printer');
-      return 'POS Receipt Printer';
-    }
-
-    // 3. Ensure POS Receipt Printer on USB001
-    final ensured = await NativeWin32Printer.ensurePosPrinterInstalled(
-      printerName: 'POS Receipt Printer',
-      portName: 'USB001',
-    );
-    if (ensured) {
-      await savePrinterSettings(printerName: 'POS Receipt Printer');
-      return 'POS Receipt Printer';
-    }
-
-    return winPrinters.isNotEmpty ? winPrinters.first : 'POS Receipt Printer';
+    return null;
   }
 
   // ---------------------------------------------------------------------------

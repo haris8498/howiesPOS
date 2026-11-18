@@ -46,10 +46,14 @@ class _PrinterSettingsDialogState extends State<PrinterSettingsDialog> {
         setState(() {
           _printerOptions = cleanPrinters;
 
-          // POS Printer selection: select saved printer if currently detected, otherwise default to first detected
-          if (savedPos != null && ReceiptPrinterService.isPrinterConfigured(savedPos) && cleanPrinters.contains(savedPos)) {
+          // POS Printer selection: select saved printer if currently detected, otherwise default to detected printer if available
+          if (savedPos != null &&
+              ReceiptPrinterService.isPrinterConfigured(savedPos) &&
+              cleanPrinters.contains(savedPos)) {
             _selectedPosPrinter = savedPos;
-          } else if (cleanPrinters.isNotEmpty) {
+          } else if (cleanPrinters.contains('POS Receipt Printer')) {
+            _selectedPosPrinter = 'POS Receipt Printer';
+          } else if (savedPos == null && cleanPrinters.isNotEmpty) {
             _selectedPosPrinter = cleanPrinters.first;
           } else {
             _selectedPosPrinter = 'None';
@@ -503,7 +507,7 @@ class _PrinterSettingsDialogState extends State<PrinterSettingsDialog> {
     final List<String> allItems = ['None', ...cleanPrinters];
     final effectiveValue = (selectedValue != null && allItems.contains(selectedValue))
         ? selectedValue
-        : (cleanPrinters.isNotEmpty ? cleanPrinters.first : 'None');
+        : 'None';
 
     return Container(
       padding: const EdgeInsets.all(14),

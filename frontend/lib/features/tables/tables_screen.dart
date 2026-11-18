@@ -23,6 +23,8 @@ import '../../data/repositories/order_repository_provider.dart';
 import '../../domain/models/menu_item.dart';
 import '../../domain/models/order_model.dart';
 import '../updater/open_order_guard_provider.dart';
+import '../../services/menu_flavor_registry.dart';
+import '../../shared/widgets/quick_flavor_selection_dialog.dart';
 
 class TablesScreen extends ConsumerStatefulWidget {
   const TablesScreen({super.key});
@@ -143,7 +145,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
         : (table.activeOrderId ?? table.tableNumber);
     final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
     final bool isOccupied = table.status == TableStatus.occupied;
-    final orderItems = table.currentOrderItems;
+    final orderItems = table.deduplicatedOrderItems;
 
     final isCashier = ref.watch(authProvider).currentUser.role == UserRole.cashier;
 
@@ -165,93 +167,85 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                  Builder(
-                    builder: (context) {
-                      final bool isFinalReceiptPrintedForTable = (table.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderId)) ||
-                          (table.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderNumber)) ||
-                          (!isOccupied && table.liveBillAmount <= 0);
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _buildTableActionPillButton(
-                            title: isOccupied ? 'Edit / Modify Order' : 'Add Order',
-                            icon: Icons.edit_note_rounded,
-                            color: const Color(0xFF9333EA),
-                            isFilled: false,
-                            isDark: isDark,
-                            isEnabled: !isFinalReceiptPrintedForTable,
-                            onTap: () => _openTableOrderMenuDialog(context, ref, table, isDark),
-                          ),
-                          const SizedBox(height: 10),
-                          _buildTableActionPillButton(
-                            title: 'Kitchen (KOT)',
-                            icon: Icons.soup_kitchen_rounded,
-                            color: const Color(0xFFD97706),
-                            isFilled: false,
-                            isDark: isDark,
-                            isEnabled: isOccupied && orderItems.isNotEmpty && !isFinalReceiptPrintedForTable,
-                            onTap: () {
-                              if (!isOccupied && orderItems.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Table "${table.name}" has no active kitchen order ticket.')),
-                                );
-                                return;
-                              }
-                              _showKitchenReceiptDialog(context, table, isDark);
-                            },
-                          ),
-                          const SizedBox(height: 10),
-                          _buildTableActionPillButton(
-                            title: 'Customer Bill',
-                            icon: Icons.description_rounded,
-                            color: const Color(0xFF2563EB),
-                            isFilled: false,
-                            isDark: isDark,
-                            isEnabled: isOccupied && orderItems.isNotEmpty && !isFinalReceiptPrintedForTable,
-                            onTap: () {
-                              if (!isOccupied && orderItems.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Table "${table.name}" has no active bill.')),
-                                );
-                                return;
-                              }
-                              _showCustomerBillDialog(context, table, isDark);
-                            },
-                          ),
-                          const SizedBox(height: 10),
-                          _buildTableActionPillButton(
-                            title: 'Cancel Item',
-                            icon: Icons.cancel_outlined,
-                            color: const Color(0xFFEF4444),
-                            isFilled: false,
-                            isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable && orderItems.any((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1),
-                            onTap: () {
-                              _showCancelTableItemDialog(context, ref, table, isDark);
-                            },
-                          ),
-                          const SizedBox(height: 10),
-                          _buildTableActionPillButton(
-                            title: 'Full Bill & Pay',
-                            icon: Icons.payments_rounded,
-                            color: const Color(0xFFDC2626),
-                            isFilled: true,
-                            isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
-                            onTap: () {
-                              if (!isOccupied && orderItems.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Table "${table.name}" has no active bill to settle.')),
-                                );
-                                return;
-                              }
-                              _showFullBillDialog(context, ref, table, isDark);
-                            },
-                          ),
-                        ],
-                      );
-                    },
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildTableActionPillButton(
+                        title: isOccupied ? 'Edit / Modify Order' : 'Add Order',
+                        icon: Icons.edit_note_rounded,
+                        color: const Color(0xFF9333EA),
+                        isFilled: false,
+                        isDark: isDark,
+                        isEnabled: true,
+                        onTap: () => _openTableOrderMenuDialog(context, ref, table, isDark),
+                      ),
+                      const SizedBox(height: 10),
+                      _buildTableActionPillButton(
+                        title: 'Kitchen (KOT)',
+                        icon: Icons.soup_kitchen_rounded,
+                        color: const Color(0xFFD97706),
+                        isFilled: false,
+                        isDark: isDark,
+                        isEnabled: isOccupied || orderItems.isNotEmpty,
+                        onTap: () {
+                          if (!isOccupied && orderItems.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Table "${table.name}" has no active kitchen order ticket.')),
+                            );
+                            return;
+                          }
+                          _showKitchenReceiptDialog(context, table, isDark);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      _buildTableActionPillButton(
+                        title: 'Customer Bill',
+                        icon: Icons.description_rounded,
+                        color: const Color(0xFF2563EB),
+                        isFilled: false,
+                        isDark: isDark,
+                        isEnabled: isOccupied || orderItems.isNotEmpty,
+                        onTap: () {
+                          if (!isOccupied && orderItems.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Table "${table.name}" has no active bill.')),
+                            );
+                            return;
+                          }
+                          _showCustomerBillDialog(context, table, isDark);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      _buildTableActionPillButton(
+                        title: 'Cancel Item',
+                        icon: Icons.cancel_outlined,
+                        color: const Color(0xFFEF4444),
+                        isFilled: false,
+                        isDark: isDark,
+                        isEnabled: isOccupied && orderItems.any((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1),
+                        onTap: () {
+                          _showCancelTableItemDialog(context, ref, table, isDark);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      _buildTableActionPillButton(
+                        title: 'Full Bill & Pay',
+                        icon: Icons.payments_rounded,
+                        color: const Color(0xFFDC2626),
+                        isFilled: true,
+                        isDark: isDark,
+                        isEnabled: isOccupied || orderItems.isNotEmpty,
+                        onTap: () {
+                          if (!isOccupied && orderItems.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Table "${table.name}" has no active bill to settle.')),
+                            );
+                            return;
+                          }
+                          _showFullBillDialog(context, ref, table, isDark);
+                        },
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   // Return to Floor Plan Button
@@ -785,12 +779,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                   Builder(
                     builder: (context) {
                       final selected = _getSelectedTable(tableState.tables);
-                      final isOccupiedSelected = selected != null && selected.status == TableStatus.occupied && selected.liveBillAmount > 0;
-                      final isFinalReceiptPrintedSelected = selected != null && (
-                          (selected.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(selected.activeOrderId)) ||
-                          (selected.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(selected.activeOrderNumber)) ||
-                          (selected.status != TableStatus.occupied && selected.liveBillAmount <= 0)
-                      );
+                      final isOccupiedSelected = selected != null && (selected.status == TableStatus.occupied || selected.deduplicatedOrderItems.isNotEmpty || selected.liveBillAmount > 0);
 
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -801,7 +790,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             color: const Color(0xFF9333EA),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: selected != null && (!isOccupiedSelected || !isFinalReceiptPrintedSelected),
+                            isEnabled: selected != null,
                             onTap: () {
                               if (selected != null) {
                                 _openTableOrderMenuDialog(context, ref, selected, isDark);
@@ -819,7 +808,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             color: const Color(0xFFD97706),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: isOccupiedSelected && selected.currentOrderItems.isNotEmpty && !isFinalReceiptPrintedSelected,
+                            isEnabled: isOccupiedSelected && selected!.deduplicatedOrderItems.isNotEmpty,
                             onTap: () {
                               if (selected == null) {
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -827,7 +816,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                 );
                                 return;
                               }
-                              if (selected.status != TableStatus.occupied && selected.currentOrderItems.isEmpty) {
+                              if (selected.status != TableStatus.occupied && selected.deduplicatedOrderItems.isEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text('Table "${selected.name}" has no active kitchen order ticket.')),
                                 );
@@ -843,7 +832,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             color: const Color(0xFF2563EB),
                             isFilled: false,
                             isDark: isDark,
-                            isEnabled: isOccupiedSelected && !isFinalReceiptPrintedSelected,
+                            isEnabled: isOccupiedSelected,
                             onTap: () {
                               if (selected == null) {
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -867,7 +856,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             color: const Color(0xFFDC2626),
                             isFilled: true,
                             isDark: isDark,
-                            isEnabled: isOccupiedSelected && !isFinalReceiptPrintedSelected,
+                            isEnabled: isOccupiedSelected,
                             onTap: () {
                               if (selected == null) {
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1475,10 +1464,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
         : (table.activeOrderId ?? table.tableNumber);
     final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
     final bool isOccupied = table.status == TableStatus.occupied;
-    final orderItems = table.currentOrderItems;
-    final isFinalReceiptPrintedForTable = (table.activeOrderId != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderId)) ||
-        (table.activeOrderNumber != null && ReceiptPrinterService.isFinalReceiptPrinted(table.activeOrderNumber)) ||
-        (!isOccupied && table.liveBillAmount <= 0);
+    final orderItems = table.deduplicatedOrderItems;
 
     showDialog(
       context: context,
@@ -1831,7 +1817,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                           iconColor: AppColors.primaryRed,
                           bgColor: AppColors.primaryRed.withValues(alpha: 0.1),
                           isDark: isDark,
-                          isEnabled: !isFinalReceiptPrintedForTable,
+                          isEnabled: true,
                           onTap: () {
                             Navigator.pop(dialogContext);
                             _openTableOrderMenuDialog(context, ref, table, isDark);
@@ -1848,7 +1834,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFFD97706),
                             bgColor: const Color(0xFFFFFBEB),
                             isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
+                            isEnabled: orderItems.isNotEmpty,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showKitchenReceiptDialog(context, table, isDark);
@@ -1864,7 +1850,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFF2563EB),
                             bgColor: const Color(0xFFEFF6FF),
                             isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
+                            isEnabled: orderItems.isNotEmpty,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showCustomerBillDialog(context, table, isDark);
@@ -1880,7 +1866,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: AppColors.danger,
                             bgColor: AppColors.danger.withValues(alpha: 0.1),
                             isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
+                            isEnabled: orderItems.any((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1),
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showCancelTableItemDialog(context, ref, table, isDark);
@@ -1896,7 +1882,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                             iconColor: const Color(0xFF16A34A),
                             bgColor: const Color(0xFFEBF7ED),
                             isDark: isDark,
-                            isEnabled: isOccupied && !isFinalReceiptPrintedForTable,
+                            isEnabled: true,
                             onTap: () {
                               Navigator.pop(dialogContext);
                               _showFullBillDialog(context, ref, table, isDark);
@@ -2023,7 +2009,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
 
   // Cancel Order Item Dialog for Table
   void _showCancelTableItemDialog(BuildContext context, WidgetRef ref, RestaurantTable table, bool isDark) {
-    if (table.currentOrderItems.isEmpty) {
+    if (table.deduplicatedOrderItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No items in this table order to cancel.')),
       );
@@ -2132,8 +2118,8 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                         const Divider(height: 16),
                         const Text('ORDER ITEMS:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFD97706))),
                         const SizedBox(height: 6),
-                        if (table.currentOrderItems.isNotEmpty)
-                          ...table.currentOrderItems.map((item) {
+                        if (table.deduplicatedOrderItems.isNotEmpty)
+                          ...table.deduplicatedOrderItems.map((item) {
                             final name = item['name']?.toString() ?? 'Item';
                             final qty = item['quantity']?.toString() ?? '1';
                             final isCancelled = item['is_cancelled'] == true || item['is_cancelled'] == 1;
@@ -2200,7 +2186,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                   Builder(
                     builder: (context) {
                       final kotReceipt = ReceiptData.fromTableKot(table: table, ticketId: displayTicketId);
-                      final hasCancelled = table.currentOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1);
+                      final hasCancelled = table.deduplicatedOrderItems.any((i) => i['is_cancelled'] == true || i['is_cancelled'] == 1);
 
                       return FutureBuilder<List<bool>>(
                         future: Future.wait([
@@ -2237,7 +2223,7 @@ class _TablesScreenState extends ConsumerState<TablesScreen> {
                                       SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          'Kitchen ticket has already been printed. Modify order, add items, or cancel items to print an updated ticket.',
+                                          'Kitchen ticket has already been printed once. Add, modify, or cancel items to print an updated ticket.',
                                           style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
                                         ),
                                       ),
@@ -3206,12 +3192,18 @@ class _OrderItem {
   final _OrderMenuItem item;
   int quantity;
   final int initialOrderedQty;
+  final String? selectedSize;
+  final String? selectedCrust;
+  final String? notes;
 
   _OrderItem({
     this.id,
     required this.item,
     this.quantity = 1,
     this.initialOrderedQty = 0,
+    this.selectedSize,
+    this.selectedCrust,
+    this.notes,
   });
 
   bool get isExistingOrderedItem => initialOrderedQty > 0 || (id != null && id!.isNotEmpty);
@@ -3286,14 +3278,17 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
     const _OrderMenuItem(name: "Duo Craver Pack (2 Gourmet Burgers + Garlic Fries + 2 Drinks)", category: 'Deals', price: 1649, imagePath: 'assets/images/beef_burger_hero.jpg'),
     const _OrderMenuItem(name: "Midnight Craving Deal (1 Large Pizza + Cheesy Panini + 2 Drinks)", category: 'Deals', price: 1999, imagePath: 'assets/images/Pizza.png'),
     const _OrderMenuItem(name: "Student Saver Deal (1 Zinger Burger + Plain Fries + 1 Drink)", category: 'Deals', price: 749, imagePath: 'assets/images/chicken_burger_hero.jpg'),
-    const _OrderMenuItem(name: "Classic Fajita Pizza (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Fajita.png'),
-    const _OrderMenuItem(name: "Classic Fajita Pizza (Medium)", category: 'Pizza', price: 1449, imagePath: 'assets/images/Fajita.png'),
-    const _OrderMenuItem(name: "Classic Fajita Pizza (Large)", category: 'Pizza', price: 1749, imagePath: 'assets/images/Fajita.png'),
-    const _OrderMenuItem(name: "Classic Fajita Pizza (Family)", category: 'Pizza', price: 2349, imagePath: 'assets/images/Fajita.png'),
-    const _OrderMenuItem(name: "Modern Crown Crust (Medium)", category: 'Pizza', price: 1549, imagePath: 'assets/images/Modern.png'),
-    const _OrderMenuItem(name: "Modern Crown Crust (Large)", category: 'Pizza', price: 1999, imagePath: 'assets/images/Modern.png'),
-    const _OrderMenuItem(name: "Special Arabic Crispy (Medium)", category: 'Pizza', price: 1699, imagePath: 'assets/images/Special.png'),
-    const _OrderMenuItem(name: "Special Hungry Cheese Gold (Large)", category: 'Pizza', price: 2199, imagePath: 'assets/images/Special.png'),
+    const _OrderMenuItem(name: "Classic Pizza's (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Fajita.png'),
+    const _OrderMenuItem(name: "Classic Pizza's (Medium)", category: 'Pizza', price: 1449, imagePath: 'assets/images/Fajita.png'),
+    const _OrderMenuItem(name: "Classic Pizza's (Large)", category: 'Pizza', price: 1749, imagePath: 'assets/images/Fajita.png'),
+    const _OrderMenuItem(name: "Classic Pizza's (Family)", category: 'Pizza', price: 2349, imagePath: 'assets/images/Fajita.png'),
+    const _OrderMenuItem(name: "Modren Pizza's (Small)", category: 'Pizza', price: 849, imagePath: 'assets/images/Modern.png'),
+    const _OrderMenuItem(name: "Modren Pizza's (Medium)", category: 'Pizza', price: 1549, imagePath: 'assets/images/Modern.png'),
+    const _OrderMenuItem(name: "Modren Pizza's (Large)", category: 'Pizza', price: 1999, imagePath: 'assets/images/Modern.png'),
+    const _OrderMenuItem(name: "Modren Pizza's (Family)", category: 'Pizza', price: 2499, imagePath: 'assets/images/Modern.png'),
+    const _OrderMenuItem(name: "Special Pizza's (Medium)", category: 'Pizza', price: 1699, imagePath: 'assets/images/Special.png'),
+    const _OrderMenuItem(name: "Special Pizza's (Large)", category: 'Pizza', price: 2199, imagePath: 'assets/images/Special.png'),
+    const _OrderMenuItem(name: "Special Pizza's (Family)", category: 'Pizza', price: 2999, imagePath: 'assets/images/Special.png'),
     const _OrderMenuItem(name: "Tarragon Chicken Steak", category: 'Steak', price: 1499, imagePath: 'assets/images/chicken_steak.png'),
     const _OrderMenuItem(name: "Mushroom Chicken Steak", category: 'Steak', price: 1499, imagePath: 'assets/images/chicken_steak.png'),
     const _OrderMenuItem(name: "Twin Chicken Steak", category: 'Steak', price: 1599, imagePath: 'assets/images/chicken_steak.png'),
@@ -3351,11 +3346,11 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
     super.initState();
     _orderGuardNotifier = widget.ref.read(openOrderGuardProvider.notifier);
     _orderGuardId = 'tables_${identityHashCode(this)}';
-    final isOccupied = widget.table.status == TableStatus.occupied;
-    _activeOrderId = isOccupied ? widget.table.activeOrderId : null;
+    final isOccupied = widget.table.status == TableStatus.occupied || widget.table.deduplicatedOrderItems.isNotEmpty;
+    _activeOrderId = widget.table.activeOrderId;
     // Pre-load existing order items ONLY if table is actively occupied in this session
     if (isOccupied) {
-      final existingItems = widget.table.currentOrderItems;
+      final existingItems = widget.table.deduplicatedOrderItems;
       for (final itemMap in existingItems) {
         if (itemMap['is_cancelled'] == true || itemMap['is_cancelled'] == 1) continue;
         final qty = (itemMap['quantity'] as int? ?? 1);
@@ -3370,13 +3365,16 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
           name: itemMap['name'] as String,
           category: itemMap['category'] as String? ?? 'General',
           price: double.tryParse(itemMap['price']?.toString() ?? '0') ?? 0.0,
-          imagePath: itemMap['imagePath'] as String? ?? 'assets/images/Pizza.png',
+          imagePath: itemMap['imagePath'] as String? ?? '',
         );
         _cartItems.add(_OrderItem(
           id: lineItemId,
           item: menuItem,
           quantity: qty,
           initialOrderedQty: qty,
+          selectedSize: itemMap['selected_size']?.toString(),
+          selectedCrust: itemMap['selected_crust']?.toString(),
+          notes: itemMap['notes']?.toString(),
         ));
       }
     }
@@ -3418,7 +3416,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
             'id': i.id,
             'name': i.name,
             'base_price': i.basePrice,
-            'image_url': 'assets/images/Pizza.png',
+            'image_url': '',
             'category': {'name': i.categoryId},
           }).toList();
           dbDeals = localDeals.map((d) => {
@@ -3485,7 +3483,27 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
             ? (item['category']['name']?.toString().trim() ?? 'General')
             : 'General';
         final basePrice = double.tryParse(item['base_price']?.toString() ?? '0') ?? 0.0;
-        final imgUrl = item['image_url']?.toString() ?? 'assets/images/Pizza.png';
+        final String rawImg = (item['image_url'] ?? '').toString().trim();
+        String imgUrl = (rawImg.isNotEmpty && rawImg.toLowerCase() != 'null') ? rawImg : '';
+
+        // If Pizza.png was erroneously assigned to a non-pizza item, discard it
+        final isPizza = itemName.toLowerCase().contains('pizza') ||
+            itemName.toLowerCase().contains('calzone') ||
+            catName.toLowerCase().contains('pizza');
+        if (imgUrl == 'assets/images/Pizza.png' && !isPizza) {
+          imgUrl = '';
+        }
+
+        // If no image from DB, lookup known static assets by name
+        if (imgUrl.isEmpty) {
+          final matched = _menuDatabase.firstWhere(
+            (m) => m.name.toLowerCase().trim() == itemName.toLowerCase().trim(),
+            orElse: () => const _OrderMenuItem(name: '', category: '', price: 0, imagePath: ''),
+          );
+          if (matched.imagePath.isNotEmpty) {
+            imgUrl = matched.imagePath;
+          }
+        }
 
         final alreadyInList = loadedItems.any(
           (it) => it.name.toLowerCase() == itemName.toLowerCase() || (itemId != null && it.id == itemId),
@@ -3538,7 +3556,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
             final orderRepo = widget.ref.read(orderRepositoryProvider);
             var localOrder = await orderRepo.getOrderById(_activeOrderId!);
             if (localOrder == null) {
-              // Task 3: If local order is not found, load it without nulling the active order id
+              // If local order is not found, load it without nulling the active order id
               try {
                 final ordersApi = widget.ref.read(ordersApiServiceProvider);
                 final apiOrderJson = await ordersApi.getOrderById(_activeOrderId!);
@@ -3568,7 +3586,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                       name: name,
                       category: orderItem.item.category,
                       price: price,
-                      imagePath: orderItem.item.imageUrl.isNotEmpty ? orderItem.item.imageUrl : 'assets/images/Pizza.png',
+                      imagePath: orderItem.item.imageUrl.isNotEmpty ? orderItem.item.imageUrl : '',
                     ),
                   );
 
@@ -3577,6 +3595,9 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                     item: existingItem.copyWith(price: price, id: menuItemId.isNotEmpty ? menuItemId : existingItem.id),
                     quantity: qty,
                     initialOrderedQty: qty,
+                    selectedSize: orderItem.selectedSize,
+                    selectedCrust: orderItem.selectedCrust,
+                    notes: orderItem.notes,
                   ));
                 }
 
@@ -3595,8 +3616,6 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                   _cartItems.addAll(fetchedCart);
                   _cartItems.addAll(userAdded);
                 }
-              } else {
-                _activeOrderId = null;
               }
             }
           } else {
@@ -3629,7 +3648,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                         name: name,
                         category: 'General',
                         price: price,
-                        imagePath: 'assets/images/Pizza.png',
+                        imagePath: '',
                       ),
                     );
 
@@ -3638,6 +3657,9 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                       item: existingItem.copyWith(price: price, id: menuItemId ?? existingItem.id),
                       quantity: qty,
                       initialOrderedQty: qty,
+                      selectedSize: raw['selected_size']?.toString(),
+                      selectedCrust: raw['selected_crust']?.toString(),
+                      notes: raw['notes']?.toString(),
                     ));
                   }
 
@@ -3657,17 +3679,12 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                     _cartItems.addAll(userAdded);
                   }
                 }
-              } else {
-                _activeOrderId = null;
               }
             }
           }
         } catch (e) {
           debugPrint('⚠️ Error loading active order from DB: $e');
         }
-      } else if (!isOccupied) {
-        _activeOrderId = null;
-        _cartItems.clear();
       }
 
       if (mounted) {
@@ -3699,17 +3716,74 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
     super.dispose();
   }
 
+  bool _hasCartItemsChanged(List<dynamic> existingItems, List<_OrderItem> cartItems) {
+    final activeExisting = existingItems.where((item) {
+      if (item is! Map) return false;
+      return item['is_cancelled'] != true && item['is_cancelled'] != 1;
+    }).toList();
+
+    final existingMap = <String, int>{};
+    for (final item in activeExisting) {
+      if (item is Map) {
+        final name = (item['name']?.toString() ?? '').toLowerCase().trim();
+        final size = (item['selected_size']?.toString() ?? '').toLowerCase().trim();
+        final crust = (item['selected_crust']?.toString() ?? '').toLowerCase().trim();
+        final notes = (item['notes']?.toString() ?? '').toLowerCase().trim();
+        final qty = (item['quantity'] as num?)?.toInt() ?? 1;
+        final key = '$name|$size|$crust|$notes';
+        existingMap[key] = (existingMap[key] ?? 0) + qty;
+      }
+    }
+    final cartMap = <String, int>{};
+    for (final c in cartItems) {
+      final name = c.item.name.toLowerCase().trim();
+      final size = (c.selectedSize ?? _extractSizeFromName(c.item.name)).toLowerCase().trim();
+      final crust = (c.selectedCrust ?? 'Original').toLowerCase().trim();
+      final notes = (c.notes ?? '').toLowerCase().trim();
+      final key = '$name|$size|$crust|$notes';
+      cartMap[key] = (cartMap[key] ?? 0) + c.quantity;
+    }
+    if (existingMap.length != cartMap.length) return true;
+    for (final entry in existingMap.entries) {
+      if (cartMap[entry.key] != entry.value) return true;
+    }
+    return false;
+  }
+
   double get _totalBill {
     return _cartItems.fold(0.0, (sum, item) => sum + item.totalPrice);
   }
 
-  void _addItemToCart(_OrderMenuItem item) {
+  Future<void> _addItemToCart(_OrderMenuItem item) async {
+    final flavors = MenuFlavorRegistry.getFlavorsForItem(item.name, category: item.category);
+    _OrderMenuItem effectiveItem = item;
+
+    if (flavors.isNotEmpty) {
+      final selectedFlavor = await QuickFlavorSelectionDialog.show(
+        context,
+        itemName: item.name,
+        price: item.price,
+        flavors: flavors,
+      );
+      if (selectedFlavor == null) return; // User cancelled
+
+      final formattedName = MenuFlavorRegistry.formatItemWithFlavor(item.name, selectedFlavor);
+      effectiveItem = _OrderMenuItem(
+        name: formattedName,
+        category: item.category,
+        price: item.price,
+        imagePath: item.imagePath,
+        imageBytes: item.imageBytes,
+      );
+    }
+
+    if (!mounted) return;
     setState(() {
-      final existingIndex = _cartItems.indexWhere((c) => c.item.name == item.name);
+      final existingIndex = _cartItems.indexWhere((c) => c.item.name == effectiveItem.name);
       if (existingIndex >= 0) {
         _cartItems[existingIndex].quantity += 1;
       } else {
-        _cartItems.add(_OrderItem(item: item, quantity: 1));
+        _cartItems.add(_OrderItem(item: effectiveItem, quantity: 1));
       }
     });
     _updateOrderGuard();
@@ -3742,7 +3816,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
     _updateOrderGuard();
   }
 
-  Widget _buildItemThumbnail(String path, Uint8List? bytes) {
+  Widget _buildItemThumbnail(String path, Uint8List? bytes, {String? category, String? itemName}) {
     if (bytes != null && bytes.isNotEmpty) {
       return Image.memory(bytes, width: 38, height: 38, fit: BoxFit.cover);
     }
@@ -3758,12 +3832,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
         width: 38,
         height: 38,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 38,
-          height: 38,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
     if (path.isNotEmpty && !path.startsWith('http')) {
@@ -3772,19 +3841,45 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
         width: 38,
         height: 38,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Container(
-          width: 38,
-          height: 38,
-          color: AppColors.primaryRed.withValues(alpha: 0.1),
-          child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
-        ),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholderIcon(category: category, itemName: itemName),
       );
     }
+    return _buildPlaceholderIcon(category: category, itemName: itemName);
+  }
+
+  Widget _buildPlaceholderIcon({String? category, String? itemName}) {
+    final cat = (category ?? '').toLowerCase();
+    final name = (itemName ?? '').toLowerCase();
+
+    IconData iconData = Icons.fastfood_rounded;
+    if (cat.contains('beverage') || cat.contains('drink') || name.contains('coke') || name.contains('sprite') || name.contains('juice') || name.contains('water') || name.contains('margarita') || name.contains('colada') || name.contains('lagon') || name.contains('blast')) {
+      iconData = Icons.local_drink_rounded;
+    } else if (cat.contains('coffee') || name.contains('coffee') || name.contains('latte') || name.contains('espresso') || name.contains('cappuccino') || name.contains('americano')) {
+      iconData = Icons.coffee_rounded;
+    } else if (cat.contains('burger') || name.contains('burger')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('pizza') || name.contains('pizza')) {
+      iconData = Icons.local_pizza_rounded;
+    } else if (cat.contains('biryani') || name.contains('biryani') || name.contains('rice')) {
+      iconData = Icons.rice_bowl_rounded;
+    } else if (cat.contains('dessert') || cat.contains('shake') || name.contains('ice cream') || name.contains('shake') || name.contains('smoothie') || name.contains('apple') || name.contains('banana') || name.contains('berry')) {
+      iconData = Icons.icecream_rounded;
+    } else if (cat.contains('fries') || name.contains('fries')) {
+      iconData = Icons.lunch_dining_rounded;
+    } else if (cat.contains('steak') || name.contains('steak')) {
+      iconData = Icons.dinner_dining_rounded;
+    }
+
     return Container(
       width: 38,
       height: 38,
-      color: AppColors.primaryRed.withValues(alpha: 0.1),
-      child: const Icon(Icons.fastfood_rounded, color: AppColors.primaryRed, size: 20),
+      decoration: BoxDecoration(
+        color: AppColors.primaryRed.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Center(
+        child: Icon(iconData, color: AppColors.primaryRed, size: 20),
+      ),
     );
   }
 
@@ -3971,7 +4066,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                               children: [
                                                 ClipRRect(
                                                   borderRadius: BorderRadius.circular(6),
-                                                  child: _buildItemThumbnail(item.imagePath, item.imageBytes),
+                                                  child: _buildItemThumbnail(item.imagePath, item.imageBytes, category: item.category, itemName: item.name),
                                                 ),
                                                 const SizedBox(width: 8),
                                                 Expanded(
@@ -4189,47 +4284,46 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                 : () async {
                                     setState(() => _isSubmittingOrder = true);
                                     try {
-                                    // Serialize cart items to persist in RestaurantTable
-                                    final itemMaps = _cartItems
-                                        .map((c) => {
-                                              if (c.id != null) 'id': c.id,
-                                              if (c.item.id != null) 'menu_item_id': c.item.id,
-                                              'name': c.item.name,
-                                              'category': c.item.category,
-                                              'price': c.item.price,
-                                              'imagePath': c.item.imagePath,
-                                              'quantity': c.quantity,
-                                            })
-                                        .toList();
+                                    // Generate or preserve stable UUID for every cart item
+                                    final List<Map<String, dynamic>> itemMaps = [];
+                                    final List<Map<String, dynamic>> itemsPayload = [];
+                                    final List<OrderItem> orderItems = [];
 
-                                    final bool isCurrentlyOccupied = widget.table.status == TableStatus.occupied;
-                                    String? effectiveOrderId = isCurrentlyOccupied && _activeOrderId != null && _activeOrderId!.isNotEmpty
-                                        ? _activeOrderId
-                                        : (isCurrentlyOccupied && widget.table.activeOrderId != null && widget.table.activeOrderId!.isNotEmpty
-                                            ? widget.table.activeOrderId
-                                            : null);
-                                    String? effectiveOrderNumber = isCurrentlyOccupied ? widget.table.activeOrderNumber : null;
-                                    final itemsPayload = _cartItems.map((c) {
+                                    for (final c in _cartItems) {
+                                      final lineItemId = (c.id != null && c.id!.isNotEmpty && c.id!.length == 36)
+                                          ? c.id!
+                                          : const Uuid().v7();
+                                      final menuItemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
+                                          ? c.item.id!
+                                          : const Uuid().v7();
                                       final detectedSize = _extractSizeFromName(c.item.name);
-                                      return {
-                                        if (c.id != null && c.id!.isNotEmpty) 'id': c.id,
+
+                                      itemMaps.add({
+                                        'id': lineItemId,
+                                        if (c.item.id != null) 'menu_item_id': c.item.id,
+                                        'name': c.item.name,
+                                        'category': c.item.category,
+                                        'price': c.item.price,
+                                        'imagePath': c.item.imagePath,
+                                        'quantity': c.quantity,
+                                        'selected_size': detectedSize,
+                                        'selected_crust': c.selectedCrust ?? 'Original',
+                                        'notes': c.notes,
+                                      });
+
+                                      itemsPayload.add({
+                                        'id': lineItemId,
                                         if (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
                                           'menu_item_id': c.item.id,
                                         'item_name': c.item.name,
                                         'quantity': c.quantity,
                                         'unit_price': c.item.price,
                                         'selected_size': detectedSize,
-                                        'selected_crust': 'Original',
-                                      };
-                                    }).toList();
+                                        'selected_crust': c.selectedCrust ?? 'Original',
+                                      });
 
-                                    final orderItems = _cartItems.map((c) {
-                                      final menuItemId = (c.item.id != null && c.item.id!.isNotEmpty && c.item.id!.length >= 30)
-                                          ? c.item.id!
-                                          : const Uuid().v7();
-                                      final detectedSize = _extractSizeFromName(c.item.name);
-                                      return OrderItem(
-                                        id: (c.id != null && c.id!.isNotEmpty) ? c.id : const Uuid().v7(),
+                                      orderItems.add(OrderItem(
+                                        id: lineItemId,
                                         item: MenuItem(
                                           id: menuItemId,
                                           name: c.item.name,
@@ -4240,10 +4334,21 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                         ),
                                         quantity: c.quantity,
                                         selectedSize: detectedSize,
-                                        selectedCrust: 'Original',
+                                        selectedCrust: c.selectedCrust ?? 'Original',
                                         backendUnitPrice: c.item.price,
-                                      );
-                                    }).toList();
+                                        notes: c.notes ?? '',
+                                      ));
+                                    }
+
+                                    final bool isCurrentlyOccupied = widget.table.status == TableStatus.occupied ||
+                                        (widget.table.deduplicatedOrderItems.isNotEmpty && widget.table.liveBillAmount > 0) ||
+                                        (_activeOrderId != null && _activeOrderId!.isNotEmpty);
+                                    String? effectiveOrderId = (_activeOrderId != null && _activeOrderId!.isNotEmpty)
+                                        ? _activeOrderId
+                                        : (widget.table.activeOrderId != null && widget.table.activeOrderId!.isNotEmpty
+                                            ? widget.table.activeOrderId
+                                            : null);
+                                    String? effectiveOrderNumber = widget.table.activeOrderNumber;
 
                                     if (effectiveOrderId != null && effectiveOrderId.isNotEmpty) {
                                       // Existing order modification flow (Wave 6 #35: eliminate dual-write & duplicate items)
@@ -4301,6 +4406,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                             'subtotal': _totalBill,
                                             'grand_total': _totalBill,
                                             'items': itemsPayload,
+                                            'full_replace': true,
                                           });
                                           effectiveOrderId = updatedOrder['id']?.toString() ?? updatedOrder['data']?['id']?.toString() ?? effectiveOrderId;
                                           effectiveOrderNumber = updatedOrder['order_number']?.toString() ?? updatedOrder['data']?['order_number']?.toString() ?? effectiveOrderNumber;
@@ -4371,17 +4477,22 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                       }
                                     }
 
-                                    final rawTicketId = (table.activeOrderNumber != null && table.activeOrderNumber!.isNotEmpty)
-                                        ? table.activeOrderNumber!
-                                        : (table.activeOrderId ?? table.tableNumber);
-                                    final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
+                                    final bool isNewOrder = widget.table.deduplicatedOrderItems.isEmpty;
+                                    final bool itemsChanged = isNewOrder || _hasCartItemsChanged(widget.table.deduplicatedOrderItems, _cartItems);
 
-                                    await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
-                                      orderId: effectiveOrderId,
-                                      orderNumber: effectiveOrderNumber ?? rawTicketId,
-                                      tokenNumber: displayTicketId,
-                                      tableNumber: table.tableNumber,
-                                    );
+                                    if (itemsChanged) {
+                                      final rawTicketId = (table.activeOrderNumber != null && table.activeOrderNumber!.isNotEmpty)
+                                          ? table.activeOrderNumber!
+                                          : (table.activeOrderId ?? table.tableNumber);
+                                      final displayTicketId = EscPosBuilder.format3DigitOrderNumber(rawTicketId);
+
+                                      await ReceiptPrinterService.unmarkOrderKitchenReceiptPrinted(
+                                        orderId: effectiveOrderId,
+                                        orderNumber: effectiveOrderNumber ?? rawTicketId,
+                                        tokenNumber: displayTicketId,
+                                        tableNumber: table.tableNumber,
+                                      );
+                                    }
 
                                     // 2. Update Table Status & Bill Amount in Database & POS state
                                     final notifier = widget.ref.read(tableProvider.notifier);
@@ -4406,7 +4517,7 @@ class _TableOrderMenuDialogState extends State<_TableOrderMenuDialog> {
                                           content: Text(
                                             effectiveOrderId != null
                                                 ? '✅ Order of PKR ${_totalBill.toStringAsFixed(0)} saved in Database for ${table.name}!'
-                                                : (widget.table.currentOrderItems.isEmpty
+                                                : (widget.table.deduplicatedOrderItems.isEmpty
                                                     ? 'Order of PKR ${_totalBill.toStringAsFixed(0)} placed for ${table.name}! Status: OCCUPIED.'
                                                     : '${_cartItems.length} item(s) updated for ${table.name}. New total: PKR ${_totalBill.toStringAsFixed(0)}.'),
                                           ),
@@ -4489,7 +4600,7 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
   void initState() {
     super.initState();
     double subtotal = 0.0;
-    for (final item in widget.table.currentOrderItems) {
+    for (final item in widget.table.deduplicatedOrderItems) {
       if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
       final qty = (item['quantity'] as num?)?.toInt() ?? 1;
       final price = (item['price'] as num?)?.toDouble() ?? 0.0;
@@ -4555,7 +4666,7 @@ class _CustomerPreBillDialogState extends State<_CustomerPreBillDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final items = widget.table.currentOrderItems;
+    final items = widget.table.deduplicatedOrderItems;
     final billAmount = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 0.0;
 
     double subtotal = 0.0;
@@ -5226,7 +5337,7 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
   void initState() {
     super.initState();
     double subtotal = 0.0;
-    for (final item in widget.table.currentOrderItems) {
+    for (final item in widget.table.deduplicatedOrderItems) {
       if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
       final qty = (item['quantity'] as num?)?.toInt() ?? 1;
       final price = (item['price'] as num?)?.toDouble() ?? 0.0;
@@ -5350,7 +5461,7 @@ class _FullBillCalculatorDialogState extends State<_FullBillCalculatorDialog> {
   @override
   Widget build(BuildContext context) {
     final orderId = widget.table.activeOrderId ?? 'INV-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-    final items = widget.table.currentOrderItems;
+    final items = widget.table.deduplicatedOrderItems;
     final rawBill = widget.table.currentBillAmount > 0 ? widget.table.currentBillAmount : 0.0;
 
     double subtotal = 0.0;
@@ -5991,7 +6102,7 @@ void _showFinalPaidReceiptDialog(
   bool isDark,
 ) {
   // Get items from the table
-  final items = table.currentOrderItems;
+  final items = table.deduplicatedOrderItems;
   final activeDisplayItems = items.where((item) {
     return !(item['is_cancelled'] == true ||
         item['is_cancelled'] == 1 ||
@@ -7130,7 +7241,7 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
   void initState() {
     super.initState();
     // Initialize default cancel quantity of 0 only for active items
-    for (final item in widget.table.currentOrderItems) {
+    for (final item in widget.table.deduplicatedOrderItems) {
       if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
       final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
       _cancelQuantities[itemId] = 0;
@@ -7211,8 +7322,9 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
 
       if (orderId != null && orderId.isNotEmpty) {
         if (FeatureFlags.offlineFirstEnabled) {
+          // 1. Offline-first local SQLite voiding & sync outbox
           final orderRepo = widget.ref.read(orderRepositoryProvider);
-          for (final item in widget.table.currentOrderItems) {
+          for (final item in widget.table.deduplicatedOrderItems) {
             if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
             final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
             final cancelQty = _cancelQuantities[itemId] ?? 0;
@@ -7227,13 +7339,11 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
               );
             }
           }
-          // Offline-first sync push: background worker synchronizes voided items cleanly without duplicating
           widget.ref.read(syncBackgroundWorkerProvider).triggerPush();
         } else {
+          // 2. Online-only mode direct API cancel
           final ordersApi = widget.ref.read(ordersApiServiceProvider);
-
-          // Cancel each item with its designated cancel quantity (skipping already cancelled items)
-          for (final item in widget.table.currentOrderItems) {
+          for (final item in widget.table.deduplicatedOrderItems) {
             if (item['is_cancelled'] == true || item['is_cancelled'] == 1) continue;
             final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
             final cancelQty = _cancelQuantities[itemId] ?? 0;
@@ -7264,7 +7374,7 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
 
         // Prepare updated items with cancelled status for table state
         final List<Map<String, dynamic>> updatedItems = [];
-        for (final item in widget.table.currentOrderItems) {
+        for (final item in widget.table.deduplicatedOrderItems) {
           final itemId = item['id']?.toString() ?? item['name']?.toString() ?? '';
           final cancelQty = _cancelQuantities[itemId] ?? 0;
           final currentQty = (item['quantity'] as num?)?.toInt() ?? int.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
@@ -7372,7 +7482,7 @@ class _CancelTableItemModalState extends State<_CancelTableItemModal> {
   @override
   Widget build(BuildContext context) {
     final isDark = widget.isDark;
-    final allItems = widget.table.currentOrderItems;
+    final allItems = widget.table.deduplicatedOrderItems;
     final activeItems = allItems.where((i) => i['is_cancelled'] != true && i['is_cancelled'] != 1).toList();
     final totalToCancel = _getTotalSelectedCancelQty();
 

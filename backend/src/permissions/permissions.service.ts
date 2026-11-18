@@ -114,22 +114,39 @@ export class PermissionsService {
 
     let permission = await this.prisma.rolePermission.findFirst({
       where: {
-        role: normalizedRole,
+        role: { equals: normalizedRole, mode: 'insensitive' },
         module_name: { in: moduleCandidates },
         action_name: { in: actionCandidates },
         is_granted: true,
       },
     });
 
+    // Fallback: Also check if permission was granted by direct ID
+    if (!permission) {
+      const directCandidateIds: string[] = [];
+      if (moduleName.toLowerCase().includes('menu')) {
+        directCandidateIds.push('csh_menu_add', 'csh_menu_edit', 'mgr_menu_add', 'mgr_menu_edit');
+      }
+      if (directCandidateIds.length > 0) {
+        permission = await this.prisma.rolePermission.findFirst({
+          where: {
+            role: { equals: normalizedRole, mode: 'insensitive' },
+            id: { in: directCandidateIds },
+            is_granted: true,
+          },
+        });
+      }
+    }
+
     if (!permission) {
       const count = await this.prisma.rolePermission.count({
-        where: { role: normalizedRole },
+        where: { role: { equals: normalizedRole, mode: 'insensitive' } },
       });
       if (count === 0) {
         await this.seedDefaultsForRole(normalizedRole);
         permission = await this.prisma.rolePermission.findFirst({
           where: {
-            role: normalizedRole,
+            role: { equals: normalizedRole, mode: 'insensitive' },
             module_name: { in: moduleCandidates },
             action_name: { in: actionCandidates },
             is_granted: true,
@@ -191,7 +208,7 @@ export class PermissionsService {
       const allDefaults = [...INITIAL_MANAGER_PERMISSIONS, ...INITIAL_CASHIER_PERMISSIONS];
       const def = allDefaults.find((d) => d.id === id);
       if (def) {
-        return this.prisma.rolePermission.create({
+        const created = await this.prisma.rolePermission.create({
           data: {
             id: def.id,
             role: def.role,
@@ -202,16 +219,36 @@ export class PermissionsService {
             is_sensitive: def.is_sensitive,
           },
         });
+        this.realtimeGateway?.broadcastEvent({
+          eventName: 'permission:updated',
+          alternateEventName: 'permissions:updated',
+          entity: 'role_permissions',
+          entityId: created.id,
+          action: 'UPDATED',
+          payload: created,
+        });
+        return created;
       }
       throw new NotFoundException(`Permission with ID '${id}' not found`);
     }
 
-    return this.prisma.rolePermission.update({
+    const updated = await this.prisma.rolePermission.update({
       where: { id },
       data: {
         is_granted: !existing.is_granted,
       },
     });
+
+    this.realtimeGateway?.broadcastEvent({
+      eventName: 'permission:updated',
+      alternateEventName: 'permissions:updated',
+      entity: 'role_permissions',
+      entityId: updated.id,
+      action: 'UPDATED',
+      payload: updated,
+    });
+
+    return updated;
   }
 
   async updatePermission(id: string, isGranted: boolean): Promise<RolePermission> {

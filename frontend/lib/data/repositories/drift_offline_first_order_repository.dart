@@ -371,6 +371,26 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
             );
           }
         }
+
+        // Void any existing active items that are no longer present in incoming order.items
+        final incomingIds = order.items.map((i) => i.id).whereType<String>().toSet();
+        for (final existingItem in existingItems) {
+          if (!incomingIds.contains(existingItem.id) &&
+              !existingItem.isCancelled &&
+              existingItem.voidedAt == null) {
+            final voidTime = DateTime.now();
+            await (_db.update(_db.localOrderItems)..where((t) => t.id.equals(existingItem.id))).write(
+              LocalOrderItemsCompanion(
+                isCancelled: const Value(true),
+                cancelledAt: Value(voidTime),
+                cancelReason: const Value('Removed via order update'),
+                voidedAt: Value(voidTime),
+                voidedBy: const Value('LOCAL_EDIT'),
+                syncStatus: const Value('pending_update'),
+              ),
+            );
+          }
+        }
       }
 
       // Record payments if any
@@ -404,6 +424,7 @@ class DriftOfflineFirstOrderRepository implements IOrderRepository {
       final opId = _uuid.v7();
       final payloadMap = order.toCreateOrderDto();
       payloadMap['id'] = order.id;
+      payloadMap['full_replace'] = true;
 
       await _db.outboxDao.insertEntry(
         SyncOutboxCompanion(
